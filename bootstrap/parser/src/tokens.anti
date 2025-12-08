@@ -1,0 +1,10 @@
+union Token {
+	comma
+	semicolon
+}
+
+union Other {
+	String
+	semi: Token
+	label
+}
