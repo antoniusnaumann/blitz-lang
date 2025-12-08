@@ -1,0 +1,153 @@
+// fundamental types
+// Bool, Int, Float, Rune, String
+
+// complex built-in shorthands for types
+// T? (Option(T)), [T] (List(T)), [K: V] (OrderedDict(K, V)), {T} (Set(T)), {K: V} (Dict(K, V)), T! (Result(T)), T!E (Result(T, E)), T~ (Future(T)), |P| R (Fn(P, R))
+
+// literals
+// list: [1, 2, 3]
+// ordered dict: ["a": 1, "b": 2]
+// set: {"a", "b", "c"}
+// dict: {"a": 1, "b": 2}
+// ranges: inclusive 1..=5, exclusive 1..<6, relative 1..+4 (inclusive), tolerance 3+-2 (inclusive)
+
+// structs and unions are value types that follow structural typing
+struct Vec3 {
+	a Int
+	b Int
+	c Int
+}
+
+union Option(T) {
+	// lower case labels in unions are symbolic, i.e., have no backing type
+	none
+	T
+}
+
+union Result(T, E) {
+	T
+	E
+}
+
+// actors are reference types
+actor Accumulator {
+	// actor fields are always private to the actor
+	acc Int
+
+	fn add(self, val Int) {
+		self.acc += val
+	}
+
+	fn read(self) Int {
+		self.acc
+	}
+}
+
+actor Downloader {
+	client HttpClient
+
+	fn load(self, url) Image {
+		// ...
+	}
+}
+
+actor Ref(T) {
+	value T
+
+	fn get(self) T {
+		value
+	}
+
+	fn set(self, new T) {
+		self.value = new
+	}
+
+	fn update(self, op |T| T) {
+		self.value = op(self)
+	}
+}
+
+fn some_loading(elems [T~]) Bool {
+	for elems |e| {
+		if e.finished() { return true }
+	}
+
+	false
+} 
+
+fn main() {
+	// actors by default have a zero argument constructor that initializes all fields with zero values
+	downloader := Downloader()
+	// all variables are always initialized with their respective zero value
+	images [Image~] = for 1..5 |i| {
+		// by default, actor methods block. To continue execution without waiting for the result, use the `go` keyword
+		go downloader.load("cats.lol/\(i)")
+	}
+
+	while images.some_loading() {
+		println("Still loading...")
+		Timer.sleep(1)
+	}
+
+	for images |img| {
+		// future types can be converted into their inner type by awaiting them
+		print(await img)
+	}
+
+	// due to structural typing, the typename can be ommitted for struct constructors
+	v := (x: 1, y: 1, z: 3)
+	// structs automatically implement all operators that are supported by their fields
+	// mutability is only local, methods receive a copy of their struct params
+	v *= 2
+}
+
+union Download(T, E) {
+	T
+	E
+	loading
+}
+
+fn result(download Download(T, E)) T!E {
+	// unions can be automatically coerced into a sub-union if the remaining cases match
+	switch download {
+		loading {
+			panic("Still loading!")
+		}
+		_ as res {
+			res
+		}
+	}
+}
+
+fn status(download Download) {
+	switch download {
+		T as success {
+			// stringify result with debug formatting
+			"\(success:#)"
+		}
+		E as error {
+			"error: \(error)"
+		}
+		loading {
+			"Still loading..."
+		}
+	}
+}
+
+test "Intrinsic types for control flow" {
+	// loops intrinsically return a list of the result values of their individual iterations
+	list: [Int] = for 1..=5 |i| {
+		if i % 2 == 0 { continue }
+		i * 2
+	}
+	assert list == [2, 6, 10]
+
+	// if intrinsically returns an optional  
+	maybe: String? = if list[0] == 2 { "hooray" }
+	result: String = maybe else { "oh no :(" }
+	assert result == "hooray"
+}
+
+test "" {
+	d: Int!String = 5
+}
