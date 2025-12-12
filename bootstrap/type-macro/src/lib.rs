@@ -27,14 +27,15 @@ pub fn anti_types(_: TokenStream) -> TokenStream {
                     assert_eq!(it.next(), Some('}'));
                     let fields = fields
                         .iter()
-                        .map(|f| format!("{}: {}", f.name, f.ty))
+                        .map(|f| format!("pub {}: {}", f.name, f.ty))
                         .collect::<Vec<_>>()
                         .join(",\n");
 
                     let name: proc_macro2::TokenStream = syn::parse_str(&name).unwrap();
                     let fields: proc_macro2::TokenStream = syn::parse_str(&fields).unwrap();
                     out.push(quote! {
-                        pub(crate) struct #name {
+                        #[derive(Clone, Debug, PartialEq)]
+                        pub struct #name {
                             #fields
                         }
                     })
@@ -80,7 +81,8 @@ pub fn anti_types(_: TokenStream) -> TokenStream {
 
                     let cases: proc_macro2::TokenStream = syn::parse_str(&cases).unwrap();
                     out.push(quote! {
-                        pub(crate) enum #name {
+                        #[derive(Clone, Debug, PartialEq)]
+                        pub enum #name {
                             #cases
                         }
                     })

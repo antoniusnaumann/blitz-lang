@@ -2,22 +2,37 @@ use std::{iter::Peekable, str::CharIndices};
 
 use crate::{Span, Token, TokenKind};
 
-type Source<'a> = Peekable<CharIndices<'a>>;
+pub type Source<'a> = Peekable<CharIndices<'a>>;
 
-struct Lexer<'a> {
+pub struct Lexer<'a> {
     source: Source<'a>,
     origin: &'a str,
 }
 
+impl<'a> Iterator for Lexer<'a> {
+    type Item = Token;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.next_token() {
+            Token {
+                span: _,
+                kind: TokenKind::Eof,
+            } => None,
+            t => Some(t),
+        }
+    }
+}
+
 impl<'a> Lexer<'a> {
-    fn new(source: &'a str) -> Self {
+    pub fn new(source: &'a str) -> Self {
         Self {
             source: source.char_indices().peekable(),
             origin: source,
         }
     }
 
-    fn next(&mut self) -> Token {
+    pub fn next_token(&mut self) -> Token {
+        self.skip_whitespace();
         let (start, ch) = self.peek_char();
         let mut end = start;
         use TokenKind::*;
@@ -43,7 +58,7 @@ impl<'a> Lexer<'a> {
                     "else" => Else,
                     "switch" => Switch,
                     "test" => Test,
-                    _ => Var,
+                    _ => Ident,
                 }
             }
             '+' => self.up(Add),
@@ -96,7 +111,8 @@ impl<'a> Lexer<'a> {
             '.' => self.up(Dot),
             ';' => self.up(Semicolon),
             '\n' => self.up(Newline),
-            '\0' => Eof,
+            '\0' => self.up(Eof),
+
             _ => self.up(Error),
         };
 
@@ -112,10 +128,20 @@ impl<'a> Lexer<'a> {
             match ch {
                 'A'..='Z' | 'a'..='z' => {
                     end = curr;
-                    _ = self.next();
+                    _ = self.source.next();
                 }
                 _ => return end,
             }
+        }
+    }
+
+    fn skip_whitespace(&mut self) {
+        loop {
+            let (_, ch) = self.peek_char();
+            if !ch.is_whitespace() || ch == '\n' || ch == '\0' {
+                break;
+            }
+            _ = self.source.next();
         }
     }
 

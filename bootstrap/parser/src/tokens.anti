@@ -22,7 +22,7 @@ union TokenKind {
 
 	// Identifier
 	type
-	var
+	ident
 
 	// Arithmetic
 	add
