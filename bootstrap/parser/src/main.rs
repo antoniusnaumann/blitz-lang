@@ -4,5 +4,5 @@ anti_types!();
 
 fn main() {
     println!("Hello, world!");
-    let t: Token = Token::Semicolon;
+    let t: TokenKind = TokenKind::Semicolon;
 }

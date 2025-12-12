@@ -8,7 +8,9 @@ pub fn anti_types(_: TokenStream) -> TokenStream {
     let files = find_type_files().unwrap();
 
     let mut out = Vec::new();
-    out.push(quote! {});
+    out.push(quote! {
+        type Int = usize;
+    });
 
     for file in files {
         let mut it = file.chars().peekable();
@@ -17,21 +19,30 @@ pub fn anti_types(_: TokenStream) -> TokenStream {
             match it.next() {
                 Some('s') => {
                     assert_eq!(it.take(5).collect::<String>(), String::from("truct"));
-                    let name = parse_name(it);
+                    skip_whitespace(it);
+                    let name = parse_ident(it);
                     skip_whitespace(it);
                     assert_eq!(it.next(), Some('{'));
+                    let fields = parse_fields(it);
                     assert_eq!(it.next(), Some('}'));
+                    let fields = fields
+                        .iter()
+                        .map(|f| format!("{}: {}", f.name, f.ty))
+                        .collect::<Vec<_>>()
+                        .join(",\n");
 
                     let name: proc_macro2::TokenStream = syn::parse_str(&name).unwrap();
+                    let fields: proc_macro2::TokenStream = syn::parse_str(&fields).unwrap();
                     out.push(quote! {
-                        pub(mod) struct #name {
-
+                        pub(crate) struct #name {
+                            #fields
                         }
                     })
                 }
                 Some('u') => {
                     assert_eq!(it.take(4).collect::<String>(), String::from("nion"));
-                    let name = parse_name(it);
+                    skip_whitespace(it);
+                    let name = parse_ident(it);
                     let name: proc_macro2::TokenStream = syn::parse_str(&name).unwrap();
                     skip_whitespace(it);
                     assert_eq!(it.next(), Some('{'));
@@ -90,24 +101,61 @@ fn upper(s: &mut str) {
 
 fn skip_whitespace(chars: &mut Peekable<Chars<'_>>) {
     while chars.peek().is_some_and(|ch| ch.is_whitespace()) {
-        _ = chars.next()
+        _ = chars.next();
+    }
+
+    if chars.peek().is_some_and(|&ch| ch == '/') {
+        _ = chars.next();
+        if chars.peek().is_some_and(|&ch| ch == '/') {
+            while chars.peek().is_some_and(|&ch| ch != '\n') {
+                _ = chars.next();
+            }
+        }
     }
 }
 
-fn parse_name(it: &mut Peekable<Chars<'_>>) -> String {
+fn parse_ident(it: &mut Peekable<Chars<'_>>) -> String {
     let mut name = String::new();
     loop {
         match it.peek() {
             Some(ch) if ch.is_ascii_alphanumeric() => {
                 name.push(it.next().unwrap());
             }
-            Some(ch) if ch.is_whitespace() => _ = it.next(),
             Some(_) => break,
             None => break,
         }
     }
 
     name
+}
+
+struct Field {
+    name: String,
+    ty: String,
+}
+
+fn parse_fields(it: &mut Peekable<Chars<'_>>) -> Vec<Field> {
+    let mut fields = Vec::new();
+    loop {
+        match it.peek() {
+            Some(ch) if ch.is_ascii_alphanumeric() => {
+                let name = parse_ident(it);
+                skip_whitespace(it);
+                let ty = parse_ident(it);
+                skip_whitespace(it);
+                fields.push(Field { name, ty })
+            }
+            Some(',') => {
+                it.next();
+                continue;
+            }
+            Some('}') => break,
+            Some(ch) if ch.is_whitespace() || *ch == '/' => _ = skip_whitespace(it),
+            Some(ch) => panic!("Unexpected char: {ch}"),
+            None => break,
+        }
+    }
+    fields
 }
 
 struct Case {
@@ -120,24 +168,23 @@ fn parse_cases(it: &mut Peekable<Chars<'_>>) -> Vec<Case> {
     loop {
         match it.peek() {
             Some('A'..='Z') => cases.push(Case {
-                ty: Some(parse_name(it)),
+                ty: Some(parse_ident(it)),
                 label: None,
             }),
             Some('a'..='z') => {
-                let label: Option<String> = Some(parse_name(it));
+                let label: Option<String> = Some(parse_ident(it));
                 skip_whitespace(it);
                 let ty = if it.peek().is_some_and(|&ch| ch == ':') {
                     it.next();
                     skip_whitespace(it);
-                    Some(parse_name(it))
+                    Some(parse_ident(it))
                 } else {
                     None
                 };
                 cases.push(Case { label, ty })
             }
             Some('}') => break,
-            Some(ch) if ch.is_whitespace() => _ = it.next(),
-            // TODO: figure out why this triggers on the label separating ':'
+            Some(ch) if ch.is_whitespace() || *ch == '/' => skip_whitespace(it),
             Some(ch) => panic!("Unexpected char: {ch}"),
             None => break,
         }
