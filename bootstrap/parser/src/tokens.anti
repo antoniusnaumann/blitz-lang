@@ -5,20 +5,20 @@ struct Token {
 
 union TokenKind {
 	// Keyword
-	struct
-	union
-	actor
-	alias
-	fn
-	pub
-	let
-	mut
-	for
-	while
-	if
-	else
-	switch
-	test
+	struct_
+	union_
+	actor_
+	alias_
+	fn_
+	pub_
+	let_
+	mut_
+	for_
+	while_
+	if_
+	else_
+	switch_
+	test_
 
 	// Identifier
 	type
@@ -68,4 +68,9 @@ union TokenKind {
 struct Span {
 	start Int
 	end   Int // inclusive
+}
+
+struct Pos {
+	line Int
+	col  Int
 }

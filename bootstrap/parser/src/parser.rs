@@ -1,11 +1,13 @@
 use std::{iter::Peekable, ops::RangeInclusive};
 
-use crate::{Case, Definition, Field, Fn, Lexer, PeekKind, Span, Struct, Token, TokenKind, Union};
+use crate::{
+    Case, Definition, Field, Fn, Lexer, PeekKind, Span, Struct, Token, TokenKind, Type, Union,
+};
 
 pub struct Parser<'a> {
     lexer: Peekable<Lexer<'a>>,
     source: &'a str,
-    pos: Span,
+    span: Span,
 }
 
 impl<'a> Parser<'a> {
@@ -13,7 +15,7 @@ impl<'a> Parser<'a> {
         Self {
             source: lexer.source,
             lexer: lexer.peekable(),
-            pos: Span { start: 0, end: 0 },
+            span: Span { start: 0, end: 0 },
         }
     }
 
@@ -21,7 +23,7 @@ impl<'a> Parser<'a> {
         Self {
             source: source,
             lexer: crate::Lexer::new(source).peekable(),
-            pos: Span { start: 0, end: 0 },
+            span: Span { start: 0, end: 0 },
         }
     }
 
@@ -29,40 +31,53 @@ impl<'a> Parser<'a> {
         if kind != TokenKind::Newline {
             self.skip_newlines();
         }
-        let next = self.lexer.next();
-        let got = next.as_ref().map(|t| t.kind.clone());
-        assert_eq!(got, Some(kind), "\nAt {}:", next.unwrap().span.start,);
-        let result = next.unwrap();
-        self.pos = result.span.clone();
+        let next = self.lexer.next().unwrap();
+        let got = next.kind.clone();
+        let pos = next.span.to_pos(self.source);
+        assert_eq!(
+            got, kind,
+            "\nAt {}:{}  (left: got, right: expected)",
+            pos.line, pos.col
+        );
+        self.span = next.span.clone();
 
-        result
+        next
     }
 
-    fn one_of(&mut self, kinds: &[TokenKind]) -> Token {
-        if kinds.contains(&TokenKind::Newline) {
+    fn has(&mut self, kind: TokenKind) -> bool {
+        if kind != TokenKind::Newline {
             self.skip_newlines();
         }
-        let next = self.lexer.next();
-        let got = next.as_ref().map(|t| t.kind.clone());
-        assert!(
-            kinds.contains(&got.unwrap()),
-            "\nAt {}:",
-            next.unwrap().span.start,
-        );
-        let result = next.unwrap();
-        self.pos = result.span.clone();
-
-        result
+        self.lexer.kind() == kind
     }
+
+    // fn one_of(&mut self, kinds: &[TokenKind]) -> Token {
+    //     if kinds.contains(&TokenKind::Newline) {
+    //         self.skip_newlines();
+    //     }
+    //     let next = self.lexer.next().unwrap();
+    //     let pos = next.span.to_pos(self.source);
+    //     let got = next.kind.clone();
+    //     assert!(
+    //         kinds.contains(&got),
+    //         "\nAt {}:{}, expected one of {:#?}",
+    //         pos.line,
+    //         pos.col,
+    //         kinds
+    //     );
+    //     self.span = next.span.clone();
+
+    //     next
+    // }
 
     fn consume(&mut self, kind: TokenKind) -> Option<Token> {
         if kind != TokenKind::Newline {
             self.skip_newlines();
         }
-        let next = self.lexer.next();
-        if next.as_ref().map(|t| t.kind.clone()) == Some(kind) {
-            let result = next.unwrap();
-            self.pos = result.span.clone();
+        let next = self.lexer.peek();
+        if next.as_ref().map(|t| t.kind.clone()) == Some(kind.clone()) {
+            let result = self.expect(kind);
+            self.span = result.span.clone();
 
             Some(result)
         } else {
@@ -84,82 +99,87 @@ impl<'a> Parser<'a> {
     }
 
     fn expect_ident(&mut self) -> &'a str {
-        let Token { kind: _, span } = self.one_of(&[
-            TokenKind::Ident,
-            TokenKind::Union,
-            TokenKind::Struct,
-            TokenKind::Alias,
-            TokenKind::Actor,
-            TokenKind::Fn,
-        ]);
+        let Token { kind: _, span } = self.expect(TokenKind::Ident);
         &self.source[RangeInclusive::from(span)]
     }
 
-    fn expect_type(&mut self) -> &'a str {
+    fn expect_type(&mut self) -> Type {
         let Token { kind: _, span } = self.expect(TokenKind::Type);
-        &self.source[RangeInclusive::from(span)]
+        let name = String::from(&self.source[RangeInclusive::from(span)]);
+
+        let mut args = Vec::new();
+        if self.has(TokenKind::Lparen) {
+            self.expect(TokenKind::Lparen);
+
+            while !self.has(TokenKind::Rparen) {
+                args.push(self.expect_type());
+                self.consume(TokenKind::Comma);
+            }
+            self.expect(TokenKind::Rparen);
+        }
+
+        Type { name, args }
     }
 
     fn parse_struct(&mut self) -> Struct {
         let start = self.expect(TokenKind::Struct).span;
-        let name = self.expect_type();
+        // TODO: handle type parameters in signature
+        let name = self.expect_type().name;
 
-        if self.lexer.kind() != TokenKind::Lbrace {
+        if !self.has(TokenKind::Lbrace) {
             return Struct {
-                name: name.into(),
+                name,
                 fields: Vec::new(),
-                span: start.merge(&self.pos),
+                span: start.merge(&self.span),
             };
         }
 
         self.expect(TokenKind::Lbrace);
         let mut fields = Vec::new();
-        while self.lexer.kind() != TokenKind::Rbrace {
-            self.skip_newlines();
+        self.skip_newlines();
+        while !self.has(TokenKind::Rbrace) {
             fields.push(self.parse_field());
-            self.skip_newlines();
         }
         self.expect(TokenKind::Rbrace);
 
         Struct {
             name: name.into(),
             fields,
-            span: start.merge(&self.pos),
+            span: start.merge(&self.span),
         }
     }
 
     fn parse_field(&mut self) -> Field {
         let name = self.expect_ident().into();
-        let ty = self.expect_type().into();
+        let ty = self.expect_type();
 
         Field { name, r#type: ty }
     }
 
     fn parse_union(&mut self) -> Union {
         let start = self.expect(TokenKind::Union).span;
-        let name = self.expect_type().into();
+        // TODO: handle type parameters in signature
+        let name = self.expect_type().name;
 
-        if self.lexer.kind() != TokenKind::Lbrace {
+        if !self.has(TokenKind::Lbrace) {
             return Union {
                 name,
                 cases: Vec::new(),
-                span: start.merge(&self.pos),
+                span: start.merge(&self.span),
             };
         }
 
         self.expect(TokenKind::Lbrace);
         let mut cases = Vec::new();
-        while self.lexer.kind() != TokenKind::Rbrace {
-            self.skip_newlines();
+        while !self.has(TokenKind::Rbrace) {
             cases.push(self.parse_case());
-            self.skip_newlines();
         }
         self.expect(TokenKind::Rbrace);
 
         Union {
             name,
             cases,
-            span: start.merge(&self.pos),
+            span: start.merge(&self.span),
         }
     }
 
@@ -199,7 +219,7 @@ impl<'a> Iterator for Parser<'a> {
             Tk::Eof => None,
             kind => panic!(
                 "At {}:\nIllegal token at toplevel: {:#?}",
-                self.pos.start, kind
+                self.span.start, kind
             ),
         }
     }

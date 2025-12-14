@@ -19,7 +19,7 @@ struct Struct {
 
 struct Field {
 	name String
-	type String
+	type Type
 }
 
 struct Union {
@@ -30,7 +30,7 @@ struct Union {
 
 struct Case {
 	label Option(String)
-	type  Option(String)
+	type  Option(Type)
 }
 
 struct Alias {
@@ -43,4 +43,9 @@ struct Actor {
 
 struct Test {
 	
+}
+
+struct Type {
+	name String
+	args Vec(Type)
 }

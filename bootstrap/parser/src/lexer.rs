@@ -55,7 +55,7 @@ impl<'a> Lexer<'a> {
                 end = self.skip_ident();
                 Type
             }
-            'a'..='z' => {
+            'a'..='z' | '_' => {
                 end = self.skip_ident();
                 match &self.source[start..=end] {
                     "struct" => Struct,
@@ -154,7 +154,7 @@ impl<'a> Lexer<'a> {
         loop {
             let (curr, ch) = self.peek_char();
             match ch {
-                'A'..='Z' | 'a'..='z' => {
+                'A'..='Z' | 'a'..='z' | '_' => {
                     end = curr;
                     _ = self.chars.next();
                 }

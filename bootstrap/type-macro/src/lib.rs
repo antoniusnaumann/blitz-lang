@@ -151,7 +151,7 @@ fn parse_ident(it: &mut Peekable<Chars<'_>>) -> String {
     let mut name = String::new();
     loop {
         match it.peek() {
-            Some(ch) if ch.is_ascii_alphanumeric() => {
+            Some(&ch) if ch.is_ascii_alphanumeric() || ch == '_' => {
                 name.push(it.next().unwrap());
             }
             Some('(') => {
@@ -171,6 +171,7 @@ fn parse_ident(it: &mut Peekable<Chars<'_>>) -> String {
         "type" => "r#type",
         name => name,
     }
+    .trim_end_matches('_')
     .into()
 }
 
@@ -183,7 +184,7 @@ fn parse_fields(it: &mut Peekable<Chars<'_>>) -> Vec<Field> {
     let mut fields = Vec::new();
     loop {
         match it.peek() {
-            Some(ch) if ch.is_ascii_alphanumeric() => {
+            Some(&ch) if ch.is_ascii_alphanumeric() || ch == '_' => {
                 let name = parse_ident(it);
                 skip_whitespace(it);
                 let ty = parse_ident(it);
@@ -216,7 +217,7 @@ fn parse_cases(it: &mut Peekable<Chars<'_>>) -> Vec<Case> {
                 ty: Some(parse_ident(it)),
                 label: None,
             }),
-            Some('a'..='z') => {
+            Some('a'..='z' | '_') => {
                 let label: Option<String> = Some(parse_ident(it));
                 skip_whitespace(it);
                 let ty = if it.peek().is_some_and(|&ch| ch == ':') {
