@@ -43,18 +43,46 @@ pub fn anti_types(_: TokenStream) -> TokenStream {
                 Some('u') => {
                     assert_eq!(it.take(4).collect::<String>(), String::from("nion"));
                     skip_whitespace(it);
-                    let name = parse_ident(it);
-                    let name: proc_macro2::TokenStream = syn::parse_str(&name).unwrap();
+                    let name_str = parse_ident(it);
+                    let name: proc_macro2::TokenStream = syn::parse_str(&name_str).unwrap();
                     skip_whitespace(it);
                     assert_eq!(it.next(), Some('{'));
-                    let cases = parse_cases(it)
+                    let cases = parse_cases(it);
+                    let conv = cases.iter()
+                            .filter_map(|c| match c {
+                            Case {
+                                ty: Some(ty),
+                                label: Some(label),
+                            } => {
+                                let mut label = label.trim_start_matches("r#").to_owned();
+                                upper(&mut label);
+                                Some(format!("impl From<{ty}> for {name_str} {{ fn from(value: {ty}) -> {name_str} {{ {name_str}::{label}(value) }} }}"))
+                            }
+                            Case {
+                                ty: None,
+                                label: Some(_),
+                            } => {
+                                None
+                            }
+                            Case {
+                                ty: Some(ty),
+                                label: None,
+                            } => Some(format!("impl From<{ty}> for {name_str} {{ fn from(value: {ty}) -> {name_str} {{ {name_str}::{ty}(value) }} }}")),
+                            Case {
+                                ty: None,
+                                label: None,
+                            } => unreachable!(),
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n\n");
+                    let cases = cases
                         .iter()
                         .map(|c| match c {
                             Case {
                                 ty: Some(ty),
                                 label: Some(label),
                             } => {
-                                let mut label = label.clone();
+                                let mut label = label.trim_start_matches("r#").to_owned();
                                 upper(&mut label);
                                 format!("{}({ty})", label)
                             }
@@ -62,7 +90,7 @@ pub fn anti_types(_: TokenStream) -> TokenStream {
                                 ty: None,
                                 label: Some(label),
                             } => {
-                                let mut label = label.clone();
+                                let mut label = label.trim_start_matches("r#").to_owned();
                                 upper(&mut label);
                                 label
                             }
@@ -80,11 +108,14 @@ pub fn anti_types(_: TokenStream) -> TokenStream {
                     assert_eq!(it.next(), Some('}'));
 
                     let cases: proc_macro2::TokenStream = syn::parse_str(&cases).unwrap();
+                    let conv: proc_macro2::TokenStream = syn::parse_str(&conv).unwrap();
                     out.push(quote! {
                         #[derive(Clone, Debug, PartialEq)]
                         pub enum #name {
                             #cases
                         }
+
+                        #conv
                     })
                 }
                 Some(ch) if ch.is_whitespace() => continue,
@@ -123,12 +154,24 @@ fn parse_ident(it: &mut Peekable<Chars<'_>>) -> String {
             Some(ch) if ch.is_ascii_alphanumeric() => {
                 name.push(it.next().unwrap());
             }
+            Some('(') => {
+                _ = it.next().unwrap();
+                name.push('<');
+            }
+            Some(')') => {
+                _ = it.next().unwrap();
+                name.push('>');
+            }
             Some(_) => break,
             None => break,
         }
     }
 
-    name
+    match name.as_str() {
+        "type" => "r#type",
+        name => name,
+    }
+    .into()
 }
 
 struct Field {

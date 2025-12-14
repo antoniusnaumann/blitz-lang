@@ -48,6 +48,7 @@ union TokenKind {
 	// Delimiter
 	comma
 	semicolon
+	colon
 	dot
 	newline
 
@@ -58,6 +59,8 @@ union TokenKind {
 	lparen
 	rparen
 
+	comment
+	
 	eof
 	error
 }

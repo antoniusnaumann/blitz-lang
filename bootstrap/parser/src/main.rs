@@ -1,27 +1,17 @@
 use std::env::args;
 
-use parser::Lexer;
-use type_macro::*;
-
-anti_types!();
+use parser::Parser;
 
 fn main() {
     let path = args().skip(1).next().unwrap();
     let content = std::fs::read_to_string(path).unwrap();
-    let mut lexer = Lexer::new(&content);
+    let mut parser = Parser::new(&content);
 
-    let token = lexer.next_token();
-    println!(
-        "{:#?} : '{}'",
-        token.kind,
-        &content[token.span.start..=token.span.end]
-    );
-
-    for token in lexer {
+    for item in parser {
         println!(
             "{:#?} : '{}'",
-            token.kind,
-            &content[token.span.start..=token.span.end].replace('\n', "\\n")
+            item,
+            &content[item.span().start..=item.span().end].replace('\n', "\\n")
         );
     }
 }

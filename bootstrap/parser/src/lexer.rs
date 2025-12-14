@@ -2,11 +2,24 @@ use std::{iter::Peekable, str::CharIndices};
 
 use crate::{Span, Token, TokenKind};
 
-pub type Source<'a> = Peekable<CharIndices<'a>>;
+pub type CharIter<'a> = Peekable<CharIndices<'a>>;
 
 pub struct Lexer<'a> {
-    source: Source<'a>,
-    origin: &'a str,
+    chars: CharIter<'a>,
+    pos: Span,
+    pub(crate) source: &'a str,
+}
+
+pub(crate) trait PeekKind {
+    fn kind(&mut self) -> TokenKind;
+}
+
+impl PeekKind for Peekable<Lexer<'_>> {
+    fn kind(&mut self) -> TokenKind {
+        self.peek()
+            .map(|t| t.kind.clone())
+            .unwrap_or(TokenKind::Eof)
+    }
 }
 
 impl<'a> Iterator for Lexer<'a> {
@@ -26,8 +39,9 @@ impl<'a> Iterator for Lexer<'a> {
 impl<'a> Lexer<'a> {
     pub fn new(source: &'a str) -> Self {
         Self {
-            source: source.char_indices().peekable(),
-            origin: source,
+            chars: source.char_indices().peekable(),
+            source,
+            pos: Span { start: 0, end: 0 },
         }
     }
 
@@ -43,7 +57,7 @@ impl<'a> Lexer<'a> {
             }
             'a'..='z' => {
                 end = self.skip_ident();
-                match &self.origin[start..=end] {
+                match &self.source[start..=end] {
                     "struct" => Struct,
                     "actor" => Actor,
                     "union" => Union,
@@ -64,9 +78,22 @@ impl<'a> Lexer<'a> {
             '+' => self.up(Add),
             '-' => self.up(Sub),
             '*' => self.up(Mul),
-            '/' => self.up(Div),
+            '/' => {
+                _ = self.chars.next();
+                let (pos, ch) = self.peek_char();
+                end = pos;
+                match ch {
+                    '/' => {
+                        self.consume_comment();
+                        let (pos, _) = self.peek_char();
+                        end = pos;
+                        Comment
+                    }
+                    _ => Div,
+                }
+            }
             '=' => {
-                _ = self.source.next();
+                _ = self.chars.next();
                 let (pos, ch) = self.peek_char();
                 end = pos;
                 match ch {
@@ -75,7 +102,7 @@ impl<'a> Lexer<'a> {
                 }
             }
             '>' => {
-                _ = self.source.next();
+                _ = self.chars.next();
                 let (pos, ch) = self.peek_char();
                 end = pos;
                 match ch {
@@ -84,7 +111,7 @@ impl<'a> Lexer<'a> {
                 }
             }
             '<' => {
-                _ = self.source.next();
+                _ = self.chars.next();
                 let (pos, ch) = self.peek_char();
                 end = pos;
                 match ch {
@@ -93,7 +120,7 @@ impl<'a> Lexer<'a> {
                 }
             }
             '!' => {
-                _ = self.source.next();
+                _ = self.chars.next();
                 let (pos, ch) = self.peek_char();
                 end = pos;
                 match ch {
@@ -117,6 +144,7 @@ impl<'a> Lexer<'a> {
         };
 
         let span = Span { start, end };
+        self.pos = span.clone();
 
         Token { kind, span }
     }
@@ -128,7 +156,7 @@ impl<'a> Lexer<'a> {
             match ch {
                 'A'..='Z' | 'a'..='z' => {
                     end = curr;
-                    _ = self.source.next();
+                    _ = self.chars.next();
                 }
                 _ => return end,
             }
@@ -141,12 +169,22 @@ impl<'a> Lexer<'a> {
             if !ch.is_whitespace() || ch == '\n' || ch == '\0' {
                 break;
             }
-            _ = self.source.next();
+            _ = self.chars.next();
+        }
+    }
+
+    fn consume_comment(&mut self) {
+        loop {
+            let (_, ch) = self.peek_char();
+            if ch == '\n' || ch == '\0' {
+                break;
+            }
+            _ = self.chars.next();
         }
     }
 
     fn peek_char(&mut self) -> (usize, char) {
-        match self.source.peek() {
+        match self.chars.peek() {
             Some((p, c)) => (*p, *c),
             None => (0, '\0'),
         }
@@ -154,7 +192,7 @@ impl<'a> Lexer<'a> {
 
     /// Returns the argument and consumes the current character
     fn up(&mut self, t: TokenKind) -> TokenKind {
-        _ = self.source.next();
+        _ = self.chars.next();
         t
     }
 }

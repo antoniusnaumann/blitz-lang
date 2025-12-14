@@ -1,0 +1,46 @@
+union Definition {
+	Fn
+	Struct
+	Union
+	Alias
+	Actor
+	Test
+}
+
+struct Fn {
+	
+}
+
+struct Struct {
+	name   String
+	fields Vec(Field)
+	span   Span
+}
+
+struct Field {
+	name String
+	type String
+}
+
+struct Union {
+	name  String
+	cases Vec(Case)
+	span  Span
+}
+
+struct Case {
+	label Option(String)
+	type  Option(String)
+}
+
+struct Alias {
+	
+}
+
+struct Actor {
+	
+}
+
+struct Test {
+	
+}
