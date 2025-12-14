@@ -11,6 +11,7 @@ struct Fn {
 	name String
 	args Vec(Field)
 	type Option(Type)
+	body Vec(Statement)
 	span Span
 }
 

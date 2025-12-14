@@ -1,0 +1,40 @@
+union Statement {
+	Declaration
+	Expression
+}
+
+struct Declaration {
+	name String
+	type Type
+}
+
+union Lval {
+	Member
+	ident: String
+}
+
+union Expression {
+	Call
+	List
+	Member
+	Assignment
+}
+
+struct Member {
+	parent Box(Expression)
+	member String
+}
+
+struct Call {
+	name String
+	args Vec(Expression)
+}
+
+struct List {
+	elements Vec(Expression)
+}
+
+struct Assignment {
+	left  Lval
+	right Box(Expression)
+}

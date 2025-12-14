@@ -1,7 +1,8 @@
 use std::{iter::Peekable, ops::RangeInclusive};
 
 use crate::{
-    Case, Definition, Field, Fn, Lexer, PeekKind, Span, Struct, Token, TokenKind, Type, Union,
+    Case, Definition, Field, Fn, Lexer, PeekKind, Span, Statement, Struct, Token, TokenKind, Type,
+    Union,
 };
 
 pub struct Parser<'a> {
@@ -225,12 +226,47 @@ impl<'a> Parser<'a> {
 
         let ty = self.consume_type();
 
+        let body = if self.has(TokenKind::Lbrace) {
+            self.parse_body()
+        } else {
+            Vec::new()
+        };
+
         Fn {
             name,
             args,
+            body,
             r#type: ty,
             span: start.merge(&self.span),
         }
+    }
+
+    fn parse_body(&mut self) -> Vec<Statement> {
+        self.expect(TokenKind::Lbrace);
+
+        let mut statements = Vec::new();
+        while !self.has(TokenKind::Rbrace) {
+            statements.push(self.parse_statement());
+        }
+        self.expect(TokenKind::Rbrace);
+
+        statements
+    }
+
+    fn parse_statement(&mut self) -> Statement {
+        self.skip_newlines();
+        match self.lexer.kind() {
+            TokenKind::Let | TokenKind::Mut => self.parse_assignment(),
+            _ => self.parse_expression().into(),
+        }
+    }
+
+    fn parse_expression(&mut self) -> _ {
+        todo!()
+    }
+
+    fn parse_assignment(&mut self) -> Statement {
+        todo!()
     }
 }
 
