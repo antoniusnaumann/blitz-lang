@@ -8,7 +8,10 @@ union Definition {
 }
 
 struct Fn {
-	
+	name String
+	args Vec(Field)
+	type Option(Type)
+	span Span
 }
 
 struct Struct {

@@ -90,6 +90,14 @@ impl<'a> Parser<'a> {
         Some(&self.source[RangeInclusive::from(span)])
     }
 
+    fn consume_type(&mut self) -> Option<Type> {
+        let Token { kind: _, span } = self.consume(TokenKind::Type)?;
+        let name = String::from(&self.source[RangeInclusive::from(span)]);
+        let args = self.parse_type_args();
+
+        Some(Type { name, args })
+    }
+
     fn skip_newlines(&mut self) {
         while self
             .lexer
@@ -106,7 +114,12 @@ impl<'a> Parser<'a> {
     fn expect_type(&mut self) -> Type {
         let Token { kind: _, span } = self.expect(TokenKind::Type);
         let name = String::from(&self.source[RangeInclusive::from(span)]);
+        let args = self.parse_type_args();
 
+        Type { name, args }
+    }
+
+    fn parse_type_args(&mut self) -> Vec<Type> {
         let mut args = Vec::new();
         if self.has(TokenKind::Lparen) {
             self.expect(TokenKind::Lparen);
@@ -117,8 +130,7 @@ impl<'a> Parser<'a> {
             }
             self.expect(TokenKind::Rparen);
         }
-
-        Type { name, args }
+        args
     }
 
     fn parse_struct(&mut self) -> Struct {
@@ -152,6 +164,7 @@ impl<'a> Parser<'a> {
     fn parse_field(&mut self) -> Field {
         let name = self.expect_ident().into();
         let ty = self.expect_type();
+        self.consume(TokenKind::Comma);
 
         Field { name, r#type: ty }
     }
@@ -187,7 +200,10 @@ impl<'a> Parser<'a> {
         let label = self.consume_ident().map(|s| s.into());
         let ty = match self.lexer.kind() {
             _ if label.is_none() => Some(self.expect_type().into()),
-            TokenKind::Colon => Some(self.expect_type().into()),
+            TokenKind::Colon => {
+                self.expect(TokenKind::Colon);
+                Some(self.expect_type().into())
+            }
             _ => None,
         };
 
@@ -195,7 +211,26 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_fn(&mut self) -> Fn {
-        todo!()
+        let start = self.expect(TokenKind::Fn).span;
+        let name = self.expect_ident().into();
+
+        self.expect(TokenKind::Lparen);
+        // TODO: also collect type params
+        let mut args = Vec::new();
+        self.skip_newlines();
+        while !self.has(TokenKind::Rparen) {
+            args.push(self.parse_field());
+        }
+        self.expect(TokenKind::Rparen);
+
+        let ty = self.consume_type();
+
+        Fn {
+            name,
+            args,
+            r#type: ty,
+            span: start.merge(&self.span),
+        }
     }
 }
 

@@ -242,7 +242,7 @@ fn parse_cases(it: &mut Peekable<Chars<'_>>) -> Vec<Case> {
 fn find_type_files() -> io::Result<Vec<String>> {
     let mut files = Vec::new();
 
-    add_dir_files(&mut files, ".")?;
+    add_dir_files(&mut files, "./src")?;
 
     Ok(files)
 }

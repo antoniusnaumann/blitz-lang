@@ -136,6 +136,7 @@ impl<'a> Lexer<'a> {
             ')' => self.up(Rparen),
             ',' => self.up(Comma),
             '.' => self.up(Dot),
+            ':' => self.up(Colon),
             ';' => self.up(Semicolon),
             '\n' => self.up(Newline),
             '\0' => self.up(Eof),

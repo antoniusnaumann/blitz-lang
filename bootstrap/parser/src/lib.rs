@@ -48,7 +48,7 @@ impl Span {
 impl Definition {
     pub fn span(&self) -> Span {
         match self {
-            Definition::Fn(f) => todo!(),
+            Definition::Fn(f) => f.span.clone(),
             Definition::Struct(s) => s.span.clone(),
             Definition::Union(union) => union.span.clone(),
             Definition::Alias(alias) => todo!(),

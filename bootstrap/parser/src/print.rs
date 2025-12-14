@@ -7,7 +7,12 @@ pub trait Print {
 impl Print for Definition {
     fn print(&self) -> String {
         match self {
-            Definition::Fn(f) => todo!(),
+            Definition::Fn(f) => format!(
+                "fn {} ({}) {}",
+                f.name,
+                f.args.print(),
+                f.r#type.as_ref().map_or(String::new(), |t| t.print())
+            ),
             Definition::Struct(s) => format!("struct {} {{\n {}}}", s.name, s.fields.print()),
             Definition::Union(u) => format!("union {} {{\n {}}}", u.name, u.cases.print()),
             Definition::Alias(a) => todo!(),

@@ -1,0 +1,6 @@
+fn func(arg Int, other Float) Void
+
+union Option {
+	none
+	some: T
+}
