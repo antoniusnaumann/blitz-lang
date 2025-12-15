@@ -72,6 +72,8 @@ impl<'a> Lexer<'a> {
                     "else" => Else,
                     "switch" => Switch,
                     "test" => Test,
+                    "and" => And,
+                    "or" => Or,
                     _ => Ident,
                 }
             }
@@ -138,6 +140,7 @@ impl<'a> Lexer<'a> {
             '.' => self.up(Dot),
             ':' => self.up(Colon),
             ';' => self.up(Semicolon),
+            '|' => self.up(Pipe),
             '\n' => self.up(Newline),
             '\0' => self.up(Eof),
 

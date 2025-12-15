@@ -18,6 +18,12 @@ union Expression {
 	List
 	Member
 	Assignment
+	For
+	While
+	If
+	Switch
+	List
+	Group
 }
 
 struct Member {
@@ -37,4 +43,31 @@ struct List {
 struct Assignment {
 	left  Lval
 	right Box(Expression)
+}
+
+struct For {
+	iter Expresson
+	elem String
+	body Vec(Statement)
+	span Span
+}
+
+struct While {
+	
+}
+
+struct If {
+	
+}
+
+struct Switch {
+	
+}
+
+struct List {
+	
+}
+
+struct Group {
+	
 }

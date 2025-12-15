@@ -1,9 +1,6 @@
 use std::{iter::Peekable, ops::RangeInclusive};
 
-use crate::{
-    Case, Definition, Field, Fn, Lexer, PeekKind, Span, Statement, Struct, Token, TokenKind, Type,
-    Union,
-};
+use crate::*;
 
 pub struct Parser<'a> {
     lexer: Peekable<Lexer<'a>>,
@@ -256,16 +253,69 @@ impl<'a> Parser<'a> {
     fn parse_statement(&mut self) -> Statement {
         self.skip_newlines();
         match self.lexer.kind() {
-            TokenKind::Let | TokenKind::Mut => self.parse_assignment(),
+            TokenKind::Let | TokenKind::Mut => self.parse_declaration().into(),
             _ => self.parse_expression().into(),
         }
     }
 
-    fn parse_expression(&mut self) -> _ {
-        todo!()
+    fn parse_expression(&mut self) -> Expression {
+        self.skip_newlines();
+        let token = self.lexer.peek().unwrap();
+
+        match &token.kind {
+            TokenKind::For => self.parse_for().into(),
+            TokenKind::While => self.parse_while().into(),
+            TokenKind::If => self.parse_if().into(),
+            TokenKind::Switch => self.parse_switch().into(),
+            TokenKind::Ident => todo!(),
+            TokenKind::Add => todo!(),
+            TokenKind::Sub => todo!(),
+            TokenKind::Not => todo!(),
+            TokenKind::Lbrace => todo!(),
+            TokenKind::Lbracket => self.parse_list().into(),
+            TokenKind::Lparen => self.parse_group().into(),
+            kind => {
+                let pos = token.span.to_pos(self.source);
+                panic!(
+                    "At {}:{}\n\tIllegal token kind {:#?} for expression!",
+                    pos.line, pos.col, kind
+                )
+            }
+        }
     }
 
-    fn parse_assignment(&mut self) -> Statement {
+    fn parse_for(&mut self) -> For {
+        let Token { kind: _, span } = self.expect(TokenKind::For);
+        let iter = self.parse_expression();
+
+        // TODO: implement implicit elements with $0
+        self.expect(TokenKind::Pipe);
+        let elem = self.expect_ident().into();
+        self.expect(TokenKind::Pipe);
+
+        let body = self.parse_body();
+
+        For {
+            iter,
+            elem,
+            body,
+            span,
+        }
+    }
+
+    fn parse_while(&mut self) -> While {}
+
+    fn parse_if(&mut self) -> If {}
+
+    fn parse_switch(&mut self) -> Switch {}
+
+    fn parse_list(&mut self) -> List {}
+
+    fn parse_group(&mut self) -> Group {}
+
+    fn parse_call(&mut self) -> Call {}
+
+    fn parse_declaration(&mut self) -> Declaration {
         todo!()
     }
 }

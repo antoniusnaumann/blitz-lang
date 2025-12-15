@@ -52,6 +52,8 @@ union TokenKind {
 	dot
 	newline
 
+	pipe
+
 	lbrace
 	rbrace
 	lbracket
