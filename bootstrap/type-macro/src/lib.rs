@@ -4,7 +4,7 @@ use proc_macro::TokenStream;
 use quote::quote;
 
 #[proc_macro]
-pub fn anti_types(_: TokenStream) -> TokenStream {
+pub fn blitz_types(_: TokenStream) -> TokenStream {
     let files = find_type_files().unwrap();
 
     let mut out = Vec::new();
@@ -256,7 +256,7 @@ where
         if path.is_dir() {
             add_dir_files(files, path)?;
         } else {
-            if path.extension() != Some(OsStr::new("anti")) {
+            if path.extension() != Some(OsStr::new("blitz")) {
                 continue;
             }
             let content = fs::read_to_string(path)?;

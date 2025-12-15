@@ -11,7 +11,7 @@ pub use lexer::*;
 pub use parser::*;
 pub use print::*;
 
-type_macro::anti_types!();
+type_macro::blitz_types!();
 
 impl From<Span> for RangeInclusive<usize> {
     fn from(value: Span) -> Self {
