@@ -1,0 +1,17 @@
+[workspace]
+members = [
+    "parser",
+    "interpreter",
+    "type-macro",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+type-macro = { path = "type-macro" }
+syn = { version = "1.0", features = ["full"] }
+quote = "1.0"
+proc-macro2 = "1.0"

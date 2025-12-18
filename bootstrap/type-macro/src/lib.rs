@@ -243,7 +243,13 @@ fn parse_cases(it: &mut Peekable<Chars<'_>>) -> Vec<Case> {
 fn find_type_files() -> io::Result<Vec<String>> {
     let mut files = Vec::new();
 
-    add_dir_files(&mut files, "./src")?;
+    // Use CARGO_MANIFEST_DIR to get the directory of the crate being compiled
+    // This allows the macro to work correctly when invoked from different workspace members
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
+        .expect("CARGO_MANIFEST_DIR environment variable not set");
+    let src_path = Path::new(&manifest_dir).join("src");
+
+    add_dir_files(&mut files, src_path)?;
 
     Ok(files)
 }

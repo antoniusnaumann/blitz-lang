@@ -1,8 +1,6 @@
 [package]
-name = "parser"
+name = "interpreter"
 version.workspace = true
 edition.workspace = true
 
 [dependencies]
-type-macro.workspace = true
-
