@@ -77,9 +77,9 @@ fn some_loading(elems [T~]) Bool {
 
 fn main() {
 	// actors by default have a zero argument constructor that initializes all fields with zero values
-	downloader := Downloader()
+	let downloader = Downloader()
 	// all variables are always initialized with their respective zero value
-	images [Image~] = for 1..5 |i| {
+	let images [Image~] = for 1..5 |i| {
 		// by default, actor methods block. To continue execution without waiting for the result, use the `go` keyword
 		go downloader.load("cats.lol/\(i)")
 	}
@@ -95,7 +95,7 @@ fn main() {
 	}
 
 	// due to structural typing, the typename can be ommitted for struct constructors
-	v := (x: 1, y: 1, z: 3)
+	mut v = (x: 1, y: 1, z: 3)
 	// structs automatically implement all operators that are supported by their fields
 	// mutability is only local, methods receive a copy of their struct params
 	v *= 2
@@ -136,18 +136,18 @@ fn status(download Download) {
 
 test "Intrinsic types for control flow" {
 	// loops intrinsically return a list of the result values of their individual iterations
-	list: [Int] = for 1..=5 |i| {
+	let list [Int] = for 1..=5 |i| {
 		if i % 2 == 0 { continue }
 		i * 2
 	}
 	assert list == [2, 6, 10]
 
 	// if intrinsically returns an optional  
-	maybe: String? = if list[0] == 2 { "hooray" }
-	result: String = maybe else { "oh no :(" }
+	let maybe String? = if list[0] == 2 { "hooray" }
+	let result String = maybe else { "oh no :(" }
 	assert result == "hooray"
 }
 
 test "" {
-	d: Int!String = 5
+	let d Int!String = 5
 }

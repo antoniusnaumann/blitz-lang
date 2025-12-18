@@ -267,7 +267,23 @@ impl<'a> Parser<'a> {
             TokenKind::While => self.parse_while().into(),
             TokenKind::If => self.parse_if().into(),
             TokenKind::Switch => self.parse_switch().into(),
-            TokenKind::Ident => todo!(),
+            TokenKind::Ident => {
+                let ident = self.expect_ident();
+                let span = token.span;
+                self.skip_newlines();
+                let next = self.lexer.peek().unwrap();
+                match next.kind {
+                    TokenKind::Dot => todo!("Parse member call"),
+                    TokenKind::Lparen => self.parse_call(ident),
+                    kind => {
+                        let pos = token.span.to_pos(self.source);
+                        panic!(
+                            "At {}:{}\n\tIllegal token kind {:#?} for expression!",
+                            pos.line, pos.col, kind
+                        )
+                    }
+                }
+            }
             TokenKind::Add => todo!(),
             TokenKind::Sub => todo!(),
             TokenKind::Not => todo!(),
@@ -299,21 +315,66 @@ impl<'a> Parser<'a> {
             iter,
             elem,
             body,
-            span,
+            span: span.merge(&self.span),
         }
     }
 
-    fn parse_while(&mut self) -> While {}
+    fn parse_while(&mut self) -> While {
+        let Token { kind: _, span } = self.expect(TokenKind::While);
+        let cond = self.parse_expression();
 
-    fn parse_if(&mut self) -> If {}
+        // TODO: while loops should also work with unpacking optionals I think, so check for pipes
 
-    fn parse_switch(&mut self) -> Switch {}
+        let body = self.parse_body();
 
-    fn parse_list(&mut self) -> List {}
+        While {
+            cond,
+            body,
+            span: span.merge(&self.span),
+        }
+    }
 
-    fn parse_group(&mut self) -> Group {}
+    fn parse_if(&mut self) -> If {
+        let Token { kind: _, span } = self.expect(TokenKind::If);
+        let cond = self.parse_expression();
 
-    fn parse_call(&mut self) -> Call {}
+        // TODO: while loops should also work with unpacking optionals I think, so check for pipes
+
+        let body = self.parse_body();
+
+        If {
+            cond,
+            body,
+            span: span.merge(&self.span),
+        }
+    }
+
+    fn parse_switch(&mut self) -> Switch {
+        todo!()
+    }
+
+    fn parse_list(&mut self) -> List {
+        let Token { kind: _, span } = self.expect(TokenKind::Lbracket);
+
+        let mut elems = Vec::new();
+        while !self.has(TokenKind::Rbracket) {
+            elems.push(self.parse_expression());
+        }
+        self.expect(TokenKind::Rbracket);
+
+        List {
+            elems,
+            span: span.merge(&self.span),
+        }
+    }
+
+    fn parse_group(&mut self) -> Group {
+        todo!()
+    }
+
+    fn parse_call(&mut self, ident: &'a str) -> Call {
+        todo!("Parse call")
+    }
 
     fn parse_declaration(&mut self) -> Declaration {
         todo!()

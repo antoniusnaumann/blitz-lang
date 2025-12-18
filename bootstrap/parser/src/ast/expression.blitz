@@ -37,7 +37,8 @@ struct Call {
 }
 
 struct List {
-	elements Vec(Expression)
+	elems Vec(Expression)
+	span  Span
 }
 
 struct Assignment {
@@ -53,11 +54,15 @@ struct For {
 }
 
 struct While {
-	
+	cond Expression
+	body Vec(Statement)
+	span Span
 }
 
 struct If {
-	
+	cond Expression
+	body Vec(Statement)
+	span Span
 }
 
 struct Switch {
@@ -65,7 +70,8 @@ struct Switch {
 }
 
 struct List {
-	
+	elems Vec(Expression)
+	span  Span
 }
 
 struct Group {
