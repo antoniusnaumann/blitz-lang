@@ -1,0 +1,5 @@
+fn test_expressions() {
+	foo(a + b * c)
+	bar(x == y or z != w)
+	baz(obj.method())
+}

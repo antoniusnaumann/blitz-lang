@@ -19,18 +19,31 @@ union Lval {
 union Expression {
 	Call
 	Member
+	Ident
 	Assignment
+	BinaryOp
+	UnaryOp
 	For
 	While
 	If
 	Switch
 	List
 	Group
+	block: Vec(Statement)
+	return_: Box(Expression)
+	continue_
+	break_
+}
+
+struct Ident {
+	name String
+	span Span
 }
 
 struct Member {
 	parent Box(Expression)
 	member String
+	span   Span
 }
 
 struct Call {
@@ -74,6 +87,19 @@ struct List {
 }
 
 struct Group {
+	expr Box(Expression)
+	span Span
+}
+
+struct BinaryOp {
+	op    Operator
+	left  Box(Expression)
+	right Box(Expression)
+	span  Span
+}
+
+struct UnaryOp {
+	op   Operator
 	expr Box(Expression)
 	span Span
 }

@@ -1,0 +1,4 @@
+fn test_blocks() {
+	result(maybe.value() else { default })
+	nested(a else { b else { c } })
+}

@@ -9,9 +9,9 @@ fn main() {
 
     for item in parser {
         println!(
-            "{} <== '{}'\n",
+            "{}", // " <== '{}'\n",
             item.print(),
-            &content[item.span().start..=item.span().end].replace('\n', "\\n")
+            // &content[item.span().start..=item.span().end].replace('\n', "\\n")
         );
     }
 }

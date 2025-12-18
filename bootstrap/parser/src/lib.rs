@@ -58,3 +58,43 @@ impl Definition {
         }
     }
 }
+
+impl Expression {
+    pub fn span(&self) -> Span {
+        match self {
+            Expression::Call(c) => c.span.clone(),
+            Expression::Member(m) => m.span.clone(),
+            Expression::Ident(i) => i.span.clone(),
+            Expression::Assignment(_) => todo!("Assignment span"),
+            Expression::BinaryOp(b) => b.span.clone(),
+            Expression::UnaryOp(u) => u.span.clone(),
+            Expression::For(f) => f.span.clone(),
+            Expression::While(w) => w.span.clone(),
+            Expression::If(i) => i.span.clone(),
+            Expression::Switch(_) => todo!("Switch span"),
+            Expression::List(l) => l.span.clone(),
+            Expression::Group(g) => g.span.clone(),
+            Expression::Block(stmts) => {
+                if stmts.is_empty() {
+                    Span { start: 0, end: 0 }
+                } else {
+                    let first = stmts.first().unwrap().span();
+                    let last = stmts.last().unwrap().span();
+                    first.merge(&last)
+                }
+            }
+            Expression::Return(e) => e.span(),
+            Expression::Continue => Span { start: 0, end: 0 },
+            Expression::Break => Span { start: 0, end: 0 },
+        }
+    }
+}
+
+impl Statement {
+    pub fn span(&self) -> Span {
+        match self {
+            Statement::Declaration(d) => d.span.clone(),
+            Statement::Expression(e) => e.span(),
+        }
+    }
+}
