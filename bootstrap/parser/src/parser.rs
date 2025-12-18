@@ -49,24 +49,24 @@ impl<'a> Parser<'a> {
         self.lexer.kind() == kind
     }
 
-    // fn one_of(&mut self, kinds: &[TokenKind]) -> Token {
-    //     if kinds.contains(&TokenKind::Newline) {
-    //         self.skip_newlines();
-    //     }
-    //     let next = self.lexer.next().unwrap();
-    //     let pos = next.span.to_pos(self.source);
-    //     let got = next.kind.clone();
-    //     assert!(
-    //         kinds.contains(&got),
-    //         "\nAt {}:{}, expected one of {:#?}",
-    //         pos.line,
-    //         pos.col,
-    //         kinds
-    //     );
-    //     self.span = next.span.clone();
+    fn one_of(&mut self, kinds: &[TokenKind]) -> Token {
+        if kinds.contains(&TokenKind::Newline) {
+            self.skip_newlines();
+        }
+        let next = self.lexer.next().unwrap();
+        let pos = next.span.to_pos(self.source);
+        let got = next.kind.clone();
+        assert!(
+            kinds.contains(&got),
+            "\nAt {}:{}, expected one of {:#?}",
+            pos.line,
+            pos.col,
+            kinds
+        );
+        self.span = next.span.clone();
 
-    //     next
-    // }
+        next
+    }
 
     fn consume(&mut self, kind: TokenKind) -> Option<Token> {
         if kind != TokenKind::Newline {
@@ -258,9 +258,9 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_expression(&mut self) -> Expression {
+    fn parse_expression(&mut self, min_prec: u64) -> Expression {
         self.skip_newlines();
-        let token = self.lexer.peek().unwrap();
+        let token = self.lexer.peek().unwrap().clone();
 
         match &token.kind {
             TokenKind::For => self.parse_for().into(),
@@ -272,11 +272,11 @@ impl<'a> Parser<'a> {
                 let span = token.span;
                 self.skip_newlines();
                 let next = self.lexer.peek().unwrap();
-                match next.kind {
+                match &next.kind {
                     TokenKind::Dot => todo!("Parse member call"),
-                    TokenKind::Lparen => self.parse_call(ident),
+                    TokenKind::Lparen => self.parse_call(ident).into(),
                     kind => {
-                        let pos = token.span.to_pos(self.source);
+                        let pos = span.to_pos(self.source);
                         panic!(
                             "At {}:{}\n\tIllegal token kind {:#?} for expression!",
                             pos.line, pos.col, kind
@@ -302,7 +302,7 @@ impl<'a> Parser<'a> {
 
     fn parse_for(&mut self) -> For {
         let Token { kind: _, span } = self.expect(TokenKind::For);
-        let iter = self.parse_expression();
+        let iter = self.parse_expression().into();
 
         // TODO: implement implicit elements with $0
         self.expect(TokenKind::Pipe);
@@ -321,10 +321,9 @@ impl<'a> Parser<'a> {
 
     fn parse_while(&mut self) -> While {
         let Token { kind: _, span } = self.expect(TokenKind::While);
-        let cond = self.parse_expression();
+        let cond = self.parse_expression().into();
 
         // TODO: while loops should also work with unpacking optionals I think, so check for pipes
-
         let body = self.parse_body();
 
         While {
@@ -336,7 +335,7 @@ impl<'a> Parser<'a> {
 
     fn parse_if(&mut self) -> If {
         let Token { kind: _, span } = self.expect(TokenKind::If);
-        let cond = self.parse_expression();
+        let cond = self.parse_expression().into();
 
         // TODO: while loops should also work with unpacking optionals I think, so check for pipes
 
@@ -369,15 +368,61 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_group(&mut self) -> Group {
-        todo!()
+        let Token { kind: _, span } = self.expect(TokenKind::Lparen);
+        let expr = self.parse_expression().into();
+        if self.has(TokenKind::Comma) {
+            todo!(
+                "handle tuples here as well, maybe parse comma as operator so parens are not strictly required when unambiguous"
+            );
+        }
+
+        Group {
+            expr,
+            span: span.merge(&self.span),
+        }
     }
 
     fn parse_call(&mut self, ident: &'a str) -> Call {
-        todo!("Parse call")
+        let Token { kind: _, span } = self.expect(TokenKind::Lparen);
+
+        let mut args = Vec::new();
+        while !self.has(TokenKind::Rparen) {
+            args.push(self.parse_expression());
+            self.consume(TokenKind::Comma);
+        }
+        self.expect(TokenKind::Rparen);
+
+        Call {
+            name: ident.into(),
+            args,
+            ufcs: false,
+            span: span.merge(&self.span),
+        }
     }
 
     fn parse_declaration(&mut self) -> Declaration {
-        todo!()
+        let Token { kind, span } = self.one_of(&[TokenKind::Let, TokenKind::Mut]);
+        let name = self.expect_ident().into();
+
+        // TODO: type inference
+        self.expect(TokenKind::Semicolon);
+        let r#type = self.expect_type();
+
+        let init = if let Some(token) = self.consume(kind.clone())
+            && token.kind == TokenKind::Assign
+        {
+            Some(self.parse_expression())
+        } else {
+            None
+        };
+
+        Declaration {
+            name,
+            r#type,
+            is_mut: kind == TokenKind::Mut,
+            span: span.merge(&self.span),
+            init,
+        }
     }
 }
 

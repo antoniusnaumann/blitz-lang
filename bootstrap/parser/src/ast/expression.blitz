@@ -4,8 +4,11 @@ union Statement {
 }
 
 struct Declaration {
-	name String
-	type Type
+	name   String
+	type   Type
+	is_mut bool
+	init   Option(Expression)
+	span   Span
 }
 
 union Lval {
@@ -15,7 +18,6 @@ union Lval {
 
 union Expression {
 	Call
-	List
 	Member
 	Assignment
 	For
@@ -34,11 +36,8 @@ struct Member {
 struct Call {
 	name String
 	args Vec(Expression)
-}
-
-struct List {
-	elems Vec(Expression)
-	span  Span
+	ufcs Bool
+	span Span
 }
 
 struct Assignment {
@@ -47,20 +46,20 @@ struct Assignment {
 }
 
 struct For {
-	iter Expresson
+	iter Box(Expression)
 	elem String
 	body Vec(Statement)
 	span Span
 }
 
 struct While {
-	cond Expression
+	cond Box(Expression)
 	body Vec(Statement)
 	span Span
 }
 
 struct If {
-	cond Expression
+	cond Box(Expression)
 	body Vec(Statement)
 	span Span
 }
@@ -75,5 +74,6 @@ struct List {
 }
 
 struct Group {
-	
+	expr Box(Expression)
+	span Span
 }

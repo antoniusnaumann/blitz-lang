@@ -10,6 +10,7 @@ pub fn blitz_types(_: TokenStream) -> TokenStream {
     let mut out = Vec::new();
     out.push(quote! {
         type Int = usize;
+        type Bool = bool;
     });
 
     for file in files {

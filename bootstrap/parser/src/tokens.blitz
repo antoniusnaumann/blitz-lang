@@ -19,6 +19,9 @@ union TokenKind {
 	else_
 	switch_
 	test_
+	break_
+	continue_
+	return_
 
 	// Identifier
 	type

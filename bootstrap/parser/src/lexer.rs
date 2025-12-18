@@ -74,6 +74,9 @@ impl<'a> Lexer<'a> {
                     "test" => Test,
                     "and" => And,
                     "or" => Or,
+                    "break" => Break,
+                    "continue" => Continue,
+                    "return" => Return,
                     _ => Ident,
                 }
             }
