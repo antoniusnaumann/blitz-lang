@@ -70,7 +70,7 @@ fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> Valu
                 }
             }
             Expression::BinaryOp(binary_op) => run_bin_op(binary_op, vars, reg),
-            Expression::UnaryOp(unary_op) => todo!(),
+            Expression::UnaryOp(unary_op) => run_un_op(unary_op, vars, reg),
             Expression::For(_) => todo!(),
             Expression::While(_) => todo!(),
             Expression::If(_) => todo!(),
@@ -97,12 +97,63 @@ fn run_bin_op(binary_op: BinaryOp, vars: &mut HashMap<String, Value>, reg: &Regi
     let rhs = run(binary_op.right.deref().clone().into(), vars, reg);
 
     match (lhs, rhs, binary_op.op) {
+        // Int arithmetic operations
         (Value::Int(lhs), Value::Int(rhs), Operator::Add) => Value::Int(lhs + rhs),
         (Value::Int(lhs), Value::Int(rhs), Operator::Sub) => Value::Int(lhs - rhs),
-        // TODO LLM: add the other binary operators for the types where it makes sense
+        (Value::Int(lhs), Value::Int(rhs), Operator::Mul) => Value::Int(lhs * rhs),
+        (Value::Int(lhs), Value::Int(rhs), Operator::Div) => Value::Int(lhs / rhs),
+        (Value::Int(lhs), Value::Int(rhs), Operator::Rem) => Value::Int(lhs % rhs),
+
+        // Int comparison operations
+        (Value::Int(lhs), Value::Int(rhs), Operator::Eq) => Value::Bool(lhs == rhs),
+        (Value::Int(lhs), Value::Int(rhs), Operator::Ne) => Value::Bool(lhs != rhs),
+        (Value::Int(lhs), Value::Int(rhs), Operator::Gt) => Value::Bool(lhs > rhs),
+        (Value::Int(lhs), Value::Int(rhs), Operator::Ge) => Value::Bool(lhs >= rhs),
+        (Value::Int(lhs), Value::Int(rhs), Operator::Lt) => Value::Bool(lhs < rhs),
+        (Value::Int(lhs), Value::Int(rhs), Operator::Le) => Value::Bool(lhs <= rhs),
+
+        // Float arithmetic operations
+        (Value::Float(lhs), Value::Float(rhs), Operator::Add) => Value::Float(lhs + rhs),
+        (Value::Float(lhs), Value::Float(rhs), Operator::Sub) => Value::Float(lhs - rhs),
+        (Value::Float(lhs), Value::Float(rhs), Operator::Mul) => Value::Float(lhs * rhs),
+        (Value::Float(lhs), Value::Float(rhs), Operator::Div) => Value::Float(lhs / rhs),
+        (Value::Float(lhs), Value::Float(rhs), Operator::Rem) => Value::Float(lhs % rhs),
+
+        // Float comparison operations
+        (Value::Float(lhs), Value::Float(rhs), Operator::Eq) => Value::Bool(lhs == rhs),
+        (Value::Float(lhs), Value::Float(rhs), Operator::Ne) => Value::Bool(lhs != rhs),
+        (Value::Float(lhs), Value::Float(rhs), Operator::Gt) => Value::Bool(lhs > rhs),
+        (Value::Float(lhs), Value::Float(rhs), Operator::Ge) => Value::Bool(lhs >= rhs),
+        (Value::Float(lhs), Value::Float(rhs), Operator::Lt) => Value::Bool(lhs < rhs),
+        (Value::Float(lhs), Value::Float(rhs), Operator::Le) => Value::Bool(lhs <= rhs),
+
+        // String operations
+        (Value::String(lhs), Value::String(rhs), Operator::Add) => {
+            panic!("Cannot use '+' on strings, use '++' to concat strings instead")
+        }
+        (Value::String(lhs), Value::String(rhs), Operator::Concat) => {
+            Value::String(format!("{}{}", lhs, rhs))
+        }
+        (Value::String(lhs), Value::String(rhs), Operator::Eq) => Value::Bool(lhs == rhs),
+        (Value::String(lhs), Value::String(rhs), Operator::Ne) => Value::Bool(lhs != rhs),
+
+        // Bool operations
+        (Value::Bool(lhs), Value::Bool(rhs), Operator::And) => Value::Bool(lhs && rhs),
+        (Value::Bool(lhs), Value::Bool(rhs), Operator::Or) => Value::Bool(lhs || rhs),
+        (Value::Bool(lhs), Value::Bool(rhs), Operator::Eq) => Value::Bool(lhs == rhs),
+        (Value::Bool(lhs), Value::Bool(rhs), Operator::Ne) => Value::Bool(lhs != rhs),
+
         (lhs, rhs, op) => panic!(
             "Invalid combination value for operator {:#?} : {:#?}, {:#?}",
             op, lhs, rhs
         ),
     }
+}
+
+fn run_un_op(
+    unary_op: parser::UnaryOp,
+    vars: &mut HashMap<String, Value>,
+    reg: &Registry,
+) -> Value {
+    // TODO LLM implement this similar to above
 }

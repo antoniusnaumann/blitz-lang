@@ -36,7 +36,7 @@ pub enum Value {
     String(String),
     Int(usize),
     Float(f64),
-    Bool,
+    Bool(bool),
     Struct(HashMap<String, Value>),
     Union(String, Box<Value>),
     List(Vec<Value>),
