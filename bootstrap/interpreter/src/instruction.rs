@@ -11,7 +11,9 @@ fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> Valu
                 .init
                 .map(|e| run(e.into(), vars, reg))
                 .unwrap_or(Value::None);
-            vars.insert(declaration.name, init);
+            _ = vars
+                .insert(declaration.name.clone(), init)
+                .is_none_or(|_| panic!("Illegal shadowing of {}", declaration.name));
             Value::None
         }
         Statement::Expression(expression) => match expression {
@@ -69,14 +71,84 @@ fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> Valu
                     }
                 }
             }
+            Expression::For(for_loop) => {
+                let iter = run(for_loop.iter.deref().clone().into(), vars, reg);
+                match iter {
+                    Value::List(values) => {
+                        let mut results = Vec::new();
+                        for val in values {
+                            vars.insert(for_loop.elem.clone(), val);
+                            let mut result = Value::None;
+                            for s in &for_loop.body {
+                                result = run(s.clone(), vars, reg);
+                            }
+                            results.push(result)
+                        }
+                        Value::List(results)
+                    }
+                    val => panic!("Cannot iterate over {:#?}", val),
+                }
+            }
+            Expression::While(while_) => {
+                let mut results = Vec::new();
+
+                loop {
+                    let cond = run(while_.cond.deref().clone().into(), vars, reg);
+                    match cond {
+                        Value::Bool(val) => {
+                            if !val {
+                                break;
+                            }
+                            let mut result = Value::None;
+                            for s in &while_.body {
+                                result = run(s.clone(), vars, reg);
+                            }
+                            results.push(result)
+                        }
+                        _ => panic!("While needs boolean as condition"),
+                    }
+                }
+                Value::List(results)
+            }
+            Expression::If(if_) => {
+                let cond = run(if_.cond.deref().clone().into(), vars, reg);
+                match cond {
+                    Value::Bool(val) => {
+                        if val {
+                            let mut result = Value::None;
+                            for s in if_.body {
+                                result = run(s.clone(), vars, reg);
+                            }
+                            result
+                        } else {
+                            Value::None
+                        }
+                    }
+                    _ => panic!("If statement needs boolean as condition"),
+                }
+            }
+            // Handle else
+            Expression::BinaryOp(bin) if bin.op == Operator::Else => {
+                let lhs = run(bin.left.deref().clone().into(), vars, reg);
+                if matches!(lhs, Value::None) {
+                    run(bin.right.deref().clone().into(), vars, reg)
+                } else {
+                    lhs
+                }
+            }
+            Expression::Switch(switch) => {
+                todo!()
+            }
+            Expression::List(list) => {
+                let mut results = Vec::new();
+                for elem in list.elems {
+                    results.push(run(elem.into(), vars, reg));
+                }
+                Value::List(results)
+            }
+            Expression::Group(group) => run(group.expr.deref().clone().into(), vars, reg),
             Expression::BinaryOp(binary_op) => run_bin_op(binary_op, vars, reg),
             Expression::UnaryOp(unary_op) => run_un_op(unary_op, vars, reg),
-            Expression::For(_) => todo!(),
-            Expression::While(_) => todo!(),
-            Expression::If(_) => todo!(),
-            Expression::Switch(switch) => todo!(),
-            Expression::List(list) => todo!(),
-            Expression::Group(group) => todo!(),
             Expression::Block(statements) => {
                 let mut result = Value::None;
                 for s in statements {
@@ -156,15 +228,15 @@ fn run_un_op(
     reg: &Registry,
 ) -> Value {
     let expr = run(unary_op.expr.deref().clone().into(), vars, reg);
-    
+
     match (expr, unary_op.op) {
         // Negation for numbers
         (Value::Int(val), Operator::Neg) => Value::Int(-val),
         (Value::Float(val), Operator::Neg) => Value::Float(-val),
-        
+
         // Logical not for booleans
         (Value::Bool(val), Operator::Not) => Value::Bool(!val),
-        
+
         (expr, op) => panic!(
             "Invalid combination for unary operator {:#?} : {:#?}",
             op, expr
