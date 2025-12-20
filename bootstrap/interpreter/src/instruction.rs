@@ -155,5 +155,19 @@ fn run_un_op(
     vars: &mut HashMap<String, Value>,
     reg: &Registry,
 ) -> Value {
-    // TODO LLM implement this similar to above
+    let expr = run(unary_op.expr.deref().clone().into(), vars, reg);
+    
+    match (expr, unary_op.op) {
+        // Negation for numbers
+        (Value::Int(val), Operator::Neg) => Value::Int(-val),
+        (Value::Float(val), Operator::Neg) => Value::Float(-val),
+        
+        // Logical not for booleans
+        (Value::Bool(val), Operator::Not) => Value::Bool(!val),
+        
+        (expr, op) => panic!(
+            "Invalid combination for unary operator {:#?} : {:#?}",
+            op, expr
+        ),
+    }
 }

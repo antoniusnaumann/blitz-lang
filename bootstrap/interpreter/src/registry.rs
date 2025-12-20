@@ -34,7 +34,7 @@ pub enum Body {
 #[derive(Clone, Debug)]
 pub enum Value {
     String(String),
-    Int(usize),
+    Int(isize),
     Float(f64),
     Bool(bool),
     Struct(HashMap<String, Value>),
