@@ -510,7 +510,7 @@ impl<'a> Parser<'a> {
     fn parse_string_lit(&mut self) -> String {
         let Token { kind: _, span } = self.expect(TokenKind::Str);
 
-        self.source[RangeInclusive::from(span)].into()
+        self.source[(span.start + 1)..(span.end)].into()
     }
 
     fn parse_num_lit(&mut self) -> Float {

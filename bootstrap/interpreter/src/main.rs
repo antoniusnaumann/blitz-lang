@@ -3,7 +3,7 @@ use std::env::args;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use interpreter::{Body, Builtin, Registry, run};
+use interpreter::{Body, Builtin, ROOT, Registry, run};
 use parser::{Definition, Parser, Print};
 
 fn main() {
@@ -11,6 +11,7 @@ fn main() {
         .nth(1)
         .expect("Please provide a file or directory path");
     let path = Path::new(&path);
+    assert_eq!(path, ROOT.get_or_init(|| path.into()));
 
     let definitions = collect_definitions(path);
 

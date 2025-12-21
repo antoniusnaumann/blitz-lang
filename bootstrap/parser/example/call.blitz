@@ -1,0 +1,33 @@
+fn main() {
+	print("Hello World!")
+
+	let a: Int = 15 + 7
+	print(a)
+	
+	a.double().print()
+
+	is_even(a).print()
+	a.is_even().print()
+	a.is_odd().print()
+}
+
+fn double(arg Int) Int {
+	arg * 2
+}
+
+fn is_even(n Int) String {
+	if n % 2 == 0 {
+		"Even"
+	} else {
+		"Not even"
+	}
+}
+
+fn is_odd(n Int) String {
+	if n % 2 == 1 {
+		"Odd"
+	} else {
+		"Not odd"
+	}
+}
+

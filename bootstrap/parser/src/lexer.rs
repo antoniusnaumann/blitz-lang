@@ -1,4 +1,4 @@
-use std::{iter::Peekable, str::CharIndices};
+use std::{iter::Peekable, ops::RangeInclusive, str::CharIndices};
 
 use crate::{Span, Token, TokenKind};
 
@@ -190,17 +190,20 @@ impl<'a> Lexer<'a> {
         loop {
             let (curr, ch) = self.peek_char();
             match ch {
-                '/' if !escape => {
+                '\\' if !escape => {
                     escape = true;
                     _ = self.chars.next();
                 }
-                '/' if escape => {
+                '\\' if escape => {
                     escape = false;
                     _ = self.chars.next();
                 }
                 '"' if !escape => {
                     _ = self.chars.next();
                     return curr;
+                }
+                ch if escape => {
+                    panic!("ERROR: Illegal escape sequence: \\{ch}")
                 }
                 _ => {
                     _ = self.chars.next();
