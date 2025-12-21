@@ -84,8 +84,11 @@ impl Expression {
                 }
             }
             Expression::Return(e) => e.span(),
+            // TODO: add spans here
             Expression::Continue => Span { start: 0, end: 0 },
             Expression::Break => Span { start: 0, end: 0 },
+            Expression::String(s) => Span { start: 0, end: 0 },
+            Expression::Number(num) => Span { start: 0, end: 0 },
         }
     }
 }

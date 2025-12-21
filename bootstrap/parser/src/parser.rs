@@ -392,6 +392,8 @@ impl<'a> Parser<'a> {
             }
             TokenKind::Lbracket => self.parse_list().into(),
             TokenKind::Lparen => self.parse_group().into(),
+            TokenKind::Str => self.parse_string_lit().into(),
+            TokenKind::Num => self.parse_num_lit().into(),
             kind => {
                 let pos = token.span.to_pos(self.source);
                 panic!(
@@ -505,6 +507,18 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn parse_string_lit(&mut self) -> String {
+        let Token { kind: _, span } = self.expect(TokenKind::Str);
+
+        self.source[RangeInclusive::from(span)].into()
+    }
+
+    fn parse_num_lit(&mut self) -> Float {
+        let Token { kind: _, span } = self.expect(TokenKind::Num);
+
+        self.source[RangeInclusive::from(span)].parse().unwrap()
+    }
+
     fn parse_block(&mut self) -> Expression {
         self.expect(TokenKind::Lbrace);
 
@@ -540,12 +554,16 @@ impl<'a> Parser<'a> {
         let name = self.expect_ident().into();
 
         // TODO: type inference
-        self.expect(TokenKind::Semicolon);
-        let r#type = self.expect_type();
+        let r#type = if let Some(token) = self.consume(TokenKind::Colon) {
+            self.expect_type()
+        } else {
+            Type {
+                name: "_".into(),
+                args: Vec::new(),
+            }
+        };
 
-        let init = if let Some(token) = self.consume(kind.clone())
-            && token.kind == TokenKind::Assign
-        {
+        let init = if let Some(_) = self.consume(TokenKind::Assign) {
             Some(self.parse_expression())
         } else {
             None

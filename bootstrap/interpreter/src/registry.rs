@@ -52,6 +52,10 @@ impl Registry {
     pub fn func(&self, name: &str) -> Option<&Func> {
         self.funcs.get(name)
     }
+
+    pub fn insert(&mut self, name: String, func: Func) {
+        self.funcs.insert(name, func);
+    }
 }
 
 impl From<Vec<Definition>> for Registry {
@@ -146,7 +150,7 @@ impl From<Fn> for Func {
                 .iter()
                 .map(|arg| (arg.name.clone(), arg.r#type.name.clone()))
                 .collect(),
-            result: value.r#type.map(|t| t.name).unwrap(),
+            result: value.r#type.map(|t| t.name).unwrap_or("Void".into()),
             body: Body::Defined(value.body),
         }
     }

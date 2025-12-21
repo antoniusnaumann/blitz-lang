@@ -80,6 +80,14 @@ impl<'a> Lexer<'a> {
                     _ => Ident,
                 }
             }
+            '"' => {
+                end = self.skip_string();
+                Str
+            }
+            '0'..='9' => {
+                end = self.skip_num();
+                Num
+            }
             '+' => self.up(Add),
             '-' => self.up(Sub),
             '*' => self.up(Mul),
@@ -97,6 +105,7 @@ impl<'a> Lexer<'a> {
                     _ => Div,
                 }
             }
+            '%' => self.up(Rem),
             '=' => {
                 _ = self.chars.next();
                 let (pos, ch) = self.peek_char();
@@ -147,7 +156,10 @@ impl<'a> Lexer<'a> {
             '\n' => self.up(Newline),
             '\0' => self.up(Eof),
 
-            _ => self.up(Error),
+            ch => {
+                eprintln!("Got illegal char {ch}");
+                self.up(Error)
+            }
         };
 
         let span = Span { start, end };
@@ -162,6 +174,55 @@ impl<'a> Lexer<'a> {
             let (curr, ch) = self.peek_char();
             match ch {
                 'A'..='Z' | 'a'..='z' | '_' => {
+                    end = curr;
+                    _ = self.chars.next();
+                }
+                _ => return end,
+            }
+        }
+    }
+
+    fn skip_string(&mut self) -> usize {
+        let (_, ch) = self.chars.next().unwrap();
+        assert!(ch == '"', "Strings need to start with \"");
+        // TODO: Handle format strings
+        let mut escape = false;
+        loop {
+            let (curr, ch) = self.peek_char();
+            match ch {
+                '/' if !escape => {
+                    escape = true;
+                    _ = self.chars.next();
+                }
+                '/' if escape => {
+                    escape = false;
+                    _ = self.chars.next();
+                }
+                '"' if !escape => {
+                    _ = self.chars.next();
+                    return curr;
+                }
+                _ => {
+                    _ = self.chars.next();
+                }
+            }
+        }
+    }
+
+    fn skip_num(&mut self) -> usize {
+        let mut end = 0;
+        let mut has_dot = false;
+
+        loop {
+            let (curr, ch) = self.peek_char();
+            match ch {
+                // TODO: lookahead to handle method calls, maybe upgrade in lexer if num ends with dot
+                '.' if !has_dot => {
+                    has_dot = true;
+                    end = curr;
+                    _ = self.chars.next();
+                }
+                '0'..='9' | '_' => {
                     end = curr;
                     _ = self.chars.next();
                 }

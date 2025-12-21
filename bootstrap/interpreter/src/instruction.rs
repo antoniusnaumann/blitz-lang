@@ -4,7 +4,7 @@ use parser::{BinaryOp, Expression, Operator, Statement};
 
 use crate::registry::{Body, Registry, Value};
 
-fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> Value {
+pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> Value {
     match st {
         Statement::Declaration(declaration) => {
             let init = declaration
@@ -18,7 +18,9 @@ fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> Valu
         }
         Statement::Expression(expression) => match expression {
             Expression::Call(call) => {
-                let func = reg.func(&call.name).unwrap();
+                let func = reg
+                    .func(&call.name)
+                    .unwrap_or_else(|| panic!("Did not find func {}", call.name));
                 let mut args = HashMap::new();
                 let params = &func.params;
                 for ((name, _ty), arg) in params.iter().zip(call.args) {
@@ -31,7 +33,7 @@ fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> Valu
                     Body::Defined(statements) => {
                         let mut result = Value::None;
                         for s in statements {
-                            result = run(s.clone(), vars, reg);
+                            result = run(s.clone(), &mut args, reg);
                         }
 
                         result
@@ -45,7 +47,12 @@ fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> Valu
                 };
                 parent[&member.member].clone()
             }
-            Expression::Ident(ident) => vars[&ident.name].clone(),
+            Expression::Ident(ident) => vars
+                .get(&ident.name)
+                .unwrap_or_else(|| {
+                    panic!("ERROR: Did not find '{}'. Have {:#?}", &ident.name, vars)
+                })
+                .clone(),
             Expression::Assignment(assignment) => {
                 let rhs = run(assignment.right.deref().clone().into(), vars, reg);
                 match assignment.left {
@@ -127,7 +134,6 @@ fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> Valu
                     _ => panic!("If statement needs boolean as condition"),
                 }
             }
-            // Handle else
             Expression::BinaryOp(bin) if bin.op == Operator::Else => {
                 let lhs = run(bin.left.deref().clone().into(), vars, reg);
                 if matches!(lhs, Value::None) {
@@ -160,6 +166,14 @@ fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> Valu
             Expression::Return(expression) => todo!(),
             Expression::Continue => todo!(),
             Expression::Break => todo!(),
+            Expression::String(s) => Value::String(s),
+            Expression::Number(num) => {
+                if num.round() == num {
+                    Value::Int(num as isize)
+                } else {
+                    Value::Float(num)
+                }
+            }
         },
     }
 }

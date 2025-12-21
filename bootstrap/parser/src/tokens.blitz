@@ -27,6 +27,10 @@ union TokenKind {
 	type
 	ident
 
+	// Literals
+	str
+	num
+
 	// Arithmetic
 	add
 	sub

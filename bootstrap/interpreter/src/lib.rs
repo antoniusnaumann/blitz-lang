@@ -1,5 +1,7 @@
 mod instruction;
 mod registry;
+mod runtime;
 
-use instruction::*;
-use registry::*;
+pub use instruction::*;
+pub use registry::*;
+pub use runtime::*;

@@ -29,6 +29,8 @@ union Expression {
 	Switch
 	List
 	Group
+	String
+	number: Float
 	block: Vec(Statement)
 	return_: Box(Expression)
 	continue_

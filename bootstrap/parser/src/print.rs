@@ -155,6 +155,8 @@ impl Print for Expression {
             Expression::Return(e) => format!("return {}", e.print()),
             Expression::Continue => "continue".into(),
             Expression::Break => "break".into(),
+            Expression::String(s) => s.clone(),
+            Expression::Number(num) => format!("{num}"),
         }
     }
 }
