@@ -1,0 +1,27 @@
+union Operator {
+	add  // +
+	sub  // -
+	div  // /
+	mul  // *
+	rem  // %
+	
+	concat // ++
+	member // .
+
+	eq // ==
+	ne // !=
+	gt // >
+	ge // >=
+	lt // <
+	le // <=
+
+	// unary
+	not // !
+	neg // - 
+
+ 	// short-circuiting keyword operators
+	and_
+	or_
+
+	else_
+}

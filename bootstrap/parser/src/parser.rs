@@ -33,9 +33,10 @@ impl<'a> Parser<'a> {
         let got = next.kind.clone();
         let pos = next.span.to_pos(self.source);
         assert_eq!(
-            got, kind,
-            "\nAt {}:{}  (left: got, right: expected)",
-            pos.line, pos.col
+            got,
+            kind,
+            "\n\n{}\n\n(left: got, right: expected)",
+            self.print_pos(pos.clone())
         );
         self.span = next.span.clone();
 
@@ -59,7 +60,7 @@ impl<'a> Parser<'a> {
         assert!(
             kinds.contains(&got),
             "\nAt {}:{}, expected one of {:#?}",
-            pos.line,
+            pos.line + 1,
             pos.col,
             kinds
         );
@@ -398,7 +399,9 @@ impl<'a> Parser<'a> {
                 let pos = token.span.to_pos(self.source);
                 panic!(
                     "At {}:{}\n\tIllegal token kind {:#?} for expression!",
-                    pos.line, pos.col, kind
+                    pos.line + 1,
+                    pos.col,
+                    kind
                 )
             }
         };
@@ -576,6 +579,14 @@ impl<'a> Parser<'a> {
             span: span.merge(&self.span),
             init,
         }
+    }
+
+    fn print_pos(&self, pos: Pos) -> String {
+        format!(
+            "{} | {}",
+            pos.line + 1,
+            self.source.lines().skip(pos.line).next().unwrap()
+        )
     }
 }
 

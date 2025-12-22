@@ -1,0 +1,107 @@
+union Statement {
+	Declaration
+	Expression
+}
+
+struct Declaration {
+	name   String
+	type   Type
+	is_mut bool
+	init   Option(Expression)
+	span   Span
+}
+
+union Lval {
+	Member
+	ident: String
+}
+
+union Expression {
+	Call
+	Member
+	Ident
+	Assignment
+	BinaryOp
+	UnaryOp
+	For
+	While
+	If
+	Switch
+	List
+	Group
+	String
+	number: Float
+	block: Vec(Statement)
+	return_: Box(Expression)
+	continue_
+	break_
+}
+
+struct Ident {
+	name String
+	span Span
+}
+
+struct Member {
+	parent Box(Expression)
+	member String
+	span   Span
+}
+
+struct Call {
+	name String
+	args Vec(Expression)
+	ufcs Bool
+	span Span
+}
+
+struct Assignment {
+	left  Lval
+	right Box(Expression)
+}
+
+struct For {
+	iter Box(Expression)
+	elem String
+	body Vec(Statement)
+	span Span
+}
+
+struct While {
+	cond Box(Expression)
+	body Vec(Statement)
+	span Span
+}
+
+struct If {
+	cond Box(Expression)
+	body Vec(Statement)
+	span Span
+}
+
+struct Switch {
+	
+}
+
+struct List {
+	elems Vec(Expression)
+	span  Span
+}
+
+struct Group {
+	expr Box(Expression)
+	span Span
+}
+
+struct BinaryOp {
+	op    Operator
+	left  Box(Expression)
+	right Box(Expression)
+	span  Span
+}
+
+struct UnaryOp {
+	op   Operator
+	expr Box(Expression)
+	span Span
+}
