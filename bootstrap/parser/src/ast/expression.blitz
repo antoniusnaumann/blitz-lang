@@ -80,7 +80,20 @@ struct If {
 }
 
 struct Switch {
-	
+	cond  Box(Expression)
+	cases Vec(SwitchCase)
+	span  Span	
+}
+
+struct SwitchCase {
+	label SwitchLabel
+	body  Vec(Statement)
+	span  Span
+}
+
+union SwitchLabel {
+	Type
+	Ident	
 }
 
 struct List {

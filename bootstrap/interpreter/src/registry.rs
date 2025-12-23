@@ -1,6 +1,9 @@
-use std::collections::HashMap;
+use std::{
+    collections::{HashMap, HashSet},
+    ops::Deref,
+};
 
-use parser::{Alias, Definition, Fn, Statement, Struct, Union};
+use parser::{Ast, Definition, Fn, Span, Statement, Struct, Union};
 
 #[derive(Default)]
 pub struct Registry {
@@ -58,39 +61,26 @@ impl Registry {
     }
 }
 
-impl From<Vec<Definition>> for Registry {
-    fn from(value: Vec<Definition>) -> Self {
+impl From<Vec<Ast>> for Registry {
+    fn from(value: Vec<Ast>) -> Self {
         let mut reg = Registry::default();
         let mut tys = HashMap::new();
 
-        for def in &value {
-            match def {
-                Definition::Struct(ty) => {
-                    tys.insert(ty.name.clone(), AstType::Struct(ty.clone()));
+        for ast in value {
+            for def in &ast.defs {
+                match def {
+                    Definition::Struct(ty) => {
+                        tys.insert(ty.sig.name.clone(), AstType::Struct(ty.clone()));
+                    }
+                    Definition::Union(union) => {
+                        tys.insert(union.sig.name.clone(), AstType::Union(union.clone()));
+                    }
+                    _ => {}
                 }
-                Definition::Union(union) => {
-                    tys.insert(union.name.clone(), AstType::Union(union.clone()));
-                }
-                _ => {}
             }
-        }
 
-        for def in value {
-            match def {
-                Definition::Fn(func) => {
-                    reg.funcs.insert(func.name.clone(), func.into());
-                }
-                Definition::Struct(ty) => {
-                    let conv = resolve_type(ty.name.clone(), &tys);
-                    reg.types.insert(ty.name, conv);
-                }
-                Definition::Union(union) => {
-                    let conv = resolve_type(union.name.clone(), &tys);
-                    reg.types.insert(union.name, conv);
-                }
-                Definition::Alias(alias) => todo!(),
-                Definition::Actor(actor) => todo!(),
-                Definition::Test(test) => todo!(),
+            for def in &ast.defs {
+                insert_def(&mut reg, &tys, &ast, def);
             }
         }
 
@@ -98,23 +88,67 @@ impl From<Vec<Definition>> for Registry {
     }
 }
 
-fn resolve_type(name: String, tys: &HashMap<String, AstType>) -> Type {
+fn insert_def(reg: &mut Registry, tys: &HashMap<String, AstType>, ast: &Ast, def: &Definition) {
+    match def {
+        Definition::Pub(p) => {
+            insert_def(reg, tys, ast, p.item.deref());
+        }
+        Definition::Fn(func) => {
+            reg.funcs.insert(func.name.clone(), func.clone().into());
+        }
+        Definition::Struct(ty) => {
+            let conv = resolve_type(
+                ty.sig.name.clone(),
+                tys,
+                &HashSet::from_iter(ty.sig.params.iter().map(|p| p.name.clone())),
+                &ast.source,
+                ty.span.clone(),
+            );
+            reg.types.insert(ty.sig.name.clone(), conv);
+        }
+        Definition::Union(union) => {
+            let conv = resolve_type(
+                union.sig.name.clone(),
+                tys,
+                &HashSet::from_iter(union.sig.params.iter().map(|p| p.name.clone())),
+                &ast.source,
+                union.span.clone(),
+            );
+            reg.types.insert(union.sig.name.clone(), conv);
+        }
+        Definition::Alias(alias) => todo!(),
+        Definition::Actor(actor) => todo!(),
+        Definition::Test(test) => todo!(),
+    }
+}
+
+fn resolve_type(
+    name: String,
+    tys: &HashMap<String, AstType>,
+    generics: &HashSet<String>,
+    source: &str,
+    span: Span,
+) -> Type {
     match name.as_str() {
         "Int" => Type::Int,
         "Float" => Type::Float,
         "String" => Type::String,
         "Bool" => Type::Bool,
         "List" => Type::List(Box::new(Type::Any)),
-        _ => {
-            let def = &tys[&name];
-
-            match def {
+        _ => match &tys.get(&name) {
+            Some(def) => match def {
                 AstType::Struct(ty) => {
                     let mut fields = HashMap::new();
                     for field in &ty.fields {
                         fields.insert(
                             field.name.clone(),
-                            resolve_type(field.r#type.name.clone(), tys),
+                            resolve_type(
+                                field.r#type.name.clone(),
+                                tys,
+                                generics,
+                                source,
+                                field.r#type.span.clone(),
+                            ),
                         );
                     }
 
@@ -130,15 +164,23 @@ fn resolve_type(name: String, tys: &HashMap<String, AstType>) -> Type {
                                 .unwrap(),
                             case.r#type
                                 .clone()
-                                .map(|t| resolve_type(t.name, tys))
+                                .map(|t| resolve_type(t.name, tys, generics, source, t.span))
                                 .unwrap_or(Type::Void),
                         );
                     }
 
                     Type::Union(cases)
                 }
+            },
+            None => {
+                _ = &dbg!(generics).get(&name).unwrap_or_else(|| {
+                    let location = span.report(source);
+                    panic!("No type named {name} \n\n{location}")
+                });
+                // TODO: proper type checking
+                Type::Any
             }
-        }
+        },
     }
 }
 

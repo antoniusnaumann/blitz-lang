@@ -1,0 +1,85 @@
+struct Token {
+	kind TokenKind
+	span Span
+}
+
+union TokenKind {
+	// Keyword
+	struct_
+	union_
+	actor_
+	alias_
+	fn_
+	pub_
+	let_
+	mut_
+	for_
+	while_
+	if_
+	else_
+	switch_
+	test_
+	break_
+	continue_
+	return_
+
+	// Identifier
+	type
+	ident
+
+	// Literals
+	str
+	num
+
+	// Arithmetic
+	add
+	sub
+	mul
+	div
+	rem
+	assign
+
+	// Logical
+	and_
+	or_
+	not
+
+	// Comparison
+	eq
+	ne
+	gt
+	ge
+	lt
+	le
+		
+	// Delimiter
+	comma
+	semicolon
+	colon
+	dot
+	newline
+
+	pipe
+
+	lbrace
+	rbrace
+	lbracket
+	rbracket
+	lparen
+	rparen
+
+	comment
+	
+	eof
+	error
+}
+
+struct Span {
+	start Int
+	end   Int // inclusive
+}
+
+struct Pos {
+	line Int
+	col  Int
+}

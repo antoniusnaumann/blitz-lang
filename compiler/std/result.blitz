@@ -1,0 +1,11 @@
+union Option {
+	some: Int
+	none
+}
+
+fn unwrap(op Option(Int)) Int {
+	switch op {
+		some { some }
+		none { panic("Unwrapped a none value!") }
+	}
+}

@@ -5,6 +5,7 @@ mod print;
 
 use std::{
     cmp::{max, min},
+    hash::Hash,
     ops::RangeInclusive,
 };
 
@@ -13,6 +14,11 @@ pub use parser::*;
 pub use print::*;
 
 type_macro::blitz_types!();
+
+pub struct Ast {
+    pub defs: Vec<Definition>,
+    pub source: String,
+}
 
 impl From<Span> for RangeInclusive<usize> {
     fn from(value: Span) -> Self {
@@ -28,7 +34,7 @@ impl Span {
         }
     }
 
-    fn to_pos(&self, source: &str) -> Pos {
+    pub fn start_pos(&self, source: &str) -> Pos {
         let mut pos = Pos { line: 1, col: 1 };
         for (i, ch) in source.char_indices() {
             if i >= self.start {
@@ -44,11 +50,63 @@ impl Span {
 
         return pos;
     }
+
+    pub fn end_pos(&self, source: &str) -> Pos {
+        let mut pos = Pos { line: 1, col: 1 };
+        for (i, ch) in source.char_indices() {
+            if i >= self.end {
+                break;
+            }
+            if ch == '\n' {
+                pos.col = 1;
+                pos.line += 1;
+            } else {
+                pos.col += 1;
+            }
+        }
+
+        return pos;
+    }
+
+    pub fn report(&self, source: &str) -> String {
+        let start = self.start_pos(source);
+        let end = self.end_pos(source);
+        if start.line != end.line {
+            return (&source[RangeInclusive::from(self.clone())]).to_owned();
+        }
+        let line = start.line;
+
+        let snippet = source.lines().skip(line - 1).next().unwrap();
+        let marker = format!("{snippet}     ")
+            .char_indices()
+            .map(|(i, ch)| {
+                let i = i + 1;
+                if i >= start.col && i <= end.col {
+                    '^'
+                } else if ch != '\t' {
+                    ' '
+                } else {
+                    ch
+                }
+            })
+            .collect::<String>();
+
+        format!(
+            "{} | {}\n{} | {}",
+            line,
+            snippet,
+            line, // quick hack for aligning line numbers
+            marker
+        )
+    }
 }
+
+impl Pos {}
 
 impl Definition {
     pub fn span(&self) -> Span {
         match self {
+            Definition::Pub(p) => p.item.span(),
             Definition::Fn(f) => f.span.clone(),
             Definition::Struct(s) => s.span.clone(),
             Definition::Union(union) => union.span.clone(),
@@ -99,5 +157,22 @@ impl Statement {
             Statement::Declaration(d) => d.span.clone(),
             Statement::Expression(e) => e.span(),
         }
+    }
+}
+
+impl Hash for Type {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.name.hash(state);
+        self.params.hash(state);
+        self.span.hash(state);
+    }
+}
+
+impl Eq for Type {}
+
+impl Hash for Span {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.start.hash(state);
+        self.end.hash(state);
     }
 }

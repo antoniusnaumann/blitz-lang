@@ -1,10 +1,15 @@
 union Definition {
+	Pub
 	Fn
 	Struct
 	Union
 	Alias
 	Actor
 	Test
+}
+
+struct Pub {
+	item Box(Definition)
 }
 
 struct Fn {
@@ -16,7 +21,7 @@ struct Fn {
 }
 
 struct Struct {
-	name   String
+	sig    Type
 	fields Vec(Field)
 	span   Span
 }
@@ -27,9 +32,9 @@ struct Field {
 }
 
 struct Union {
-	name  String
-	cases Vec(Case)
-	span  Span
+	sig    Type
+	cases  Vec(Case)
+	span   Span
 }
 
 struct Case {
@@ -50,6 +55,7 @@ struct Test {
 }
 
 struct Type {
-	name String
-	args Vec(Type)
+	name   String
+	params Vec(Type)
+	span   Span
 }

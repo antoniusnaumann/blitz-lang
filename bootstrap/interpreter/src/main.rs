@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use interpreter::{Body, Builtin, ROOT, Registry, run};
-use parser::{Definition, Parser, Print};
+use parser::{Ast, Definition, Parser, Print};
 
 fn main() {
     let path = args()
@@ -13,23 +13,25 @@ fn main() {
     let path = Path::new(&path);
     assert_eq!(path, ROOT.get_or_init(|| path.into()));
 
-    let definitions = collect_definitions(path);
+    let asts = collect_definitions(path);
 
-    println!("DEBUG: Collected {} definitions\n", definitions.len());
-    for def in &definitions {
-        match def {
-            Definition::Fn(f) => {
-                println!(
-                    "{}({})",
-                    f.name,
-                    f.args.print().trim().trim_end_matches("()")
-                );
+    for ast in &asts {
+        println!("DEBUG: Collected {} definitions", ast.defs.len());
+        for def in &ast.defs {
+            match def {
+                Definition::Fn(f) => {
+                    println!(
+                        "{}({})",
+                        f.name,
+                        f.args.print().trim().trim_end_matches("()")
+                    );
+                }
+                _ => {}
             }
-            _ => {}
         }
     }
 
-    let mut reg = Registry::from(definitions);
+    let mut reg = Registry::from(asts);
     reg.add_builtins();
 
     let main = reg.func("main").expect("Did not find main function");
@@ -45,7 +47,7 @@ fn main() {
     }
 }
 
-fn collect_definitions(path: &Path) -> Vec<Definition> {
+fn collect_definitions(path: &Path) -> Vec<Ast> {
     let mut all_definitions = Vec::new();
 
     if path.is_file() {
@@ -53,7 +55,10 @@ fn collect_definitions(path: &Path) -> Vec<Definition> {
             match fs::read_to_string(path) {
                 Ok(content) => {
                     let parser = Parser::new(&content);
-                    all_definitions.extend(parser);
+                    all_definitions.push(Ast {
+                        defs: parser.collect(),
+                        source: content,
+                    });
                 }
                 Err(e) => eprintln!("Failed to read file {}: {}", path.display(), e),
             }
@@ -67,7 +72,10 @@ fn collect_definitions(path: &Path) -> Vec<Definition> {
             match fs::read_to_string(&file_path) {
                 Ok(content) => {
                     let parser = Parser::new(&content);
-                    all_definitions.extend(parser);
+                    all_definitions.push(Ast {
+                        defs: parser.collect(),
+                        source: content,
+                    });
                 }
                 Err(e) => eprintln!("Failed to read file {}: {}", file_path.display(), e),
             }

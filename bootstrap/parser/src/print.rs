@@ -7,6 +7,7 @@ pub trait Print {
 impl Print for Definition {
     fn print(&self) -> String {
         match self {
+            Definition::Pub(p) => format!("pub {}", p.item.print()),
             Definition::Fn(f) => {
                 let mut s = format!(
                     "fn {}({}) {}",
@@ -27,8 +28,10 @@ impl Print for Definition {
                 }
                 s
             }
-            Definition::Struct(s) => format!("struct {} {{\n {}}}", s.name, s.fields.print()),
-            Definition::Union(u) => format!("union {} {{\n {}}}", u.name, u.cases.print()),
+            Definition::Struct(s) => {
+                format!("struct {} {{\n {}}}", s.sig.print(), s.fields.print())
+            }
+            Definition::Union(u) => format!("union {} {{\n {}}}", u.sig.print(), u.cases.print()),
             Definition::Alias(_a) => todo!(),
             Definition::Actor(_a) => todo!(),
             Definition::Test(_t) => todo!(),
@@ -80,7 +83,7 @@ impl Print for Type {
         format!(
             "{}({})",
             self.name,
-            self.args
+            self.params
                 .iter()
                 .map(Type::print)
                 .collect::<Vec<_>>()

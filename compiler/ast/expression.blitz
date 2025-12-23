@@ -6,7 +6,7 @@ union Statement {
 struct Declaration {
 	name   String
 	type   Type
-	is_mut bool
+	is_mut Bool
 	init   Option(Expression)
 	span   Span
 }
@@ -27,11 +27,11 @@ union Expression {
 	While
 	If
 	Switch
-	List
+	List_
 	Group
 	String
 	number: Float
-	block: Vec(Statement)
+	block: List(Statement)
 	return_: Box(Expression)
 	continue_
 	break_
@@ -50,7 +50,7 @@ struct Member {
 
 struct Call {
 	name String
-	args Vec(Expression)
+	args List(Expression)
 	ufcs Bool
 	span Span
 }
@@ -63,28 +63,42 @@ struct Assignment {
 struct For {
 	iter Box(Expression)
 	elem String
-	body Vec(Statement)
+	body List(Statement)
 	span Span
 }
 
 struct While {
 	cond Box(Expression)
-	body Vec(Statement)
+	body List(Statement)
 	span Span
 }
 
 struct If {
 	cond Box(Expression)
-	body Vec(Statement)
+	body List(Statement)
 	span Span
 }
 
 struct Switch {
-	
+	cond  Box(Expression)
+	cases Vec(SwitchCase)
+	span  Span	
 }
 
-struct List {
-	elems Vec(Expression)
+struct SwitchCase {
+	label SwitchLabel
+	body  Vec(Statement)
+	span  Span
+}
+
+union SwitchLabel {
+	Type
+	Ident	
+}
+
+
+struct List_ {
+	elems List(Expression)
 	span  Span
 }
 

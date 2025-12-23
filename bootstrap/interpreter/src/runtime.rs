@@ -26,6 +26,20 @@ impl Builtin for Registry {
     }
 }
 
+fn as_str(value: &Value) -> String {
+    match value {
+        Value::String(s) => format!("{s}"),
+        Value::Int(i) => format!("{i}"),
+        Value::Float(f) => format!("{f}"),
+        Value::Bool(b) => format!("{b}"),
+        Value::Struct(hash_map) => todo!(),
+        Value::Union(s, value) if s == "err" => panic!("Tried to print error: {:#?}", value),
+        Value::Union(_, value) => as_str(value),
+        Value::List(values) => todo!(),
+        Value::None => format!("None"),
+    }
+}
+
 fn print(values: HashMap<String, Value>) -> Value {
     fn print_val(value: &Value) {
         match value {
@@ -59,4 +73,8 @@ fn read(values: HashMap<String, Value>) -> Value {
         Ok(s) => Value::Union("ok".into(), Box::new(Value::String(s.into()))),
         Err(err) => Value::Union("err".into(), Box::new(Value::String(err.to_string()))),
     }
+}
+
+fn panic(values: HashMap<String, Value>) -> Value {
+    panic!("{}", as_str(&values["msg"]))
 }

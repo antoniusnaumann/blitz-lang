@@ -1,4 +1,5 @@
 union Definition {
+	Pub
 	Fn
 	Struct
 	Union
@@ -7,17 +8,21 @@ union Definition {
 	Test
 }
 
+struct Pub {
+	item Box(Definition)
+}
+
 struct Fn {
 	name String
-	args Vec(Field)
+	args List(Field)
 	type Option(Type)
-	body Vec(Statement)
+	body List(Statement)
 	span Span
 }
 
 struct Struct {
-	name   String
-	fields Vec(Field)
+	sig    Type
+	fields List(Field)
 	span   Span
 }
 
@@ -27,9 +32,9 @@ struct Field {
 }
 
 struct Union {
-	name  String
-	cases Vec(Case)
-	span  Span
+	sig    Type
+	cases  List(Case)
+	span   Span
 }
 
 struct Case {
@@ -50,6 +55,7 @@ struct Test {
 }
 
 struct Type {
-	name String
-	args Vec(Type)
+	name   String
+	params List(Type)
+	span   Span
 }
