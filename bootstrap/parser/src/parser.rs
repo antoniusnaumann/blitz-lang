@@ -111,9 +111,11 @@ impl<'a> Parser<'a> {
         {}
     }
 
-    fn expect_ident(&mut self) -> &'a str {
+    fn expect_ident(&mut self) -> Ident {
         let Token { kind: _, span } = self.expect(TokenKind::Ident);
-        &self.source[RangeInclusive::from(span)]
+        let name = self.source[RangeInclusive::from(span.clone())].into();
+
+        Ident { name, span }
     }
 
     fn expect_type(&mut self) -> Type {
@@ -167,7 +169,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_field(&mut self) -> Field {
-        let name = self.expect_ident().into();
+        let name = self.expect_ident().name.into();
         let ty = self.expect_type();
         self.consume(TokenKind::Comma);
 
@@ -216,7 +218,7 @@ impl<'a> Parser<'a> {
 
     fn parse_fn(&mut self) -> Fn {
         let start = self.expect(TokenKind::Fn).span;
-        let name = self.expect_ident().into();
+        let name = self.expect_ident().name.into();
 
         self.expect(TokenKind::Lparen);
         // TODO: also collect type params
@@ -319,7 +321,7 @@ impl<'a> Parser<'a> {
 
             // Special handling for member access (needs identifier, not full expression)
             if matches!(op, Operator::Member) {
-                let member = self.expect_ident().into();
+                let member = self.expect_ident().name.into();
                 let span = lhs.span().merge(&self.span);
 
                 // Check if this is a method call
@@ -384,10 +386,10 @@ impl<'a> Parser<'a> {
             TokenKind::Lbrace => self.parse_block().into(),
             TokenKind::Ident => {
                 let span = token.span;
-                let name = self.expect_ident();
+                let name = self.expect_ident().name;
 
                 if self.has(TokenKind::Lparen) {
-                    self.parse_call(name).into()
+                    self.parse_call(&name).into()
                 } else {
                     Ident {
                         name: name.into(),
@@ -440,7 +442,7 @@ impl<'a> Parser<'a> {
 
         // TODO: implement implicit elements with $0
         self.expect(TokenKind::Pipe);
-        let elem = self.expect_ident().into();
+        let elem = self.expect_ident().name.into();
         self.expect(TokenKind::Pipe);
 
         let body = self.parse_body();
@@ -483,7 +485,38 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_switch(&mut self) -> Switch {
-        todo!()
+        let Token { kind: _, span } = self.expect(TokenKind::Switch);
+        let cond = self.parse_expression().into();
+        self.expect(TokenKind::Lbrace);
+
+        let mut cases = Vec::new();
+        while !self.has(TokenKind::Rbrace) {
+            let Token {
+                kind,
+                span: case_span,
+            } = self.lexer.peek().unwrap().clone();
+
+            let label = match kind {
+                TokenKind::Ident => self.expect_ident().into(),
+                TokenKind::Type => self.expect_type().into(),
+                _ => todo!("Support other tokens than ident and type for switch"),
+            };
+
+            let body = self.parse_body();
+
+            cases.push(SwitchCase {
+                label,
+                body,
+                span: case_span.merge(&self.span),
+            });
+        }
+        self.expect(TokenKind::Rbrace);
+
+        Switch {
+            cond,
+            cases,
+            span: span.merge(&self.span),
+        }
     }
 
     fn parse_list(&mut self) -> List {
@@ -526,18 +559,10 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_block(&mut self) -> Expression {
-        self.expect(TokenKind::Lbrace);
-
-        let mut statements = Vec::new();
-        while !self.has(TokenKind::Rbrace) {
-            statements.push(self.parse_statement());
-        }
-        self.expect(TokenKind::Rbrace);
-
-        Expression::Block(statements)
+        Expression::Block(self.parse_body())
     }
 
-    fn parse_call(&mut self, ident: &'a str) -> Call {
+    fn parse_call(&mut self, ident: &str) -> Call {
         let Token { kind: _, span } = self.expect(TokenKind::Lparen);
 
         let mut args = Vec::new();
@@ -557,7 +582,7 @@ impl<'a> Parser<'a> {
 
     fn parse_declaration(&mut self) -> Declaration {
         let Token { kind, span } = self.one_of(&[TokenKind::Let, TokenKind::Mut]);
-        let name = self.expect_ident().into();
+        let name = self.expect_ident().name.into();
 
         // TODO: type inference
         let r#type = if let Some(token) = self.consume(TokenKind::Colon) {

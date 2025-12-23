@@ -73,7 +73,7 @@ pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> 
                         }
                     }
                     parser::Lval::Ident(ident) => {
-                        *vars.get_mut(&ident).unwrap() = rhs;
+                        *vars.get_mut(&ident.name).unwrap() = rhs;
                         Value::None
                     }
                 }

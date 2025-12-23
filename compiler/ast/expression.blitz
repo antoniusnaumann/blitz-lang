@@ -81,13 +81,13 @@ struct If {
 
 struct Switch {
 	cond  Box(Expression)
-	cases Vec(SwitchCase)
+	cases List(SwitchCase)
 	span  Span	
 }
 
 struct SwitchCase {
 	label SwitchLabel
-	body  Vec(Statement)
+	body  List(Statement)
 	span  Span
 }
 
