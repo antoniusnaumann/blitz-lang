@@ -143,7 +143,26 @@ pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> 
                 }
             }
             Expression::Switch(switch) => {
-                todo!()
+                let Value::Union(label, _val) = run(switch.cond.deref().clone().into(), vars, reg)
+                else {
+                    panic!("Can only switch on union")
+                };
+                let mut val = Value::None;
+                for case in switch.cases {
+                    let case_label = match case.label {
+                        parser::SwitchLabel::Type(ty) => ty.name,
+                        parser::SwitchLabel::Ident(ident) => ident.name,
+                    };
+                    if case_label == label {
+                        val = run(
+                            Statement::Expression(Expression::Block(case.body)),
+                            vars,
+                            reg,
+                        );
+                        break;
+                    }
+                }
+                val
             }
             Expression::List(list) => {
                 let mut results = Vec::new();

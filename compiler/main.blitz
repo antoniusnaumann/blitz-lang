@@ -1,4 +1,6 @@
 fn main() {
 	let content = read("main.blitz")
 	print(content)
+
+	read("nonexistent.blitz").unwrap().print()
 }

@@ -5,7 +5,10 @@ union Option {
 
 fn unwrap(op Option(Int)) Int {
 	switch op {
-		some { some }
+		some { op }
 		none { panic("Unwrapped a none value!") }
+		// TODO: quick and dirty hack because we don't have overloading yet
+		ok { op }
+		err { panic("Unwrapped an error value!") }
 	}
 }

@@ -23,6 +23,13 @@ impl Builtin for Registry {
             body: Body::Builtin(Box::new(read)),
         };
         self.insert("read".into(), func);
+
+        let func = Func {
+            params: vec![("msg".into(), "String".into())],
+            result: "Never".into(),
+            body: Body::Builtin(Box::new(panic)),
+        };
+        self.insert("panic".into(), func);
     }
 }
 
