@@ -5,7 +5,7 @@ union Option(T) {
 
 fn unwrap(op Option(T)) T {
 	switch op {
-		some { op }
+		some { some }
 		none { panic("Unwrapped a none value!") }
 	}
 }
@@ -17,7 +17,7 @@ union Result(T, E) {
 
 fn unwrap(res Result(T, E)) T {
 	switch res {
-		ok { res }
+		ok { ok }
 		err { panic("Unwrapped an error value!") }
 	}
 }

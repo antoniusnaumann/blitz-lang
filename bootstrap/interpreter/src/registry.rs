@@ -50,7 +50,7 @@ pub enum Value {
 }
 
 impl Value {
-    fn matches(&self, ty: &Type) -> bool {
+    pub fn matches(&self, ty: &Type) -> bool {
         use Type as T;
         use Value as V;
 
@@ -130,6 +130,10 @@ impl Registry {
 
         panic!("No function matching arguments {:#?}", args)
     }
+
+    pub fn select_type(&self, name: &str) -> Option<&Type> {
+        self.types.get(name)
+    }
 }
 
 impl From<Vec<Ast>> for Registry {
@@ -194,7 +198,7 @@ fn insert_def(reg: &mut Registry, tys: &HashMap<String, AstType>, ast: &Ast, def
     }
 }
 
-fn resolve_type(
+pub(crate) fn resolve_type(
     name: String,
     tys: &HashMap<String, AstType>,
     generics: &HashSet<String>,

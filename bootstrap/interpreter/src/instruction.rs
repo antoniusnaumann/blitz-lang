@@ -2,7 +2,10 @@ use std::{collections::HashMap, ops::Deref};
 
 use parser::{BinaryOp, Expression, Operator, Statement};
 
-use crate::registry::{Body, Registry, Value};
+use crate::{
+    Type,
+    registry::{Body, Registry, Value},
+};
 
 pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> Value {
     match st {
@@ -18,7 +21,19 @@ pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> 
         }
         Statement::Expression(expression) => match expression {
             Expression::Constructor(c) => {
-                todo!();
+                let ty = reg
+                    .select_type(&c.r#type.name)
+                    .expect("Type for constructor does not exist");
+
+                let mut fields = HashMap::new();
+                for init_arg in c.args {
+                    let val = run(init_arg.init.deref().clone().into(), vars, reg);
+                    fields.insert(init_arg.label.name, val);
+                }
+
+                let result = Value::Struct(fields);
+                assert!(result.matches(ty));
+                result
             }
             Expression::Call(call) => {
                 let funcs = reg
@@ -151,18 +166,19 @@ pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> 
                 }
             }
             Expression::Switch(switch) => {
-                let Value::Union(label, _val) = run(switch.cond.deref().clone().into(), vars, reg)
+                let Value::Union(label, val) = run(switch.cond.deref().clone().into(), vars, reg)
                 else {
                     panic!("Can only switch on union")
                 };
-                let mut val = Value::None;
+                let mut result = Value::None;
                 for case in switch.cases {
                     let case_label = match case.label {
                         parser::SwitchLabel::Type(ty) => ty.name,
                         parser::SwitchLabel::Ident(ident) => ident.name,
                     };
                     if case_label == label {
-                        val = run(
+                        vars.insert(case_label, *val);
+                        result = run(
                             Statement::Expression(Expression::Block(case.body)),
                             vars,
                             reg,
@@ -170,7 +186,7 @@ pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> 
                         break;
                     }
                 }
-                val
+                result
             }
             Expression::List(list) => {
                 let mut results = Vec::new();

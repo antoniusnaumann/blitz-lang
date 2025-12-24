@@ -1,6 +1,6 @@
 fn main() {
-	let content = read("main.blitz")
+	let content = read("main.blitz").unwrap()
 	print(content)
 
-	read("nonexistent.blitz").unwrap().print()
+	let lexer = new_lexer(content)
 }
