@@ -8,7 +8,9 @@ use parser::{Ast, Definition, Fn, Span, Statement, Struct, Union};
 #[derive(Default)]
 pub struct Registry {
     types: HashMap<String, Type>,
-    funcs: HashMap<String, Func>,
+    funcs: HashMap<String, Vec<Func>>,
+
+    ast_types: HashMap<String, AstType>,
 }
 
 pub enum Type {
@@ -46,18 +48,86 @@ pub enum Value {
     None,
 }
 
+impl Value {
+    fn matches(&self, ty: &Type) -> bool {
+        use Type as T;
+        use Value as V;
+
+        match (self, ty) {
+            (V::String(_), T::String) => true,
+            (V::Int(_), T::Int) => true,
+            (V::Float(_), T::Float) => true,
+            (V::Bool(_), T::Bool) => true,
+            (V::Struct(fields), T::Struct(members)) => fields
+                .iter()
+                .all(|(name, val)| members.get(name).is_some_and(|m| val.matches(m))),
+            (V::Union(label, val), T::Union(cases)) => {
+                if let Some(case) = cases.get(label) {
+                    val.matches(case)
+                } else {
+                    false
+                }
+            }
+            (V::List(list), T::List(ty)) => list.iter().all(|v| v.matches(ty)),
+            // For now, we just treat generics as "Any"
+            (_, T::Any) => true,
+            _ => false,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 enum AstType {
     Struct(Struct),
     Union(Union),
 }
 
 impl Registry {
-    pub fn func(&self, name: &str) -> Option<&Func> {
-        self.funcs.get(name)
+    pub fn func(&self, name: &str) -> Option<&[Func]> {
+        self.funcs.get(name).map(|s| s.as_slice())
     }
 
-    pub fn insert(&mut self, name: String, func: Func) {
-        self.funcs.insert(name, func);
+    pub fn insert_func(&mut self, name: String, func: Func) {
+        if let Some(entry) = self.funcs.get_mut(&name) {
+            entry.push(func);
+        } else {
+            self.funcs.insert(name, vec![func]);
+        }
+    }
+
+    pub fn select_func<'a>(
+        &self,
+        funcs: &'a [Func],
+        args: &[Value],
+        source: Option<&str>,
+        span: Option<Span>,
+    ) -> &'a Func {
+        'outer: for func in funcs {
+            if func.params.len() == args.len() {
+                let generics = func
+                    .params
+                    .iter()
+                    // by convention, types with one letter names are generics
+                    .filter(|(_, ty)| ty.len() == 1)
+                    .map(|(_, ty)| ty.clone())
+                    .collect();
+                for ((_label, type_name), arg) in func.params.iter().zip(args) {
+                    let ty = &resolve_type(
+                        type_name.clone(),
+                        &self.ast_types,
+                        &generics,
+                        source,
+                        span.clone(),
+                    );
+                    if !arg.matches(ty) {
+                        continue 'outer;
+                    }
+                }
+                return func;
+            }
+        }
+
+        panic!("No function matching arguments {:#?}", args)
     }
 }
 
@@ -83,6 +153,7 @@ impl From<Vec<Ast>> for Registry {
                 insert_def(&mut reg, &tys, &ast, def);
             }
         }
+        reg.ast_types = tys;
 
         reg
     }
@@ -94,15 +165,15 @@ fn insert_def(reg: &mut Registry, tys: &HashMap<String, AstType>, ast: &Ast, def
             insert_def(reg, tys, ast, p.item.deref());
         }
         Definition::Fn(func) => {
-            reg.funcs.insert(func.name.clone(), func.clone().into());
+            reg.insert_func(func.name.clone(), func.clone().into());
         }
         Definition::Struct(ty) => {
             let conv = resolve_type(
                 ty.sig.name.clone(),
                 tys,
                 &HashSet::from_iter(ty.sig.params.iter().map(|p| p.name.clone())),
-                &ast.source,
-                ty.span.clone(),
+                Some(&ast.source),
+                Some(ty.span.clone()),
             );
             reg.types.insert(ty.sig.name.clone(), conv);
         }
@@ -111,8 +182,8 @@ fn insert_def(reg: &mut Registry, tys: &HashMap<String, AstType>, ast: &Ast, def
                 union.sig.name.clone(),
                 tys,
                 &HashSet::from_iter(union.sig.params.iter().map(|p| p.name.clone())),
-                &ast.source,
-                union.span.clone(),
+                Some(&ast.source),
+                Some(union.span.clone()),
             );
             reg.types.insert(union.sig.name.clone(), conv);
         }
@@ -126,8 +197,8 @@ fn resolve_type(
     name: String,
     tys: &HashMap<String, AstType>,
     generics: &HashSet<String>,
-    source: &str,
-    span: Span,
+    source: Option<&str>,
+    span: Option<Span>,
 ) -> Type {
     match name.as_str() {
         "Int" => Type::Int,
@@ -138,6 +209,7 @@ fn resolve_type(
         _ => match &tys.get(&name) {
             Some(def) => match def {
                 AstType::Struct(ty) => {
+                    let generics = ty.sig.params.iter().map(|p| p.name.clone()).collect();
                     let mut fields = HashMap::new();
                     for field in &ty.fields {
                         fields.insert(
@@ -145,9 +217,9 @@ fn resolve_type(
                             resolve_type(
                                 field.r#type.name.clone(),
                                 tys,
-                                generics,
+                                &generics,
                                 source,
-                                field.r#type.span.clone(),
+                                Some(field.r#type.span.clone()),
                             ),
                         );
                     }
@@ -155,6 +227,7 @@ fn resolve_type(
                     Type::Struct(fields)
                 }
                 AstType::Union(union) => {
+                    let generics = union.sig.params.iter().map(|p| p.name.clone()).collect();
                     let mut cases = HashMap::new();
                     for case in &union.cases {
                         cases.insert(
@@ -164,7 +237,7 @@ fn resolve_type(
                                 .unwrap(),
                             case.r#type
                                 .clone()
-                                .map(|t| resolve_type(t.name, tys, generics, source, t.span))
+                                .map(|t| resolve_type(t.name, tys, &generics, source, Some(t.span)))
                                 .unwrap_or(Type::Void),
                         );
                     }
@@ -173,9 +246,13 @@ fn resolve_type(
                 }
             },
             None => {
-                _ = &dbg!(generics).get(&name).unwrap_or_else(|| {
-                    let location = span.report(source);
-                    panic!("No type named {name} \n\n{location}")
+                _ = &generics.get(&name).unwrap_or_else(|| {
+                    if let (Some(span), Some(source)) = (span, source) {
+                        let location = span.report(source);
+                        panic!("No type named {name} \n\n{location}")
+                    } else {
+                        panic!("No type named {name}, got:\n{:#?}", tys)
+                    }
                 });
                 // TODO: proper type checking
                 Type::Any

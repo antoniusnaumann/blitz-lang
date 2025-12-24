@@ -1,13 +1,22 @@
-union Option {
-	some: Int
+union Option(T) {
+	some: T
 	none
 }
 
-fn unwrap(op Option(Int)) Int {
+fn unwrap(op Option(T)) T {
 	switch op {
 		some { op }
 		none { panic("Unwrapped a none value!") }
-		// TODO: quick and dirty hack because we don't have overloading yet
+	}
+}
+
+union Result(T, E) {
+	ok: T
+	err: E
+}
+
+fn unwrap(res Result(T, E)) T {
+	switch op {
 		ok { op }
 		err { panic("Unwrapped an error value!") }
 	}

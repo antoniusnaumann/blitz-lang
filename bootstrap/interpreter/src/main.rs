@@ -35,6 +35,8 @@ fn main() {
     reg.add_builtins();
 
     let main = reg.func("main").expect("Did not find main function");
+    assert_eq!(main.len(), 1);
+    let main = &main[0];
     let mut vars = HashMap::new();
 
     let Body::Defined(statements) = &main.body else {

@@ -15,21 +15,21 @@ impl Builtin for Registry {
             result: "Void".into(),
             body: Body::Builtin(Box::new(print)),
         };
-        self.insert("print".into(), func);
+        self.insert_func("print".into(), func);
 
         let func = Func {
             params: vec![("path".into(), "String".into())],
             result: "String".into(),
             body: Body::Builtin(Box::new(read)),
         };
-        self.insert("read".into(), func);
+        self.insert_func("read".into(), func);
 
         let func = Func {
             params: vec![("msg".into(), "String".into())],
             result: "Never".into(),
             body: Body::Builtin(Box::new(panic)),
         };
-        self.insert("panic".into(), func);
+        self.insert_func("panic".into(), func);
     }
 }
 

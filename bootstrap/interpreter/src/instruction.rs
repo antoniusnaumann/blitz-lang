@@ -2,7 +2,10 @@ use std::{collections::HashMap, ops::Deref};
 
 use parser::{BinaryOp, Expression, Operator, Statement};
 
-use crate::registry::{Body, Registry, Value};
+use crate::{
+    Func,
+    registry::{Body, Registry, Value},
+};
 
 pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> Value {
     match st {
@@ -18,14 +21,19 @@ pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> 
         }
         Statement::Expression(expression) => match expression {
             Expression::Call(call) => {
-                let func = reg
+                let funcs = reg
                     .func(&call.name)
                     .unwrap_or_else(|| panic!("Did not find func {}", call.name));
+                let arg_vals = call
+                    .args
+                    .iter()
+                    .map(|arg| run(arg.clone().into(), vars, reg))
+                    .collect::<Vec<_>>();
+                let func = reg.select_func(funcs, &arg_vals, None, None);
                 let mut args = HashMap::new();
                 let params = &func.params;
-                for ((name, _ty), arg) in params.iter().zip(call.args) {
-                    let expr = run(arg.into(), vars, reg);
-                    args.insert(name.clone(), expr);
+                for ((name, _ty), arg) in params.iter().zip(arg_vals) {
+                    args.insert(name.clone(), arg);
                 }
 
                 match &func.body {
