@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::PathBuf, sync::OnceLock};
+use std::{collections::HashMap, path::PathBuf, process::exit, sync::OnceLock};
 
 use crate::{Body, Func, Registry, Value};
 
@@ -83,5 +83,6 @@ fn read(values: HashMap<String, Value>) -> Value {
 }
 
 fn panic(values: HashMap<String, Value>) -> Value {
-    panic!("{}", as_str(&values["msg"]))
+    eprintln!("\x1b[91m{}", as_str(&values["msg"]));
+    exit(1)
 }

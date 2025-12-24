@@ -16,8 +16,8 @@ union Result(T, E) {
 }
 
 fn unwrap(res Result(T, E)) T {
-	switch op {
-		ok { op }
+	switch res {
+		ok { res }
 		err { panic("Unwrapped an error value!") }
 	}
 }

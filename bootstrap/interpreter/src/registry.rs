@@ -13,6 +13,7 @@ pub struct Registry {
     ast_types: HashMap<String, AstType>,
 }
 
+#[derive(Clone, Debug)]
 pub enum Type {
     String,
     Int,

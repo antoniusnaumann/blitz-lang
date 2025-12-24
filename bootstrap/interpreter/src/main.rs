@@ -43,7 +43,7 @@ fn main() {
         unreachable!()
     };
 
-    println!("--- PROGRAM ---\n");
+    println!("--- PROGRAM OUTPUT ---\n");
     for s in statements {
         run(s.clone(), &mut vars, &reg);
     }
