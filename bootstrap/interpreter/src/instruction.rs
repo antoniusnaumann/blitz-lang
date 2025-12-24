@@ -2,10 +2,7 @@ use std::{collections::HashMap, ops::Deref};
 
 use parser::{BinaryOp, Expression, Operator, Statement};
 
-use crate::{
-    Func,
-    registry::{Body, Registry, Value},
-};
+use crate::registry::{Body, Registry, Value};
 
 pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> Value {
     match st {
@@ -20,6 +17,9 @@ pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> 
             Value::None
         }
         Statement::Expression(expression) => match expression {
+            Expression::Constructor(c) => {
+                todo!();
+            }
             Expression::Call(call) => {
                 let funcs = reg
                     .func(&call.name)

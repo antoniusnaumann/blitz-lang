@@ -120,6 +120,7 @@ impl Definition {
 impl Expression {
     pub fn span(&self) -> Span {
         match self {
+            Expression::Constructor(c) => c.span.clone(),
             Expression::Call(c) => c.span.clone(),
             Expression::Member(m) => m.span.clone(),
             Expression::Ident(i) => i.span.clone(),

@@ -398,6 +398,7 @@ impl<'a> Parser<'a> {
                     .into()
                 }
             }
+            TokenKind::Type => self.parse_constructor().into(),
             TokenKind::Lbracket => self.parse_list().into(),
             TokenKind::Lparen => self.parse_group().into(),
             TokenKind::Str => self.parse_string_lit().into(),
@@ -576,6 +577,35 @@ impl<'a> Parser<'a> {
             name: ident.into(),
             args,
             ufcs: false,
+            span: span.merge(&self.span),
+        }
+    }
+
+    fn parse_constructor(&mut self) -> Constructor {
+        let Token { kind: _, span } = self.expect(TokenKind::Type);
+        let name = String::from(&self.source[RangeInclusive::from(span.clone())]);
+
+        let mut args = Vec::new();
+        let mut type_params = Vec::new();
+        self.expect(TokenKind::Lparen);
+        // TODO: parse type args (args before semicolon)
+        while !self.has(TokenKind::Rparen) {
+            let label = self.expect_ident();
+            self.expect(TokenKind::Colon);
+            let init = self.parse_expression().into();
+            self.consume(TokenKind::Comma);
+            args.push(ConstructorArg { label, init })
+        }
+        self.expect(TokenKind::Rparen);
+
+        let r#type = Type {
+            name,
+            params: type_params,
+            span: span.clone(),
+        };
+        Constructor {
+            r#type,
+            args,
             span: span.merge(&self.span),
         }
     }

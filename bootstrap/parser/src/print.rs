@@ -95,6 +95,17 @@ impl Print for Type {
 impl Print for Expression {
     fn print(&self) -> String {
         match self {
+            Expression::Constructor(c) => {
+                format!(
+                    "{}({})",
+                    c.r#type.name,
+                    c.args
+                        .iter()
+                        .map(|arg| format!("{}: {}", arg.label.name, arg.init.print()))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            }
             Expression::Call(c) => {
                 if c.ufcs {
                     format!(

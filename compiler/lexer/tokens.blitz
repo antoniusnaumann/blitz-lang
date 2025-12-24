@@ -76,10 +76,12 @@ union TokenKind {
 
 struct Span {
 	start Int
-	end   Int // inclusive
+	end   Int    // inclusive
+	path  String // source file path
 }
 
 struct Pos {
 	line Int
 	col  Int
 }
+

@@ -1,0 +1,8 @@
+struct Lexer {
+	source String
+	errors List(Error)
+}
+
+fn new_lexer(source String) Lexer {
+	Lexer(source: source, errors: [])
+}

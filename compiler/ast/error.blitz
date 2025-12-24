@@ -1,0 +1,8 @@
+struct Error {
+	span Span
+	msg  String
+}
+
+fn report(error Error, source String) {
+	print(error.msg)
+}

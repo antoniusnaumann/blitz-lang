@@ -17,6 +17,7 @@ union Lval {
 }
 
 union Expression {
+	Constructor
 	Call
 	Member
 	Ident
@@ -46,6 +47,18 @@ struct Member {
 	parent Box(Expression)
 	member String
 	span   Span
+}
+
+struct Constructor {
+	type Type
+	args List(ConstructorArg)
+	ufcs Bool
+	span Span
+}
+
+struct ConstructorArg {
+	label Ident
+	init  Box(Expression)
 }
 
 struct Call {
