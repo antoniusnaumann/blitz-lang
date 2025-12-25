@@ -141,7 +141,7 @@ impl Expression {
             Expression::For(f) => f.span.clone(),
             Expression::While(w) => w.span.clone(),
             Expression::If(i) => i.span.clone(),
-            Expression::Switch(_) => todo!("Switch span"),
+            Expression::Switch(s) => s.span.clone(),
             Expression::List(l) => l.span.clone(),
             Expression::Group(g) => g.span.clone(),
             Expression::Block(stmts) => {

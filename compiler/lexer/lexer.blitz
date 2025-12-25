@@ -17,7 +17,60 @@ fn next(mut lexer Lexer) Option(Token) {
 		print(ch)
 		lexer.mut.advance()
 
+		switch ch {
+			'+' { add }
+			'-' { sub }
+			'*' { mul }
+			'/' {
+				switch lexer.curr() {
+					'/' { panic("Comments not implemented yet") }
+					_ { div }
+				}
+			}
+			'%' { rem }
+			'=' {
+				switch lexer.curr() {
+					'=' { lexer.mut.up(eq) }
+					_  { assign }
+				}
+			}
+			'<' {
+				switch lexer.curr() {
+					'=' { lexer.mut.up(le) }
+					_ { lt }
+				}
+			}
+			'>' {
+				switch lexer.curr() {
+					'=' { lexer.mut.up(ge) }
+					_ { gt }
+				}
+			}
+			'!' {
+				switch lexer.curr() {
+					'=' { lexer.mut.up(ne) }
+					_ { not }
+				}
+			}
+			'(' { lparen }
+			')' { rparen }
+			'[' { lbracket }
+			']' { rbracket }
+			'{' { lbrace }
+			'}' { rbrace }
+			',' { comma }
+			'.' { dot }
+			':' { colon }
+			';' { semicolon }
+			'|' { pipe }
+			_ { error }
+		}
 	}
+}
+
+fn up(mut lexer Lexer, token Token) Token {
+	lexer.mut.advance()
+	token
 }
 
 fn advance(mut lexer Lexer) {
@@ -25,5 +78,13 @@ fn advance(mut lexer Lexer) {
 }
 
 fn curr(mut lexer Lexer) Char {
-	lexer.source[index]
+	lexer.source[lexer.index]
+}
+
+fn peek(lexer Lexer) Char {
+	lexer.source[lexer.index + 1]
+}
+
+fn peek(lexer Lexer, n Int) Char {
+	lexer.source[lexer.index + n]
 }
