@@ -30,6 +30,7 @@ union TokenKind {
 	// Literals
 	str
 	num
+	ch
 
 	// Arithmetic
 	add

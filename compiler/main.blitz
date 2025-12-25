@@ -4,10 +4,9 @@ fn main() {
 
 	mut lexer = new_lexer(content)
 	mut token = lexer.mut.next()
-	if token != none {
+	while token != none {
 		print(token)
 		token = lexer.mut.next()
-	} else {
-		print("was none")
+		token = none
 	}
 }

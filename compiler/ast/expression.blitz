@@ -31,6 +31,7 @@ union Expression {
 	List_
 	Group
 	String
+	Char
 	number: Float
 	block: List(Statement)
 	return_: Box(Expression)

@@ -1,12 +1,19 @@
 struct Lexer {
-	source String
+	source List(Char)
 	errors List(Error)
+	index  Int
 }
 
 fn new_lexer(source String) Lexer {
-	Lexer(source: source, errors: [])
+	Lexer(source: source.chars(), errors: [], index: 0)
 }
 
 fn next(mut lexer Lexer) Option(Token) {
-	none
+	if lexer.source.len() <= index {
+		none
+	} else {
+		let ch = 'A'
+
+		lexer.index = lexer.index + 1
+	}
 }

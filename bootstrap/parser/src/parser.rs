@@ -407,6 +407,7 @@ impl<'a> Parser<'a> {
             TokenKind::Lbracket => self.parse_list().into(),
             TokenKind::Lparen => self.parse_group().into(),
             TokenKind::Str => self.parse_string_lit().into(),
+            TokenKind::Ch => self.parse_char_lit().into(),
             TokenKind::Num => self.parse_num_lit().into(),
             kind => {
                 panic!(
@@ -574,6 +575,21 @@ impl<'a> Parser<'a> {
         let Token { kind: _, span } = self.expect(TokenKind::Str);
 
         self.source[(span.start + 1)..(span.end)].into()
+    }
+
+    fn parse_char_lit(&mut self) -> Char {
+        let Token { kind: _, span } = self.expect(TokenKind::Ch);
+
+        let chars: Vec<_> = self.source[(span.start)..(span.end)]
+            .trim_start_matches('\\')
+            .chars()
+            .collect();
+        assert_eq!(
+            chars.len(),
+            1,
+            "char literal must contain exactly one character"
+        );
+        chars[0]
     }
 
     fn parse_num_lit(&mut self) -> Float {

@@ -1,4 +1,4 @@
-use std::{iter::Peekable, ops::RangeInclusive, str::CharIndices};
+use std::{iter::Peekable, str::CharIndices};
 
 use crate::{Span, Token, TokenKind};
 
@@ -83,6 +83,10 @@ impl<'a> Lexer<'a> {
             '"' => {
                 end = self.skip_string();
                 Str
+            }
+            '\'' => {
+                end = self.skip_char();
+                Ch
             }
             '0'..='9' => {
                 end = self.skip_num();
@@ -199,6 +203,35 @@ impl<'a> Lexer<'a> {
                     _ = self.chars.next();
                 }
                 '"' if !escape => {
+                    _ = self.chars.next();
+                    return curr;
+                }
+                ch if escape => {
+                    panic!("ERROR: Illegal escape sequence: \\{ch}")
+                }
+                _ => {
+                    _ = self.chars.next();
+                }
+            }
+        }
+    }
+
+    fn skip_char(&mut self) -> usize {
+        let (_, ch) = self.chars.next().unwrap();
+        assert!(ch == '\'', "Chars need to start with '");
+        let mut escape = false;
+        loop {
+            let (curr, ch) = self.peek_char();
+            match ch {
+                '\\' if !escape => {
+                    escape = true;
+                    _ = self.chars.next();
+                }
+                '\\' if escape => {
+                    escape = false;
+                    _ = self.chars.next();
+                }
+                '\'' if !escape => {
                     _ = self.chars.next();
                     return curr;
                 }
