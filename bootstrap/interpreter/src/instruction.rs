@@ -36,7 +36,7 @@ pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> 
                 let funcs = reg
                     .func(&call.name)
                     .unwrap_or_else(|| panic!("Did not find func {}", call.name));
-                
+
                 // Track which arguments are simple identifiers so we can propagate changes back
                 let arg_idents: Vec<Option<String>> = call
                     .args
@@ -49,7 +49,7 @@ pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> 
                         }
                     })
                     .collect();
-                
+
                 let arg_vals = call
                     .args
                     .iter()
@@ -58,8 +58,8 @@ pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> 
                 let func = reg.select_func(funcs, &arg_vals, None, None);
                 let mut args = HashMap::new();
                 let params = &func.params;
-                for ((name, _ty), arg) in params.iter().zip(arg_vals) {
-                    args.insert(name.clone(), arg);
+                for (param, arg) in params.iter().zip(arg_vals) {
+                    args.insert(param.name.clone(), arg);
                 }
 
                 let result = match &func.body {
@@ -74,12 +74,13 @@ pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> 
                     }
                 };
 
-                // Propagate changes back to the original variables
-                // TODO: we should check here if the arg was passed as mutable and only then propagate changes back
-                for ((param_name, _ty), maybe_var_name) in params.iter().zip(arg_idents) {
-                    if let Some(var_name) = maybe_var_name {
-                        if let Some(updated_value) = args.get(param_name) {
-                            vars.insert(var_name, updated_value.clone());
+                // Propagate changes back to the original variables only if the parameter is mutable
+                for (param, maybe_var_name) in params.iter().zip(arg_idents) {
+                    if param.mutable {
+                        if let Some(var_name) = maybe_var_name {
+                            if let Some(updated_value) = args.get(&param.name) {
+                                vars.insert(var_name, updated_value.clone());
+                            }
                         }
                     }
                 }
@@ -184,7 +185,11 @@ pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> 
                 if lhs == Value::Union("none".into(), Value::Void.into()) {
                     run(bin.right.deref().clone().into(), vars, reg)
                 } else {
-                    lhs
+                    let Value::Union(label, val) = lhs else {
+                        unreachable!()
+                    };
+                    assert_eq!(label, "some");
+                    *val
                 }
             }
             Expression::Switch(switch) => {

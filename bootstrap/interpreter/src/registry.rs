@@ -27,8 +27,15 @@ pub enum Type {
     Void,
 }
 
+#[derive(Clone, Debug)]
+pub struct Param {
+    pub name: String,
+    pub ty: String,
+    pub mutable: bool,
+}
+
 pub struct Func {
-    pub params: Vec<(String, String)>,
+    pub params: Vec<Param>,
     pub result: String,
     pub body: Body,
 }
@@ -111,12 +118,12 @@ impl Registry {
                     .params
                     .iter()
                     // by convention, types with one letter names are generics
-                    .filter(|(_, ty)| ty.len() == 1)
-                    .map(|(_, ty)| ty.clone())
+                    .filter(|param| param.ty.len() == 1)
+                    .map(|param| param.ty.clone())
                     .collect();
-                for ((_label, type_name), arg) in func.params.iter().zip(args) {
+                for (param, arg) in func.params.iter().zip(args) {
                     let ty = &resolve_type(
-                        type_name.clone(),
+                        param.ty.clone(),
                         &self.ast_types,
                         &generics,
                         source,
@@ -275,7 +282,11 @@ impl From<Fn> for Func {
             params: value
                 .args
                 .iter()
-                .map(|arg| (arg.name.clone(), arg.r#type.name.clone()))
+                .map(|arg| Param {
+                    name: arg.name.clone(),
+                    ty: arg.r#type.name.clone(),
+                    mutable: arg.mutable,
+                })
                 .collect(),
             result: value.r#type.map(|t| t.name).unwrap_or("Void".into()),
             body: Body::Defined(value.body),

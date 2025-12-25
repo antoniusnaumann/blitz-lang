@@ -27,8 +27,9 @@ struct Struct {
 }
 
 struct Field {
-	name String
-	type Type
+	name    String
+	type    Type
+	mutable Bool
 }
 
 struct Union {

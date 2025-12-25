@@ -1,4 +1,5 @@
 struct Lexer {
+	// TODO: this should become an iterator or be byte indexed string instead of a list of chars
 	source List(Char)
 	errors List(Error)
 	index  Int
@@ -12,8 +13,9 @@ fn next(mut lexer Lexer) Option(Token) {
 	if lexer.source.len() <= lexer.index {
 		none
 	} else {
-		let ch = 'A'
+		let ch = lexer.source[index]
+		lexer.index = lexer.index + 1
+
 		else_
-		// lexer.index = lexer.index + 1
 	}
 }

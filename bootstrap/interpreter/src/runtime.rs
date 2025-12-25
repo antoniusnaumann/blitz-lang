@@ -1,6 +1,6 @@
 use std::{collections::HashMap, path::PathBuf, process::exit, sync::OnceLock};
 
-use crate::{Body, Func, Registry, Value};
+use crate::{Body, Func, Param, Registry, Value};
 
 pub static ROOT: OnceLock<PathBuf> = OnceLock::new();
 
@@ -14,9 +14,13 @@ macro_rules! make_builtin {
 }
 
 macro_rules! register_builtin {
-    ($registry:expr, $func:ident, [$( ($param:expr, $param_type:expr) ),* $(,)?], $result:expr) => {
+    ($registry:expr, $func:ident, [$( ($param:expr, $param_type:expr, $mutable:expr) ),* $(,)?], $result:expr) => {
         let func = Func {
-            params: vec![$(($param.into(), $param_type.into())),*],
+            params: vec![$(Param {
+                name: $param.into(),
+                ty: $param_type.into(),
+                mutable: $mutable,
+            }),*],
             result: $result.into(),
             body: Body::Builtin(Box::new($func)),
         };
@@ -30,12 +34,12 @@ pub trait Builtin {
 
 impl Builtin for Registry {
     fn add_builtins(&mut self) {
-        register_builtin!(self, print, [("s", "T")], "Void");
-        register_builtin!(self, read, [("path", "String")], "String");
-        register_builtin!(self, panic, [("msg", "String")], "Never");
-        register_builtin!(self, panic, [("msg", "String")], "Never");
-        register_builtin!(self, chars, [("s", "String")], "List(Char)");
-        register_builtin!(self, len, [("arr", "List")], "Int");
+        register_builtin!(self, print, [("s", "T", false)], "Void");
+        register_builtin!(self, read, [("path", "String", false)], "String");
+        register_builtin!(self, panic, [("msg", "String", false)], "Never");
+        register_builtin!(self, panic, [("msg", "String", false)], "Never");
+        register_builtin!(self, chars, [("s", "String", false)], "List(Char)");
+        register_builtin!(self, len, [("arr", "List", false)], "Int");
     }
 }
 

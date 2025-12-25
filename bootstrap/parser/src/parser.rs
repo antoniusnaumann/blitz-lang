@@ -158,7 +158,7 @@ impl<'a> Parser<'a> {
         let mut fields = Vec::new();
         self.skip_newlines();
         while !self.has(TokenKind::Rbrace) {
-            fields.push(self.parse_field());
+            fields.push(self.parse_field(false));
         }
         self.expect(TokenKind::Rbrace);
 
@@ -169,12 +169,12 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_field(&mut self) -> Field {
+    fn parse_field(&mut self, mutable: bool) -> Field {
         let name = self.expect_ident().name.into();
         let ty = self.expect_type();
         self.consume(TokenKind::Comma);
 
-        Field { name, r#type: ty }
+        Field { name, r#type: ty, mutable }
     }
 
     fn parse_union(&mut self) -> Union {
@@ -226,8 +226,8 @@ impl<'a> Parser<'a> {
         let mut args = Vec::new();
         self.skip_newlines();
         while !self.has(TokenKind::Rparen) {
-            let _is_mut = self.consume(TokenKind::Mut).is_some();
-            args.push(self.parse_field());
+            let is_mut = self.consume(TokenKind::Mut).is_some();
+            args.push(self.parse_field(is_mut));
         }
         self.expect(TokenKind::Rparen);
 
