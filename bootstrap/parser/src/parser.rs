@@ -225,6 +225,7 @@ impl<'a> Parser<'a> {
         let mut args = Vec::new();
         self.skip_newlines();
         while !self.has(TokenKind::Rparen) {
+            let is_mut = self.consume(TokenKind::Mut).is_some();
             args.push(self.parse_field());
         }
         self.expect(TokenKind::Rparen);
@@ -321,6 +322,10 @@ impl<'a> Parser<'a> {
 
             // Special handling for member access (needs identifier, not full expression)
             if matches!(op, Operator::Member) {
+                // TODO: quick and dirty solution to parse and ignore the .mut modifier
+                if self.consume(TokenKind::Mut).is_some() {
+                    self.expect(TokenKind::Dot);
+                }
                 let member = self.expect_ident().name.into();
                 let span = lhs.span().merge(&self.span);
 
@@ -412,7 +417,24 @@ impl<'a> Parser<'a> {
             }
         };
 
-        self.parse_precedence(lhs, min_prec)
+        let expr = self.parse_precedence(lhs, min_prec);
+        if let Some(assignment) = self.consume_assignment() {
+            let left = match expr {
+                Expression::Ident(ident) => Lval::Ident(ident),
+                Expression::Member(member) => Lval::Member(member),
+                e => panic!("Assignment on invalid lval {:#?}", e),
+            };
+
+            let right = self.parse_expression().into();
+            Assignment { left, right }.into()
+        } else {
+            expr
+        }
+    }
+
+    // TODO: introduce assignment operator union
+    fn consume_assignment(&mut self) -> Option<()> {
+        self.consume(TokenKind::Assign).map(|_| ())
     }
 
     fn parse_expression(&mut self) -> Expression {
@@ -424,6 +446,7 @@ impl<'a> Parser<'a> {
 
         let mut args = vec![parent.clone()];
         while !self.has(TokenKind::Rparen) {
+            let is_mut = self.consume(TokenKind::Mut).is_some();
             args.push(self.parse_expression());
             self.consume(TokenKind::Comma);
         }
@@ -568,6 +591,7 @@ impl<'a> Parser<'a> {
 
         let mut args = Vec::new();
         while !self.has(TokenKind::Rparen) {
+            let is_mut = self.consume(TokenKind::Mut).is_some();
             args.push(self.parse_expression());
             self.consume(TokenKind::Comma);
         }

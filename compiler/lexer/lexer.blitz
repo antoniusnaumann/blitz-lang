@@ -6,3 +6,7 @@ struct Lexer {
 fn new_lexer(source String) Lexer {
 	Lexer(source: source, errors: [])
 }
+
+fn next(mut lexer Lexer) Option(Token) {
+	none
+}

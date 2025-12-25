@@ -17,8 +17,8 @@ union Operator {
 
 	// unary
 	not // !
-	neg // - 
-
+	neg // -
+	 
  	// short-circuiting keyword operators
 	and
 	or

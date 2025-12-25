@@ -2,5 +2,12 @@ fn main() {
 	let content = read("main.blitz").unwrap()
 	print(content)
 
-	let lexer = new_lexer(content)
+	mut lexer = new_lexer(content)
+	mut token = lexer.mut.next()
+	if token != none {
+		print(token)
+		token = lexer.mut.next()
+	} else {
+		print("was none")
+	}
 }

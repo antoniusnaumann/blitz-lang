@@ -37,7 +37,7 @@ pub enum Body {
     Defined(Vec<Statement>),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Value {
     String(String),
     Int(isize),

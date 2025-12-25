@@ -2,10 +2,7 @@ use std::{collections::HashMap, ops::Deref};
 
 use parser::{BinaryOp, Expression, Operator, Statement};
 
-use crate::{
-    Type,
-    registry::{Body, Registry, Value},
-};
+use crate::registry::{Body, Registry, Value};
 
 pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> Value {
     match st {
@@ -70,12 +67,11 @@ pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> 
                 };
                 parent[&member.member].clone()
             }
-            Expression::Ident(ident) => vars
-                .get(&ident.name)
-                .unwrap_or_else(|| {
-                    panic!("ERROR: Did not find '{}'. Have {:#?}", &ident.name, vars)
-                })
-                .clone(),
+            Expression::Ident(ident) => vars.get(&ident.name).cloned().unwrap_or_else(|| {
+                // panic!("ERROR: Did not find '{}'. Have {:#?}", &ident.name, vars)
+                // TODO: check if this union label actually exists
+                Value::Union(ident.name, Value::None.into())
+            }),
             Expression::Assignment(assignment) => {
                 let rhs = run(assignment.right.deref().clone().into(), vars, reg);
                 match assignment.left {
@@ -149,9 +145,9 @@ pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> 
                             for s in if_.body {
                                 result = run(s.clone(), vars, reg);
                             }
-                            result
+                            Value::Union("some".into(), result.into())
                         } else {
-                            Value::None
+                            Value::Union("none".into(), Value::None.into())
                         }
                     }
                     _ => panic!("If statement needs boolean as condition"),
@@ -159,7 +155,7 @@ pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> 
             }
             Expression::BinaryOp(bin) if bin.op == Operator::Else => {
                 let lhs = run(bin.left.deref().clone().into(), vars, reg);
-                if matches!(lhs, Value::None) {
+                if lhs == Value::Union("none".into(), Value::None.into()) {
                     run(bin.right.deref().clone().into(), vars, reg)
                 } else {
                     lhs
@@ -271,6 +267,13 @@ fn run_bin_op(binary_op: BinaryOp, vars: &mut HashMap<String, Value>, reg: &Regi
         (Value::Bool(lhs), Value::Bool(rhs), Operator::Or) => Value::Bool(lhs || rhs),
         (Value::Bool(lhs), Value::Bool(rhs), Operator::Eq) => Value::Bool(lhs == rhs),
         (Value::Bool(lhs), Value::Bool(rhs), Operator::Ne) => Value::Bool(lhs != rhs),
+
+        (Value::Union(lhs_label, lhs_value), Value::Union(rhs_label, rhs_value), Operator::Eq) => {
+            Value::Bool(lhs_label == rhs_label && lhs_value == rhs_value)
+        }
+        (Value::Union(lhs_label, lhs_value), Value::Union(rhs_label, rhs_value), Operator::Ne) => {
+            Value::Bool(lhs_label != rhs_label || lhs_value != rhs_value)
+        }
 
         (lhs, rhs, op) => panic!(
             "Invalid combination value for operator {:#?} : {:#?}, {:#?}",

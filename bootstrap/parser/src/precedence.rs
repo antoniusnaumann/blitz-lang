@@ -7,7 +7,6 @@ impl Operator {
     pub fn precedence(&self) -> (u8, u8) {
         match self {
             Operator::Else => (2, 3),
-            // [Space reserved for compound assignment: +=, -=, *=, /=, etc. (~4-5)]
             Operator::Or => (7, 8),
             Operator::And => (10, 11),
             // [Space reserved for bitwise OR: |  (~14-15)]
