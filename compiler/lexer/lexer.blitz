@@ -9,11 +9,11 @@ fn new_lexer(source String) Lexer {
 }
 
 fn next(mut lexer Lexer) Option(Token) {
-	if lexer.source.len() <= index {
+	if lexer.source.len() <= lexer.index {
 		none
 	} else {
 		let ch = 'A'
-
-		lexer.index = lexer.index + 1
+		else_
+		// lexer.index = lexer.index + 1
 	}
 }

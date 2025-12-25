@@ -6,6 +6,7 @@ pub struct Parser<'a> {
     lexer: Peekable<Lexer<'a>>,
     source: &'a str,
     span: Span,
+    #[allow(dead_code)]
     has_pub: bool,
 }
 
@@ -225,7 +226,7 @@ impl<'a> Parser<'a> {
         let mut args = Vec::new();
         self.skip_newlines();
         while !self.has(TokenKind::Rparen) {
-            let is_mut = self.consume(TokenKind::Mut).is_some();
+            let _is_mut = self.consume(TokenKind::Mut).is_some();
             args.push(self.parse_field());
         }
         self.expect(TokenKind::Rparen);
@@ -419,7 +420,7 @@ impl<'a> Parser<'a> {
         };
 
         let expr = self.parse_precedence(lhs, min_prec);
-        if let Some(assignment) = self.consume_assignment() {
+        if let Some(_assignment) = self.consume_assignment() {
             let left = match expr {
                 Expression::Ident(ident) => Lval::Ident(ident),
                 Expression::Member(member) => Lval::Member(member),
@@ -447,7 +448,7 @@ impl<'a> Parser<'a> {
 
         let mut args = vec![parent.clone()];
         while !self.has(TokenKind::Rparen) {
-            let is_mut = self.consume(TokenKind::Mut).is_some();
+            let _is_mut = self.consume(TokenKind::Mut).is_some();
             args.push(self.parse_expression());
             self.consume(TokenKind::Comma);
         }
@@ -580,14 +581,15 @@ impl<'a> Parser<'a> {
     fn parse_char_lit(&mut self) -> Char {
         let Token { kind: _, span } = self.expect(TokenKind::Ch);
 
-        let chars: Vec<_> = self.source[(span.start)..(span.end)]
+        let chars: Vec<_> = self.source[(span.start + 1)..(span.end)]
             .trim_start_matches('\\')
             .chars()
             .collect();
         assert_eq!(
             chars.len(),
             1,
-            "char literal must contain exactly one character"
+            "char literal must contain exactly one character, has: {:#?}",
+            chars
         );
         chars[0]
     }
@@ -607,7 +609,7 @@ impl<'a> Parser<'a> {
 
         let mut args = Vec::new();
         while !self.has(TokenKind::Rparen) {
-            let is_mut = self.consume(TokenKind::Mut).is_some();
+            let _is_mut = self.consume(TokenKind::Mut).is_some();
             args.push(self.parse_expression());
             self.consume(TokenKind::Comma);
         }
@@ -626,7 +628,7 @@ impl<'a> Parser<'a> {
         let name = String::from(&self.source[RangeInclusive::from(span.clone())]);
 
         let mut args = Vec::new();
-        let mut type_params = Vec::new();
+        let type_params = Vec::new();
         self.expect(TokenKind::Lparen);
         // TODO: parse type args (args before semicolon)
         while !self.has(TokenKind::Rparen) {
@@ -655,7 +657,7 @@ impl<'a> Parser<'a> {
         let name = self.expect_ident().name.into();
 
         // TODO: type inference
-        let r#type = if let Some(token) = self.consume(TokenKind::Colon) {
+        let r#type = if let Some(_token) = self.consume(TokenKind::Colon) {
             self.expect_type()
         } else {
             Type {

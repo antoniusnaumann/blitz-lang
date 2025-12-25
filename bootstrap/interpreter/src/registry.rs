@@ -19,6 +19,7 @@ pub enum Type {
     Int,
     Float,
     Bool,
+    Char,
     Struct(HashMap<String, Type>),
     Union(HashMap<String, Type>),
     List(Box<Type>),
@@ -43,10 +44,11 @@ pub enum Value {
     Int(isize),
     Float(f64),
     Bool(bool),
+    Char(char),
     Struct(HashMap<String, Value>),
     Union(String, Box<Value>),
     List(Vec<Value>),
-    None,
+    Void,
 }
 
 impl Value {
@@ -78,7 +80,7 @@ impl Value {
 }
 
 #[derive(Clone, Debug)]
-enum AstType {
+pub(crate) enum AstType {
     Struct(Struct),
     Union(Union),
 }
@@ -192,9 +194,9 @@ fn insert_def(reg: &mut Registry, tys: &HashMap<String, AstType>, ast: &Ast, def
             );
             reg.types.insert(union.sig.name.clone(), conv);
         }
-        Definition::Alias(alias) => todo!(),
-        Definition::Actor(actor) => todo!(),
-        Definition::Test(test) => todo!(),
+        Definition::Alias(_alias) => todo!(),
+        Definition::Actor(_actor) => todo!(),
+        Definition::Test(_test) => todo!(),
     }
 }
 
@@ -209,6 +211,7 @@ pub(crate) fn resolve_type(
         "Int" => Type::Int,
         "Float" => Type::Float,
         "String" => Type::String,
+        "Char" => Type::Char,
         "Bool" => Type::Bool,
         "List" => Type::List(Box::new(Type::Any)),
         _ => match &tys.get(&name) {

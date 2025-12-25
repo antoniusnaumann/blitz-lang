@@ -4,32 +4,38 @@ use crate::{Body, Func, Registry, Value};
 
 pub static ROOT: OnceLock<PathBuf> = OnceLock::new();
 
+macro_rules! make_builtin {
+    ($name:ident ( $($param:ident),* $(,)? ) $body:block) => {
+        fn $name(values: HashMap<String, Value>) -> Value {
+            $(let $param = &values[stringify!($param)];)*
+            $body
+        }
+    };
+}
+
+macro_rules! register_builtin {
+    ($registry:expr, $func:ident, [$( ($param:expr, $param_type:expr) ),* $(,)?], $result:expr) => {
+        let func = Func {
+            params: vec![$(($param.into(), $param_type.into())),*],
+            result: $result.into(),
+            body: Body::Builtin(Box::new($func)),
+        };
+        $registry.insert_func(stringify!($func).into(), func);
+    };
+}
+
 pub trait Builtin {
     fn add_builtins(&mut self);
 }
 
 impl Builtin for Registry {
     fn add_builtins(&mut self) {
-        let func = Func {
-            params: vec![("s".into(), "T".into())],
-            result: "Void".into(),
-            body: Body::Builtin(Box::new(print)),
-        };
-        self.insert_func("print".into(), func);
-
-        let func = Func {
-            params: vec![("path".into(), "String".into())],
-            result: "String".into(),
-            body: Body::Builtin(Box::new(read)),
-        };
-        self.insert_func("read".into(), func);
-
-        let func = Func {
-            params: vec![("msg".into(), "String".into())],
-            result: "Never".into(),
-            body: Body::Builtin(Box::new(panic)),
-        };
-        self.insert_func("panic".into(), func);
+        register_builtin!(self, print, [("s", "T")], "Void");
+        register_builtin!(self, read, [("path", "String")], "String");
+        register_builtin!(self, panic, [("msg", "String")], "Never");
+        register_builtin!(self, panic, [("msg", "String")], "Never");
+        register_builtin!(self, chars, [("s", "String")], "List(Char)");
+        register_builtin!(self, len, [("arr", "List")], "Int");
     }
 }
 
@@ -39,35 +45,34 @@ fn as_str(value: &Value) -> String {
         Value::Int(i) => format!("{i}"),
         Value::Float(f) => format!("{f}"),
         Value::Bool(b) => format!("{b}"),
-        Value::Struct(hash_map) => todo!(),
-        Value::Union(s, value) if s == "err" => panic!("Tried to print error: {:#?}", value),
-        Value::Union(_, value) => as_str(value),
-        Value::List(values) => todo!(),
-        Value::None => format!("None"),
+        Value::Char(c) => format!("{c}"),
+        Value::Struct(_hash_map) => todo!(),
+        Value::Union(label, value) => format!("{label}: {}", as_str(value)),
+        Value::List(_values) => todo!(),
+        Value::Void => format!("Void"),
     }
 }
 
-fn print(values: HashMap<String, Value>) -> Value {
+make_builtin!(print(s) {
     fn print_val(value: &Value) {
         match value {
             Value::String(s) => println!("{s}"),
             Value::Int(i) => println!("{i}"),
             Value::Float(f) => println!("{f}"),
             Value::Bool(b) => println!("{b}"),
-            Value::Struct(hash_map) => todo!(),
-            Value::Union(s, value) if *s == "err" => panic!("Tried to print error: {:#?}", value),
-            Value::Union(_, value) => print_val(value),
-            Value::List(values) => todo!(),
-            Value::None => println!("None"),
+            Value::Char(c) => println!("{c}"),
+            Value::Struct(_hash_map) => todo!(),
+            Value::Union(label, value) => { print!("{label}: "); print_val(value) },
+            Value::List(_values) => todo!(),
+            Value::Void => println!("Void"),
         }
     }
-    print_val(&values["s"]);
+    print_val(s);
 
-    Value::None
-}
+    Value::Void
+});
 
-fn read(values: HashMap<String, Value>) -> Value {
-    let path = &values["path"];
+make_builtin!(read(path) {
     let content = match path {
         Value::String(s) => {
             let path = ROOT.get().unwrap().join(s);
@@ -80,9 +85,23 @@ fn read(values: HashMap<String, Value>) -> Value {
         Ok(s) => Value::Union("ok".into(), Box::new(Value::String(s.into()))),
         Err(err) => Value::Union("err".into(), Box::new(Value::String(err.to_string()))),
     }
-}
+});
 
-fn panic(values: HashMap<String, Value>) -> Value {
-    eprintln!("\x1b[91m{}", as_str(&values["msg"]));
+make_builtin!(panic(msg) {
+    eprintln!("\x1b[91m{}", as_str(msg));
     exit(1)
-}
+});
+
+make_builtin!(chars(s) {
+    match s {
+        Value::String(s) => Value::List(s.chars().map(|c| Value::Char(c)).collect()),
+        _ => panic!("'chars' requires String as args")
+    }
+});
+
+make_builtin!(len(arr) {
+    match arr {
+        Value::List(list) => Value::Int(list.len().try_into().unwrap()),
+        _ => panic!("'len' requires List")
+    }
+});

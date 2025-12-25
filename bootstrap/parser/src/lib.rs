@@ -110,9 +110,18 @@ impl Definition {
             Definition::Fn(f) => f.span.clone(),
             Definition::Struct(s) => s.span.clone(),
             Definition::Union(union) => union.span.clone(),
-            Definition::Alias(alias) => todo!(),
-            Definition::Actor(actor) => todo!(),
-            Definition::Test(test) => todo!(),
+            Definition::Alias(_alias) => todo!(),
+            Definition::Actor(_actor) => todo!(),
+            Definition::Test(_test) => todo!(),
+        }
+    }
+}
+
+impl Lval {
+    pub fn span(&self) -> Span {
+        match self {
+            Lval::Member(member) => member.span.clone(),
+            Lval::Ident(ident) => ident.span.clone(),
         }
     }
 }
@@ -124,7 +133,7 @@ impl Expression {
             Expression::Call(c) => c.span.clone(),
             Expression::Member(m) => m.span.clone(),
             Expression::Ident(i) => i.span.clone(),
-            Expression::Assignment(_) => todo!("Assignment span"),
+            Expression::Assignment(a) => a.left.span(),
             Expression::BinaryOp(b) => b.span.clone(),
             Expression::UnaryOp(u) => u.span.clone(),
             Expression::For(f) => f.span.clone(),
@@ -146,8 +155,9 @@ impl Expression {
             // TODO: add spans here
             Expression::Continue => Span { start: 0, end: 0 },
             Expression::Break => Span { start: 0, end: 0 },
-            Expression::String(s) => Span { start: 0, end: 0 },
-            Expression::Number(num) => Span { start: 0, end: 0 },
+            Expression::String(_s) => Span { start: 0, end: 0 },
+            Expression::Number(_num) => Span { start: 0, end: 0 },
+            Expression::Char(_ch) => Span { start: 0, end: 0 },
         }
     }
 }

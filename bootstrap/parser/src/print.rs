@@ -171,6 +171,7 @@ impl Print for Expression {
             Expression::Break => "break".into(),
             Expression::String(s) => s.clone(),
             Expression::Number(num) => format!("{num}"),
+            Expression::Char(ch) => format!("'{}'", ch),
         }
     }
 }

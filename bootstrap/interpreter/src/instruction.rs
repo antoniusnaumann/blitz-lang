@@ -10,11 +10,11 @@ pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> 
             let init = declaration
                 .init
                 .map(|e| run(e.into(), vars, reg))
-                .unwrap_or(Value::None);
+                .unwrap_or(Value::Void);
             _ = vars
                 .insert(declaration.name.clone(), init)
                 .is_none_or(|_| panic!("Illegal shadowing of {}", declaration.name));
-            Value::None
+            Value::Void
         }
         Statement::Expression(expression) => match expression {
             Expression::Constructor(c) => {
@@ -51,7 +51,7 @@ pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> 
                 match &func.body {
                     Body::Builtin(executable) => executable(args),
                     Body::Defined(statements) => {
-                        let mut result = Value::None;
+                        let mut result = Value::Void;
                         for s in statements {
                             result = run(s.clone(), &mut args, reg);
                         }
@@ -70,14 +70,14 @@ pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> 
             Expression::Ident(ident) => vars.get(&ident.name).cloned().unwrap_or_else(|| {
                 // panic!("ERROR: Did not find '{}'. Have {:#?}", &ident.name, vars)
                 // TODO: check if this union label actually exists
-                Value::Union(ident.name, Value::None.into())
+                Value::Union(ident.name, Value::Void.into())
             }),
             Expression::Assignment(assignment) => {
                 let rhs = run(assignment.right.deref().clone().into(), vars, reg);
                 match assignment.left {
                     parser::Lval::Member(member) => {
                         let ident = match &*member.parent {
-                            Expression::Member(member) => todo!("member chains as lvalue"),
+                            Expression::Member(_member) => todo!("member chains as lvalue"),
                             Expression::Ident(ident) => ident.name.clone(),
                             _ => {
                                 panic!("Invalid parent for LValue. must be an ident")
@@ -85,15 +85,16 @@ pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> 
                         };
                         match vars.get_mut(&ident).unwrap() {
                             Value::Struct(fields) => {
+                                println!("{:#?}, getting {ident}", fields.keys());
                                 *fields.get_mut(&ident).unwrap() = rhs;
-                                Value::None
+                                Value::Void
                             }
                             _ => panic!("Invalid type for member access: member {:#?}", member),
                         }
                     }
                     parser::Lval::Ident(ident) => {
                         *vars.get_mut(&ident.name).unwrap() = rhs;
-                        Value::None
+                        Value::Void
                     }
                 }
             }
@@ -104,7 +105,7 @@ pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> 
                         let mut results = Vec::new();
                         for val in values {
                             vars.insert(for_loop.elem.clone(), val);
-                            let mut result = Value::None;
+                            let mut result = Value::Void;
                             for s in &for_loop.body {
                                 result = run(s.clone(), vars, reg);
                             }
@@ -125,7 +126,7 @@ pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> 
                             if !val {
                                 break;
                             }
-                            let mut result = Value::None;
+                            let mut result = Value::Void;
                             for s in &while_.body {
                                 result = run(s.clone(), vars, reg);
                             }
@@ -141,13 +142,13 @@ pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> 
                 match cond {
                     Value::Bool(val) => {
                         if val {
-                            let mut result = Value::None;
+                            let mut result = Value::Void;
                             for s in if_.body {
                                 result = run(s.clone(), vars, reg);
                             }
                             Value::Union("some".into(), result.into())
                         } else {
-                            Value::Union("none".into(), Value::None.into())
+                            Value::Union("none".into(), Value::Void.into())
                         }
                     }
                     _ => panic!("If statement needs boolean as condition"),
@@ -155,7 +156,7 @@ pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> 
             }
             Expression::BinaryOp(bin) if bin.op == Operator::Else => {
                 let lhs = run(bin.left.deref().clone().into(), vars, reg);
-                if lhs == Value::Union("none".into(), Value::None.into()) {
+                if lhs == Value::Union("none".into(), Value::Void.into()) {
                     run(bin.right.deref().clone().into(), vars, reg)
                 } else {
                     lhs
@@ -166,7 +167,7 @@ pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> 
                 else {
                     panic!("Can only switch on union")
                 };
-                let mut result = Value::None;
+                let mut result = Value::Void;
                 for case in switch.cases {
                     let case_label = match case.label {
                         parser::SwitchLabel::Type(ty) => ty.name,
@@ -195,14 +196,14 @@ pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> 
             Expression::BinaryOp(binary_op) => run_bin_op(binary_op, vars, reg),
             Expression::UnaryOp(unary_op) => run_un_op(unary_op, vars, reg),
             Expression::Block(statements) => {
-                let mut result = Value::None;
+                let mut result = Value::Void;
                 for s in statements {
                     // TODO: proper scoping
                     result = run(s, vars, reg);
                 }
                 result
             }
-            Expression::Return(expression) => todo!(),
+            Expression::Return(_expression) => todo!(),
             Expression::Continue => todo!(),
             Expression::Break => todo!(),
             Expression::String(s) => Value::String(s),
@@ -213,6 +214,7 @@ pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> 
                     Value::Float(num)
                 }
             }
+            Expression::Char(ch) => Value::Char(ch),
         },
     }
 }
@@ -253,8 +255,8 @@ fn run_bin_op(binary_op: BinaryOp, vars: &mut HashMap<String, Value>, reg: &Regi
         (Value::Float(lhs), Value::Float(rhs), Operator::Le) => Value::Bool(lhs <= rhs),
 
         // String operations
-        (Value::String(lhs), Value::String(rhs), Operator::Add) => {
-            panic!("Cannot use '+' on strings, use '++' to concat strings instead")
+        (Value::String(_lhs), Value::String(_rhs), Operator::Add) => {
+            todo!("String concat")
         }
         (Value::String(lhs), Value::String(rhs), Operator::Concat) => {
             Value::String(format!("{}{}", lhs, rhs))
