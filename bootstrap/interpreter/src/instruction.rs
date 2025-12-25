@@ -97,7 +97,7 @@ pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> 
             Expression::Index(index) => {
                 let target = run(index.target.deref().clone().into(), vars, reg);
                 let index_val = run(index.index.deref().clone().into(), vars, reg);
-                
+
                 match (target, index_val) {
                     (Value::List(list), Value::Int(idx)) => {
                         let idx = idx as usize;
@@ -126,7 +126,7 @@ pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> 
             }),
             Expression::Assignment(assignment) => {
                 let rhs = run(assignment.right.deref().clone().into(), vars, reg);
-                
+
                 // Helper function to recursively get mutable reference to the value
                 fn get_mut_value<'a>(
                     expr: &Expression,
@@ -138,9 +138,10 @@ pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> 
                             vars.get_mut(&ident.name).expect("Variable not found")
                         }
                         Expression::Index(nested_index) => {
-                            let nested_index_val = run(nested_index.index.deref().clone().into(), vars, reg);
+                            let nested_index_val =
+                                run(nested_index.index.deref().clone().into(), vars, reg);
                             let target = get_mut_value(&nested_index.target, vars, reg);
-                            
+
                             match (target, nested_index_val) {
                                 (Value::List(list), Value::Int(idx)) => {
                                     let idx = idx as usize;
@@ -150,7 +151,9 @@ pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> 
                                         panic!("Index out of bounds: {} >= {}", idx, list.len())
                                     }
                                 }
-                                (target, index) => panic!("Cannot index {:?} with {:?}", target, index),
+                                (target, index) => {
+                                    panic!("Cannot index {:?} with {:?}", target, index)
+                                }
                             }
                         }
                         Expression::Member(member) => {
@@ -165,7 +168,7 @@ pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> 
                         _ => panic!("Invalid target for lvalue"),
                     }
                 }
-                
+
                 match assignment.left {
                     parser::Lval::Member(member) => {
                         let target = get_mut_value(&member.parent, vars, reg);
@@ -184,7 +187,7 @@ pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> 
                     parser::Lval::Index(index) => {
                         let index_val = run(index.index.deref().clone().into(), vars, reg);
                         let target = get_mut_value(&index.target, vars, reg);
-                        
+
                         match (target, index_val) {
                             (Value::List(list), Value::Int(idx)) => {
                                 let idx = idx as usize;
@@ -194,7 +197,9 @@ pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> 
                                     panic!("Index out of bounds: {} >= {}", idx, list.len())
                                 }
                             }
-                            (target, index) => panic!("Cannot index assign {:?} with {:?}", target, index),
+                            (target, index) => {
+                                panic!("Cannot index assign {:?} with {:?}", target, index)
+                            }
                         }
                         Value::Void
                     }
@@ -270,10 +275,10 @@ pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> 
             }
             Expression::Switch(switch) => {
                 let cond_value = run(switch.cond.deref().clone().into(), vars, reg);
-                
+
                 let mut result = Value::Void;
                 let mut matched = false;
-                
+
                 for case in switch.cases {
                     let matches = match &case.label {
                         parser::SwitchLabel::Type(ty) => {
@@ -321,7 +326,7 @@ pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> 
                             true
                         }
                     };
-                    
+
                     if matches {
                         matched = true;
                         // For union types, bind the value to the label name
@@ -333,7 +338,7 @@ pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> 
                             };
                             vars.insert(case_label, *val);
                         }
-                        
+
                         result = run(
                             Statement::Expression(Expression::Block(case.body)),
                             vars,
@@ -342,11 +347,11 @@ pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> 
                         break;
                     }
                 }
-                
+
                 if !matched {
                     panic!("No matching case in switch for value: {:?}", cond_value);
                 }
-                
+
                 result
             }
             Expression::List(list) => {
@@ -417,6 +422,14 @@ fn run_bin_op(binary_op: BinaryOp, vars: &mut HashMap<String, Value>, reg: &Regi
         (Value::Float(lhs), Value::Float(rhs), Operator::Ge) => Value::Bool(lhs >= rhs),
         (Value::Float(lhs), Value::Float(rhs), Operator::Lt) => Value::Bool(lhs < rhs),
         (Value::Float(lhs), Value::Float(rhs), Operator::Le) => Value::Bool(lhs <= rhs),
+
+        // Char comparison operations
+        (Value::Char(lhs), Value::Char(rhs), Operator::Eq) => Value::Bool(lhs == rhs),
+        (Value::Char(lhs), Value::Char(rhs), Operator::Ne) => Value::Bool(lhs != rhs),
+        (Value::Char(lhs), Value::Char(rhs), Operator::Gt) => Value::Bool(lhs > rhs),
+        (Value::Char(lhs), Value::Char(rhs), Operator::Ge) => Value::Bool(lhs >= rhs),
+        (Value::Char(lhs), Value::Char(rhs), Operator::Lt) => Value::Bool(lhs < rhs),
+        (Value::Char(lhs), Value::Char(rhs), Operator::Le) => Value::Bool(lhs <= rhs),
 
         // String operations
         (Value::String(_lhs), Value::String(_rhs), Operator::Add) => {
