@@ -13,11 +13,11 @@ fn next(mut lexer Lexer) Option(Token) {
 	if lexer.source.len() <= lexer.index {
 		none
 	} else {
+		let start = lexer.index
 		let ch = lexer.curr()
-		print(ch)
 		lexer.mut.advance()
 
-		switch ch {
+		let kind = switch ch {
 			'+' { add }
 			'-' { sub }
 			'*' { mul }
@@ -63,14 +63,23 @@ fn next(mut lexer Lexer) Option(Token) {
 			':' { colon }
 			';' { semicolon }
 			'|' { pipe }
-			_ { error }
+			_ {
+				if ch >= 'a' and ch <= 'z' {
+					ident
+				} else {
+					error
+				}
+			}
 		}
+
+		let span = Span(start: start, end: lexer.index)
+		Token(kind: kind, span: span)
 	}
 }
 
-fn up(mut lexer Lexer, token Token) Token {
+fn up(mut lexer Lexer, kind TokenKind) TokenKind {
 	lexer.mut.advance()
-	token
+	kind
 }
 
 fn advance(mut lexer Lexer) {

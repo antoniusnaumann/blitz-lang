@@ -65,7 +65,7 @@ make_builtin!(print(s) {
             Value::Float(f) => println!("{f}"),
             Value::Bool(b) => println!("{b}"),
             Value::Char(c) => println!("{c}"),
-            Value::Struct(_hash_map) => todo!(),
+            Value::Struct(_hash_map) => println!("struct"),
             Value::Union(label, value) => { print!("{label}: "); print_val(value) },
             Value::List(_values) => todo!(),
             Value::Void => println!("Void"),

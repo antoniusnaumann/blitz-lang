@@ -5,7 +5,7 @@ fn main() {
 	mut lexer = new_lexer(content)
 	mut token = lexer.mut.next()
 	while token != none {
-		print(token)
+		print(token.kind)
 		token = lexer.mut.next()
 	}
 }

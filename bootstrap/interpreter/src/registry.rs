@@ -78,7 +78,6 @@ impl Value {
                 if let Some(case) = cases.get(label) {
                     val.matches(case)
                 } else {
-                    println!("LABEL {label} NOT IN cases");
                     false
                 }
             }

@@ -392,7 +392,17 @@ fn run_bin_op(binary_op: BinaryOp, vars: &mut HashMap<String, Value>, reg: &Regi
     let lhs = run(binary_op.left.deref().clone().into(), vars, reg);
     let rhs = run(binary_op.right.deref().clone().into(), vars, reg);
 
-    match (lhs, rhs, binary_op.op) {
+    bin_op(binary_op.op, vars, reg, &lhs, &rhs)
+}
+
+fn bin_op(
+    binary_op: Operator,
+    vars: &mut HashMap<String, Value>,
+    reg: &Registry,
+    lhs: &Value,
+    rhs: &Value,
+) -> Value {
+    match (lhs, rhs, binary_op) {
         // Int arithmetic operations
         (Value::Int(lhs), Value::Int(rhs), Operator::Add) => Value::Int(lhs + rhs),
         (Value::Int(lhs), Value::Int(rhs), Operator::Sub) => Value::Int(lhs - rhs),
@@ -442,8 +452,8 @@ fn run_bin_op(binary_op: BinaryOp, vars: &mut HashMap<String, Value>, reg: &Regi
         (Value::String(lhs), Value::String(rhs), Operator::Ne) => Value::Bool(lhs != rhs),
 
         // Bool operations
-        (Value::Bool(lhs), Value::Bool(rhs), Operator::And) => Value::Bool(lhs && rhs),
-        (Value::Bool(lhs), Value::Bool(rhs), Operator::Or) => Value::Bool(lhs || rhs),
+        (Value::Bool(lhs), Value::Bool(rhs), Operator::And) => Value::Bool(*lhs && *rhs),
+        (Value::Bool(lhs), Value::Bool(rhs), Operator::Or) => Value::Bool(*lhs || *rhs),
         (Value::Bool(lhs), Value::Bool(rhs), Operator::Eq) => Value::Bool(lhs == rhs),
         (Value::Bool(lhs), Value::Bool(rhs), Operator::Ne) => Value::Bool(lhs != rhs),
 
@@ -452,6 +462,37 @@ fn run_bin_op(binary_op: BinaryOp, vars: &mut HashMap<String, Value>, reg: &Regi
         }
         (Value::Union(lhs_label, lhs_value), Value::Union(rhs_label, rhs_value), Operator::Ne) => {
             Value::Bool(lhs_label != rhs_label || lhs_value != rhs_value)
+        }
+
+        (Value::Union(_, u), Value::Struct(s), op @ (Operator::Ne | Operator::Eq))
+        | (Value::Struct(s), Value::Union(_, u), op @ (Operator::Ne | Operator::Eq)) => {
+            match u.clone().deref() {
+                Value::Struct(fields) => {
+                    if fields.len() != s.len() {
+                        Value::Bool(if op == Operator::Ne { true } else { false })
+                    } else {
+                        let mut same = true;
+                        for (name, field) in fields {
+                            if let Some(other) = s.get(name) {
+                                let Value::Bool(eq) =
+                                    bin_op(Operator::Eq, vars, reg, &field, other)
+                                else {
+                                    unreachable!()
+                                };
+                                if !eq {
+                                    same = false;
+                                    break;
+                                }
+                            } else {
+                                same = false;
+                                break;
+                            }
+                        }
+                        Value::Bool(same)
+                    }
+                }
+                _ => Value::Bool(if op == Operator::Ne { true } else { false }),
+            }
         }
 
         (lhs, rhs, op) => panic!(

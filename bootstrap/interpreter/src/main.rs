@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use interpreter::{Body, Builtin, ROOT, Registry, run};
-use parser::{Ast, Definition, Parser, Print};
+use parser::{Ast, Definition, Parser};
 
 fn main() {
     let path = args()
@@ -16,15 +16,15 @@ fn main() {
     let asts = collect_definitions(path);
 
     for ast in &asts {
-        println!("DEBUG: Collected {} definitions", ast.defs.len());
+        // println!("DEBUG: Collected {} definitions", ast.defs.len());
         for def in &ast.defs {
             match def {
-                Definition::Fn(f) => {
-                    println!(
-                        "{}({})",
-                        f.name,
-                        f.args.print().trim().trim_end_matches("()")
-                    );
+                Definition::Fn(_f) => {
+                    // println!(
+                    //     "{}({})",
+                    //     f.name,
+                    //     f.args.print().trim().trim_end_matches("()")
+                    // );
                 }
                 _ => {}
             }
