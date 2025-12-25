@@ -34,12 +34,14 @@ pub struct Param {
     pub mutable: bool,
 }
 
+#[derive(Clone, Debug)]
 pub struct Func {
     pub params: Vec<Param>,
     pub result: String,
     pub body: Body,
 }
 
+#[derive(Clone, Debug)]
 pub enum Body {
     Builtin(Box<fn(&mut HashMap<String, Value>) -> Value>),
     Defined(Vec<Statement>),
@@ -68,6 +70,7 @@ impl Value {
             (V::Int(_), T::Int) => true,
             (V::Float(_), T::Float) => true,
             (V::Bool(_), T::Bool) => true,
+            (V::Char(_), T::Char) => true,
             (V::Struct(fields), T::Struct(members)) => fields
                 .iter()
                 .all(|(name, val)| members.get(name).is_some_and(|m| val.matches(m))),
@@ -75,10 +78,12 @@ impl Value {
                 if let Some(case) = cases.get(label) {
                     val.matches(case)
                 } else {
+                    println!("LABEL {label} NOT IN cases");
                     false
                 }
             }
             (V::List(list), T::List(ty)) => list.iter().all(|v| v.matches(ty)),
+            (V::Void, T::Void) => true,
             // For now, we just treat generics as "Any"
             (_, T::Any) => true,
             _ => false,
@@ -137,7 +142,11 @@ impl Registry {
             }
         }
 
-        panic!("No function matching arguments {:#?}", args)
+        panic!(
+            "No function named matching arguments {:?},\n\nselection: {:?}",
+            args,
+            funcs.iter().map(|f| &f.params).collect::<Vec<_>>()
+        )
     }
 
     pub fn select_type(&self, name: &str) -> Option<&Type> {
