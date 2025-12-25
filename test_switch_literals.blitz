@@ -1,0 +1,40 @@
+fn main() Void {
+    let str = "hello"
+    let result = switch str {
+        "hello" {
+            "matched hello"
+        }
+        "world" {
+            "matched world"
+        }
+        _ {
+            "no match"
+        }
+    }
+    
+    let num = 1
+    let numresult = switch num {
+        1 {
+            "one"
+        }
+        2 {
+            "two"
+        }
+        _ {
+            "other"
+        }
+    }
+    
+    let ch = 'a'
+    let charresult = switch ch {
+        'a' {
+            "letter a"
+        }
+        'b' {
+            "letter b"
+        }
+        _ {
+            "other letter"
+        }
+    }
+}

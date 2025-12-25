@@ -114,7 +114,26 @@ struct SwitchCase {
 
 union SwitchLabel {
 	Type
-	Ident	
+	Ident
+	StringLit
+	CharLit
+	NumberLit
+	Discard
+}
+
+struct StringLit {
+	value String
+}
+
+struct CharLit {
+	value Char
+}
+
+struct NumberLit {
+	value Float
+}
+
+struct Discard {
 }
 
 struct List {

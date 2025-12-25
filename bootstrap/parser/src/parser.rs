@@ -542,9 +542,58 @@ impl<'a> Parser<'a> {
             } = self.lexer.peek().unwrap().clone();
 
             let label = match kind {
-                TokenKind::Ident => self.expect_ident().into(),
+                TokenKind::Ident => {
+                    // Check if it's the discard pattern "_"
+                    let token = self.lexer.peek().unwrap();
+                    let ident_str = &self.source[RangeInclusive::from(token.span.clone())];
+                    if ident_str == "_" {
+                        self.lexer.next();
+                        Discard {}.into()
+                    } else {
+                        self.expect_ident().into()
+                    }
+                }
                 TokenKind::Type => self.expect_type().into(),
-                _ => todo!("Support other tokens than ident and type for switch"),
+                TokenKind::Str => {
+                    let token = self.lexer.next().unwrap();
+                    StringLit {
+                        value: self.source[(token.span.start + 1)..(token.span.end - 1)].into(),
+                    }
+                    .into()
+                }
+                TokenKind::Ch => {
+                    let token = self.lexer.next().unwrap();
+                    // Char spans include the single quotes: 'a'
+                    // Extract content between quotes
+                    let full_content = &self.source[RangeInclusive::from(token.span.clone())];
+                    let char_content = &full_content[1..(full_content.len() - 1)];
+                    let value = if char_content.starts_with('\\') {
+                        // Handle escape sequences
+                        match &char_content[1..] {
+                            "n" => '\n',
+                            "t" => '\t',
+                            "r" => '\r',
+                            "\\" => '\\',
+                            "'" => '\'',
+                            _ => panic!("Unknown escape sequence: {}", char_content),
+                        }
+                    } else {
+                        char_content.chars().next().unwrap()
+                    };
+                    CharLit { value }.into()
+                }
+                TokenKind::Num => {
+                    let token = self.lexer.next().unwrap();
+                    NumberLit {
+                        value: self.source[RangeInclusive::from(token.span)].parse().unwrap(),
+                    }
+                    .into()
+                }
+                _ => panic!(
+                    "Unexpected token in switch case: {:#?}\n\n{}",
+                    kind,
+                    case_span.report(self.source)
+                ),
             };
 
             let body = self.parse_body();

@@ -26,6 +26,7 @@ union TokenKind {
 	// Identifier
 	type
 	ident
+	underscore
 
 	// Literals
 	str

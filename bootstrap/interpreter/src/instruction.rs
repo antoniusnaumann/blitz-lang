@@ -269,18 +269,71 @@ pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> 
                 }
             }
             Expression::Switch(switch) => {
-                let Value::Union(label, val) = run(switch.cond.deref().clone().into(), vars, reg)
-                else {
-                    panic!("Can only switch on union")
-                };
+                let cond_value = run(switch.cond.deref().clone().into(), vars, reg);
+                
                 let mut result = Value::Void;
+                let mut matched = false;
+                
                 for case in switch.cases {
-                    let case_label = match case.label {
-                        parser::SwitchLabel::Type(ty) => ty.name,
-                        parser::SwitchLabel::Ident(ident) => ident.name,
+                    let matches = match &case.label {
+                        parser::SwitchLabel::Type(ty) => {
+                            // Union type matching
+                            if let Value::Union(label, _) = &cond_value {
+                                ty.name == *label
+                            } else {
+                                false
+                            }
+                        }
+                        parser::SwitchLabel::Ident(ident) => {
+                            // Union label matching
+                            if let Value::Union(label, _) = &cond_value {
+                                ident.name == *label
+                            } else {
+                                false
+                            }
+                        }
+                        parser::SwitchLabel::StringLit(lit) => {
+                            // String literal matching
+                            if let Value::String(s) = &cond_value {
+                                lit.value == *s
+                            } else {
+                                false
+                            }
+                        }
+                        parser::SwitchLabel::CharLit(lit) => {
+                            // Char literal matching
+                            if let Value::Char(c) = &cond_value {
+                                lit.value == *c
+                            } else {
+                                false
+                            }
+                        }
+                        parser::SwitchLabel::NumberLit(lit) => {
+                            // Number literal matching
+                            match &cond_value {
+                                Value::Int(i) => lit.value == *i as f64,
+                                Value::Float(f) => lit.value == *f,
+                                _ => false,
+                            }
+                        }
+                        parser::SwitchLabel::Discard(_) => {
+                            // Discard pattern matches everything
+                            true
+                        }
                     };
-                    if case_label == label {
-                        vars.insert(case_label, *val);
+                    
+                    if matches {
+                        matched = true;
+                        // For union types, bind the value to the label name
+                        if let Value::Union(label, val) = cond_value.clone() {
+                            let case_label = match &case.label {
+                                parser::SwitchLabel::Type(ty) => ty.name.clone(),
+                                parser::SwitchLabel::Ident(ident) => ident.name.clone(),
+                                _ => label,
+                            };
+                            vars.insert(case_label, *val);
+                        }
+                        
                         result = run(
                             Statement::Expression(Expression::Block(case.body)),
                             vars,
@@ -289,6 +342,11 @@ pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> 
                         break;
                     }
                 }
+                
+                if !matched {
+                    panic!("No matching case in switch for value: {:?}", cond_value);
+                }
+                
                 result
             }
             Expression::List(list) => {
