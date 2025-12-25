@@ -121,6 +121,7 @@ impl Lval {
     pub fn span(&self) -> Span {
         match self {
             Lval::Member(member) => member.span.clone(),
+            Lval::Index(index) => index.span.clone(),
             Lval::Ident(ident) => ident.span.clone(),
         }
     }
@@ -132,6 +133,7 @@ impl Expression {
             Expression::Constructor(c) => c.span.clone(),
             Expression::Call(c) => c.span.clone(),
             Expression::Member(m) => m.span.clone(),
+            Expression::Index(i) => i.span.clone(),
             Expression::Ident(i) => i.span.clone(),
             Expression::Assignment(a) => a.left.span(),
             Expression::BinaryOp(b) => b.span.clone(),

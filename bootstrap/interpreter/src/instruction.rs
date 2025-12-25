@@ -94,6 +94,31 @@ pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> 
                 };
                 parent[&member.member].clone()
             }
+            Expression::Index(index) => {
+                let target = run(index.target.deref().clone().into(), vars, reg);
+                let index_val = run(index.index.deref().clone().into(), vars, reg);
+                
+                match (target, index_val) {
+                    (Value::List(list), Value::Int(idx)) => {
+                        let idx = idx as usize;
+                        if idx < list.len() {
+                            list[idx].clone()
+                        } else {
+                            panic!("Index out of bounds: {} >= {}", idx, list.len())
+                        }
+                    }
+                    (Value::String(s), Value::Int(idx)) => {
+                        let idx = idx as usize;
+                        let chars: Vec<char> = s.chars().collect();
+                        if idx < chars.len() {
+                            Value::Char(chars[idx])
+                        } else {
+                            panic!("Index out of bounds: {} >= {}", idx, chars.len())
+                        }
+                    }
+                    (target, index) => panic!("Cannot index {:?} with {:?}", target, index),
+                }
+            }
             Expression::Ident(ident) => vars.get(&ident.name).cloned().unwrap_or_else(|| {
                 // panic!("ERROR: Did not find '{}'. Have {:#?}", &ident.name, vars)
                 // TODO: check if this union label actually exists
@@ -101,16 +126,50 @@ pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> 
             }),
             Expression::Assignment(assignment) => {
                 let rhs = run(assignment.right.deref().clone().into(), vars, reg);
+                
+                // Helper function to recursively get mutable reference to the value
+                fn get_mut_value<'a>(
+                    expr: &Expression,
+                    vars: &'a mut HashMap<String, Value>,
+                    reg: &Registry,
+                ) -> &'a mut Value {
+                    match expr {
+                        Expression::Ident(ident) => {
+                            vars.get_mut(&ident.name).expect("Variable not found")
+                        }
+                        Expression::Index(nested_index) => {
+                            let nested_index_val = run(nested_index.index.deref().clone().into(), vars, reg);
+                            let target = get_mut_value(&nested_index.target, vars, reg);
+                            
+                            match (target, nested_index_val) {
+                                (Value::List(list), Value::Int(idx)) => {
+                                    let idx = idx as usize;
+                                    if idx < list.len() {
+                                        &mut list[idx]
+                                    } else {
+                                        panic!("Index out of bounds: {} >= {}", idx, list.len())
+                                    }
+                                }
+                                (target, index) => panic!("Cannot index {:?} with {:?}", target, index),
+                            }
+                        }
+                        Expression::Member(member) => {
+                            let target = get_mut_value(&member.parent, vars, reg);
+                            match target {
+                                Value::Struct(fields) => {
+                                    fields.get_mut(&member.member).expect("Field not found")
+                                }
+                                _ => panic!("Member access on non-struct"),
+                            }
+                        }
+                        _ => panic!("Invalid target for lvalue"),
+                    }
+                }
+                
                 match assignment.left {
                     parser::Lval::Member(member) => {
-                        let ident = match &*member.parent {
-                            Expression::Member(_member) => todo!("member chains as lvalue"),
-                            Expression::Ident(ident) => ident.name.clone(),
-                            _ => {
-                                panic!("Invalid parent for LValue. must be an ident")
-                            }
-                        };
-                        match vars.get_mut(&ident).unwrap() {
+                        let target = get_mut_value(&member.parent, vars, reg);
+                        match target {
                             Value::Struct(fields) => {
                                 *fields.get_mut(&member.member).unwrap() = rhs;
                                 Value::Void
@@ -120,6 +179,23 @@ pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> 
                     }
                     parser::Lval::Ident(ident) => {
                         *vars.get_mut(&ident.name).unwrap() = rhs;
+                        Value::Void
+                    }
+                    parser::Lval::Index(index) => {
+                        let index_val = run(index.index.deref().clone().into(), vars, reg);
+                        let target = get_mut_value(&index.target, vars, reg);
+                        
+                        match (target, index_val) {
+                            (Value::List(list), Value::Int(idx)) => {
+                                let idx = idx as usize;
+                                if idx < list.len() {
+                                    list[idx] = rhs;
+                                } else {
+                                    panic!("Index out of bounds: {} >= {}", idx, list.len())
+                                }
+                            }
+                            (target, index) => panic!("Cannot index assign {:?} with {:?}", target, index),
+                        }
                         Value::Void
                     }
                 }

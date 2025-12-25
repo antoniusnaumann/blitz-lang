@@ -131,6 +131,7 @@ impl Print for Expression {
                 }
             }
             Expression::Member(m) => format!("{}.{}", m.parent.print(), m.member),
+            Expression::Index(i) => format!("{}[{}]", i.target.print(), i.index.print()),
             Expression::Ident(i) => i.name.clone(),
             Expression::Assignment(_) => "<assignment>".into(),
             Expression::BinaryOp(b) => {

@@ -307,6 +307,24 @@ impl<'a> Parser<'a> {
             }
 
             let token_kind = peek.unwrap().kind.clone();
+            
+            // Special handling for index expressions (postfix [])
+            if token_kind == TokenKind::Lbracket {
+                let _bracket = self.lexer.next().unwrap();
+                self.skip_newlines();
+                let index = self.parse_expression_bp(0);
+                let end_bracket = self.expect(TokenKind::Rbracket);
+                let span = lhs.span().merge(&end_bracket.span);
+                
+                lhs = Index {
+                    target: Box::new(lhs),
+                    index: Box::new(index),
+                    span,
+                }
+                .into();
+                continue;
+            }
+            
             let op = match self.token_to_infix_op(&token_kind) {
                 Some(op) => op,
                 None => break,
@@ -424,6 +442,7 @@ impl<'a> Parser<'a> {
             let left = match expr {
                 Expression::Ident(ident) => Lval::Ident(ident),
                 Expression::Member(member) => Lval::Member(member),
+                Expression::Index(index) => Lval::Index(index),
                 e => panic!("Assignment on invalid lval {:#?}", e),
             };
 
@@ -1048,6 +1067,45 @@ mod tests {
                 }
             }
             _ => panic!("Expected List"),
+        }
+    }
+
+    #[test]
+    fn test_index_expression() {
+        let expr = parse_expr("arr[5]");
+
+        match expr {
+            Expression::Index(i) => {
+                assert!(matches!(*i.target, Expression::Ident(_)));
+                assert!(matches!(*i.index, Expression::Number(_)));
+            }
+            _ => panic!("Expected Index"),
+        }
+    }
+
+    #[test]
+    fn test_chained_index() {
+        let expr = parse_expr("matrix[i][j]");
+
+        match expr {
+            Expression::Index(outer) => {
+                assert!(matches!(*outer.target, Expression::Index(_)));
+                assert!(matches!(*outer.index, Expression::Ident(_)));
+            }
+            _ => panic!("Expected chained Index"),
+        }
+    }
+
+    #[test]
+    fn test_index_with_member() {
+        let expr = parse_expr("obj.arr[0]");
+
+        match expr {
+            Expression::Index(i) => {
+                assert!(matches!(*i.target, Expression::Member(_)));
+                assert!(matches!(*i.index, Expression::Number(_)));
+            }
+            _ => panic!("Expected Index with Member"),
         }
     }
 

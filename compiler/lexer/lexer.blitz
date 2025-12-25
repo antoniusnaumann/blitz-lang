@@ -13,9 +13,17 @@ fn next(mut lexer Lexer) Option(Token) {
 	if lexer.source.len() <= lexer.index {
 		none
 	} else {
-		let ch = lexer.source[index]
-		lexer.index = lexer.index + 1
+		let ch = lexer.curr()
+		print(ch)
+		lexer.mut.advance()
 
-		else_
 	}
+}
+
+fn advance(mut lexer Lexer) {
+	lexer.index = lexer.index + 1
+}
+
+fn curr(mut lexer Lexer) Char {
+	lexer.source[index]
 }

@@ -13,6 +13,7 @@ struct Declaration {
 
 union Lval {
 	Member
+	Index
 	Ident
 }
 
@@ -20,6 +21,7 @@ union Expression {
 	Constructor
 	Call
 	Member
+	Index
 	Ident
 	Assignment
 	BinaryOp
@@ -47,6 +49,12 @@ struct Ident {
 struct Member {
 	parent Box(Expression)
 	member String
+	span   Span
+}
+
+struct Index {
+	target Box(Expression)
+	index  Box(Expression)
 	span   Span
 }
 
