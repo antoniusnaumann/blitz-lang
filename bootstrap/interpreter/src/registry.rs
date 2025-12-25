@@ -34,7 +34,7 @@ pub struct Func {
 }
 
 pub enum Body {
-    Builtin(Box<fn(HashMap<String, Value>) -> Value>),
+    Builtin(Box<fn(&mut HashMap<String, Value>) -> Value>),
     Defined(Vec<Statement>),
 }
 

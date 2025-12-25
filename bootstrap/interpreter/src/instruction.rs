@@ -36,6 +36,20 @@ pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> 
                 let funcs = reg
                     .func(&call.name)
                     .unwrap_or_else(|| panic!("Did not find func {}", call.name));
+                
+                // Track which arguments are simple identifiers so we can propagate changes back
+                let arg_idents: Vec<Option<String>> = call
+                    .args
+                    .iter()
+                    .map(|arg| {
+                        if let Expression::Ident(ident) = arg {
+                            Some(ident.name.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                
                 let arg_vals = call
                     .args
                     .iter()
@@ -48,8 +62,8 @@ pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> 
                     args.insert(name.clone(), arg);
                 }
 
-                match &func.body {
-                    Body::Builtin(executable) => executable(args),
+                let result = match &func.body {
+                    Body::Builtin(executable) => executable(&mut args),
                     Body::Defined(statements) => {
                         let mut result = Value::Void;
                         for s in statements {
@@ -58,7 +72,19 @@ pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> 
 
                         result
                     }
+                };
+
+                // Propagate changes back to the original variables
+                // TODO: we should check here if the arg was passed as mutable and only then propagate changes back
+                for ((param_name, _ty), maybe_var_name) in params.iter().zip(arg_idents) {
+                    if let Some(var_name) = maybe_var_name {
+                        if let Some(updated_value) = args.get(param_name) {
+                            vars.insert(var_name, updated_value.clone());
+                        }
+                    }
                 }
+
+                result
             }
             Expression::Member(member) => {
                 let Value::Struct(parent) = run(member.parent.deref().clone().into(), vars, reg)
@@ -85,8 +111,7 @@ pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> 
                         };
                         match vars.get_mut(&ident).unwrap() {
                             Value::Struct(fields) => {
-                                println!("{:#?}, getting {ident}", fields.keys());
-                                *fields.get_mut(&ident).unwrap() = rhs;
+                                *fields.get_mut(&member.member).unwrap() = rhs;
                                 Value::Void
                             }
                             _ => panic!("Invalid type for member access: member {:#?}", member),

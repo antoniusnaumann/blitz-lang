@@ -6,7 +6,7 @@ pub static ROOT: OnceLock<PathBuf> = OnceLock::new();
 
 macro_rules! make_builtin {
     ($name:ident ( $($param:ident),* $(,)? ) $body:block) => {
-        fn $name(values: HashMap<String, Value>) -> Value {
+        fn $name(values: &mut HashMap<String, Value>) -> Value {
             $(let $param = &values[stringify!($param)];)*
             $body
         }
