@@ -1,0 +1,9 @@
+// exclusive range
+struct Range {
+	begin Int
+	until Int
+}
+
+fn contains(range Range, elem Int) Bool {
+	range.begin >= elem and range.end < elem
+}

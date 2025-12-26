@@ -40,6 +40,9 @@ union TokenKind {
 	rem
 	assign
 
+	// Collection
+	concat
+
 	// Logical
 	and_
 	or_
@@ -76,8 +79,7 @@ union TokenKind {
 }
 
 struct Span {
-	start Int
-	end   Int    // inclusive
+	range Range
 	path  String // source file path
 }
 

@@ -38,7 +38,7 @@ impl Builtin for Registry {
         register_builtin!(self, debug, [("s", "T", false)], "Void");
         register_builtin!(self, read, [("path", "String", false)], "String");
         register_builtin!(self, panic, [("msg", "String", false)], "Never");
-        register_builtin!(self, panic, [("msg", "String", false)], "Never");
+        register_builtin!(self, todo, [("msg", "String", false)], "Never");
         register_builtin!(self, chars, [("s", "String", false)], "List(Char)");
         register_builtin!(self, len, [("arr", "List", false)], "Int");
     }
@@ -139,6 +139,11 @@ make_builtin!(read(path) {
 
 make_builtin!(panic(msg) {
     eprintln!("\x1b[91m{}", as_str(msg));
+    exit(1)
+});
+
+make_builtin!(todo(msg) {
+    eprintln!("\x1b[96m{}", as_str(msg));
     exit(1)
 });
 

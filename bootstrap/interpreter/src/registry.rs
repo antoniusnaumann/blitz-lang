@@ -158,7 +158,7 @@ impl From<Vec<Ast>> for Registry {
         let mut reg = Registry::default();
         let mut tys = HashMap::new();
 
-        for ast in value {
+        for ast in &value {
             for def in &ast.defs {
                 match def {
                     Definition::Struct(ty) => {
@@ -170,13 +170,15 @@ impl From<Vec<Ast>> for Registry {
                     _ => {}
                 }
             }
+        }
 
+        for ast in value {
             for def in &ast.defs {
                 insert_def(&mut reg, &tys, &ast, def);
             }
         }
-        reg.ast_types = tys;
 
+        reg.ast_types = tys;
         reg
     }
 }
@@ -272,7 +274,13 @@ pub(crate) fn resolve_type(
                 _ = &generics.get(&name).unwrap_or_else(|| {
                     if let (Some(span), Some(source)) = (span, source) {
                         let location = span.report(source);
-                        panic!("No type named {name} \n\n{location}")
+                        panic!(
+                            "No type named {name} \n\n{location}\n, got:\n{}",
+                            tys.keys()
+                                .map(|s| s.as_str())
+                                .collect::<Vec<_>>()
+                                .join("\n")
+                        )
                     } else {
                         panic!("No type named {name}, got:\n{:#?}", tys)
                     }

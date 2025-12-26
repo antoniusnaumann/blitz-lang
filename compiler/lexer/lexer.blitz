@@ -19,7 +19,12 @@ fn next(mut lexer Lexer) Option(Token) {
 		lexer.mut.advance()
 
 		let kind = switch ch {
-			'+' { add }
+			'+' {
+				switch lexer.curr() {
+					'+' { lexer.mut.up(concat) }
+					_ { add }
+				}
+			}
 			'-' { sub }
 			'*' { mul }
 			'/' {
@@ -66,18 +71,30 @@ fn next(mut lexer Lexer) Option(Token) {
 			'|' { pipe }
 			'\n' { newline }
 			'\0' { none }
+			'"' {
+				lexer.mut.skip_str()
+				str
+			}
+			'\'' {
+				lexer.mut.skip_ch()
+				ch
+			}
 			_ {
 				if ch >= 'a' and ch <= 'z' {
 					lexer.mut.skip_ident()
+					// TODO: remove
+					lexer.substr(start, lexer.index).print()
 					ident
 				} else if ch >= 'A' and ch <= 'Z' {
 					lexer.mut.skip_ident()
+					// TODO: remove
+					lexer.substr(start, lexer.index).print()
 					type
 				} else { error }
 			}
 		}
 
-		let span = Span(start: start, end: lexer.index)
+		let span = Span(range: Range(begin: start, until: lexer.index))
 		Token(kind: kind, span: span)
 	}
 }
@@ -107,6 +124,17 @@ fn peek(lexer Lexer, n Int) Char {
 	lexer.source[lexer.index + n]
 }
 
+fn substr(lexer Lexer, start Int, until Int) String {
+	let str = ""
+	mut index = start
+	while index < until {
+		str = str ++ lexer.source[index]
+		index = index + 1
+	}
+
+	str
+}
+
 fn is_ident_char(lexer Lexer) Bool {
 	let ch = lexer.curr()
 	(ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z') or (ch >= '0' and ch <= '9') or ch == '_'
@@ -123,3 +151,48 @@ fn skip_ident(mut lexer Lexer) {
 		lexer.mut.advance()
 	}
 }
+
+fn skip_str(mut lexer Lexer) {
+	mut escape = false
+	while true {
+		if escape {
+			switch lexer.curr() {
+				'(' { todo("Implement format strings") }
+				_ { } // escape sequences are generally handled in parser
+			}
+			escape = false
+		} else {
+			switch lexer.curr() {
+				'"' {
+					lexer.mut.advance()
+					break
+				}
+				'\\' { escape = true }
+				'\0' { break }
+				_ { }
+			}
+		}
+		lexer.mut.advance()
+	}
+}
+
+fn skip_ch(mut lexer Lexer) {
+	mut escape = false
+	while true {
+		if escape {
+			escape = false
+		} else {
+			switch lexer.curr() {
+				'\'' {
+					lexer.mut.advance()
+					break
+				}
+				'\\' { escape = true }
+				'\0' { break }
+				_ { }
+			}
+		}
+		lexer.mut.advance()
+	}
+}
+
