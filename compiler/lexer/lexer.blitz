@@ -68,10 +68,12 @@ fn next(mut lexer Lexer) Option(Token) {
 			'\0' { none }
 			_ {
 				if ch >= 'a' and ch <= 'z' {
+					lexer.mut.skip_ident()
 					ident
-				} else {
-					error
-				}
+				} else if ch >= 'A' and ch <= 'Z' {
+					lexer.mut.skip_ident()
+					type
+				} else { error }
 			}
 		}
 
@@ -105,9 +107,19 @@ fn peek(lexer Lexer, n Int) Char {
 	lexer.source[lexer.index + n]
 }
 
+fn is_ident_char(lexer Lexer) Bool {
+	let ch = lexer.curr()
+	(ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z') or (ch >= '0' and ch <= '9') or ch == '_'
+}
+
 fn skip_space(mut lexer Lexer) {
-	while lexer.index < lexer.source.len() and (lexer.curr() == ' ' or lexer.curr() == '\t') {
+	while lexer.curr() == ' ' or lexer.curr() == '\t' {
 		lexer.mut.advance()
 	}
 }
 
+fn skip_ident(mut lexer Lexer) {
+	while lexer.is_ident_char() {
+		lexer.mut.advance()
+	}
+}
