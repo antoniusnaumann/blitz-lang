@@ -1281,4 +1281,130 @@ mod tests {
             _ => panic!("Expected Block"),
         }
     }
+
+    #[test]
+    fn test_boolean_literal_true() {
+        let expr = parse_expr("true");
+
+        match expr {
+            Expression::BoolLit(b) => {
+                assert_eq!(b.value, true);
+            }
+            _ => panic!("Expected BoolLit, got {:?}", expr.print()),
+        }
+    }
+
+    #[test]
+    fn test_boolean_literal_false() {
+        let expr = parse_expr("false");
+
+        match expr {
+            Expression::BoolLit(b) => {
+                assert_eq!(b.value, false);
+            }
+            _ => panic!("Expected BoolLit, got {:?}", expr.print()),
+        }
+    }
+
+    #[test]
+    fn test_boolean_in_if_condition() {
+        let expr = parse_expr("if true { x }");
+
+        match expr {
+            Expression::If(if_expr) => {
+                assert!(matches!(*if_expr.cond, Expression::BoolLit(_)));
+                match *if_expr.cond {
+                    Expression::BoolLit(b) => assert_eq!(b.value, true),
+                    _ => panic!("Expected BoolLit in condition"),
+                }
+            }
+            _ => panic!("Expected If expression"),
+        }
+    }
+
+    #[test]
+    fn test_else_if_right_associative() {
+        // if a {} else if b {} else {} should parse as: if a {} else (if b {} else {})
+        // This ensures proper right-associativity
+        let expr = parse_expr("if a { x } else if b { y } else { z }");
+
+        match expr {
+            Expression::BinaryOp(outer_else) => {
+                assert!(matches!(outer_else.op, Operator::Else));
+                
+                // Left side should be: if a { x }
+                assert!(matches!(*outer_else.left, Expression::If(_)));
+                
+                // Right side should be: (if b { y }) else { z }
+                match *outer_else.right {
+                    Expression::BinaryOp(inner_else) => {
+                        assert!(matches!(inner_else.op, Operator::Else));
+                        // Inner left should be: if b { y }
+                        assert!(matches!(*inner_else.left, Expression::If(_)));
+                        // Inner right should be: { z }
+                        assert!(matches!(*inner_else.right, Expression::Block(_)));
+                    }
+                    _ => panic!("Expected nested else operator for right-associativity"),
+                }
+            }
+            _ => panic!("Expected else operator, got {:?}", expr.print()),
+        }
+    }
+
+    #[test]
+    fn test_multiple_else_if_right_associative() {
+        // Test three-level nesting: if a {} else if b {} else if c {} else {}
+        let expr = parse_expr("if a { x } else if b { y } else if c { z } else { w }");
+
+        match expr {
+            Expression::BinaryOp(op1) => {
+                assert!(matches!(op1.op, Operator::Else));
+                assert!(matches!(*op1.left, Expression::If(_)));
+                
+                // First right side: if b {} else if c {} else {}
+                match *op1.right {
+                    Expression::BinaryOp(op2) => {
+                        assert!(matches!(op2.op, Operator::Else));
+                        assert!(matches!(*op2.left, Expression::If(_)));
+                        
+                        // Second right side: if c {} else {}
+                        match *op2.right {
+                            Expression::BinaryOp(op3) => {
+                                assert!(matches!(op3.op, Operator::Else));
+                                assert!(matches!(*op3.left, Expression::If(_)));
+                                assert!(matches!(*op3.right, Expression::Block(_)));
+                            }
+                            _ => panic!("Expected third nested else operator"),
+                        }
+                    }
+                    _ => panic!("Expected second nested else operator"),
+                }
+            }
+            _ => panic!("Expected else operator"),
+        }
+    }
+
+    #[test]
+    fn test_else_operator_is_right_associative() {
+        // Test raw else chaining: a else b else c should parse as a else (b else c)
+        let expr = parse_expr("a else b else c");
+
+        match expr {
+            Expression::BinaryOp(outer_else) => {
+                assert!(matches!(outer_else.op, Operator::Else));
+                assert!(matches!(*outer_else.left, Expression::Ident(_)));
+                
+                // Right side should be: b else c (another else operator)
+                match *outer_else.right {
+                    Expression::BinaryOp(inner_else) => {
+                        assert!(matches!(inner_else.op, Operator::Else));
+                        assert!(matches!(*inner_else.left, Expression::Ident(_)));
+                        assert!(matches!(*inner_else.right, Expression::Ident(_)));
+                    }
+                    _ => panic!("Expected nested else for right-associativity, got {:?}", outer_else.right.print()),
+                }
+            }
+            _ => panic!("Expected else operator"),
+        }
+    }
 }
