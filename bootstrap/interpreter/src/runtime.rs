@@ -46,14 +46,34 @@ impl Builtin for Registry {
 
 fn as_str(value: &Value) -> String {
     match value {
-        Value::String(s) => format!("{s}"),
+        Value::String(s) => s.clone(),
         Value::Int(i) => format!("{i}"),
         Value::Float(f) => format!("{f}"),
         Value::Bool(b) => format!("{b}"),
         Value::Char(c) => format!("{c}"),
         Value::Struct(_hash_map) => todo!(),
         Value::Union(label, value) => format!("{label}: {}", as_str(value)),
-        Value::List(_values) => todo!(),
+        Value::List(values) => {
+            let mut result = String::from("[");
+            for (i, val) in values.iter().enumerate() {
+                if i > 0 {
+                    result.push_str(", ");
+                }
+                result.push_str(&match val {
+                    Value::String(s) => format!("\"{s}\""),
+                    Value::Int(i) => format!("{i}"),
+                    Value::Float(f) => format!("{f}"),
+                    Value::Bool(b) => format!("{b}"),
+                    Value::Char(c) => format!("'{c}'"),
+                    Value::Struct(_) => "struct".to_string(),
+                    Value::Union(label, v) => format!("{label}: {}", as_str(v)),
+                    Value::List(_) => "[...]".to_string(),
+                    Value::Void => "Void".to_string(),
+                });
+            }
+            result.push(']');
+            result
+        }
         Value::Void => format!("Void"),
     }
 }
@@ -68,7 +88,26 @@ make_builtin!(print(s) {
             Value::Char(c) => println!("{c}"),
             Value::Struct(_hash_map) => println!("struct"),
             Value::Union(label, value) => { print!("{label}: "); print_val(value) },
-            Value::List(_values) => todo!(),
+            Value::List(values) => {
+                print!("[");
+                for (i, val) in values.iter().enumerate() {
+                    if i > 0 {
+                        print!(", ");
+                    }
+                    match val {
+                        Value::String(s) => print!("\"{s}\""),
+                        Value::Int(i) => print!("{i}"),
+                        Value::Float(f) => print!("{f}"),
+                        Value::Bool(b) => print!("{b}"),
+                        Value::Char(c) => print!("'{c}'"),
+                        Value::Struct(_) => print!("struct"),
+                        Value::Union(label, value) => { print!("{label}: "); print_val(value) },
+                        Value::List(_) => print!("[...]"), // Nested lists shown as [...]
+                        Value::Void => print!("Void"),
+                    }
+                }
+                println!("]");
+            }
             Value::Void => println!("Void"),
         }
     }

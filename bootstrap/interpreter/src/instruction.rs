@@ -525,6 +525,9 @@ fn bin_op(
         (Value::String(lhs), Value::String(rhs), Operator::Concat) => {
             Value::String(format!("{}{}", lhs, rhs))
         }
+        (Value::String(lhs), Value::Char(rhs), Operator::Concat) => {
+            Value::String(format!("{}{}", lhs, rhs))
+        }
         (Value::String(lhs), Value::String(rhs), Operator::Eq) => Value::Bool(lhs == rhs),
         (Value::String(lhs), Value::String(rhs), Operator::Ne) => Value::Bool(lhs != rhs),
 
@@ -533,6 +536,18 @@ fn bin_op(
         (Value::Bool(lhs), Value::Bool(rhs), Operator::Or) => Value::Bool(*lhs || *rhs),
         (Value::Bool(lhs), Value::Bool(rhs), Operator::Eq) => Value::Bool(lhs == rhs),
         (Value::Bool(lhs), Value::Bool(rhs), Operator::Ne) => Value::Bool(lhs != rhs),
+
+        // List operations
+        (Value::List(lhs), Value::List(rhs), Operator::Concat) => {
+            let mut result = lhs.clone();
+            result.extend(rhs.clone());
+            Value::List(result)
+        }
+        (Value::List(lhs), rhs, Operator::Concat) => {
+            let mut result = lhs.clone();
+            result.push(rhs.clone());
+            Value::List(result)
+        }
 
         (Value::Union(lhs_label, lhs_value), Value::Union(rhs_label, rhs_value), Operator::Eq) => {
             Value::Bool(lhs_label == rhs_label && lhs_value == rhs_value)
