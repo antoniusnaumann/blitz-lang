@@ -32,6 +32,8 @@ union TokenKind {
 	str
 	num
 	ch
+	true_
+	false_
 
 	// Arithmetic
 	add

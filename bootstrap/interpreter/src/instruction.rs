@@ -384,6 +384,7 @@ pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> 
                 }
             }
             Expression::Char(ch) => Value::Char(ch),
+            Expression::BoolLit(b) => Value::Bool(b.value),
         },
     }
 }

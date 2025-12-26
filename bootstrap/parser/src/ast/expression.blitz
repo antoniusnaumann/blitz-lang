@@ -34,6 +34,7 @@ union Expression {
 	Group
 	String
 	Char
+	BoolLit
 	number: Float
 	block: Vec(Statement)
 	return_: Box(Expression)
@@ -144,6 +145,11 @@ struct List {
 struct Group {
 	expr Box(Expression)
 	span Span
+}
+
+struct BoolLit {
+	value Bool
+	span  Span
 }
 
 struct BinaryOp {

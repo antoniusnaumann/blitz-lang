@@ -77,6 +77,8 @@ impl<'a> Lexer<'a> {
                     "break" => Break,
                     "continue" => Continue,
                     "return" => Return,
+                    "true" => True,
+                    "false" => False,
                     _ => Ident,
                 }
             }

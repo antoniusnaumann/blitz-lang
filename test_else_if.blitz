@@ -1,0 +1,13 @@
+fn check() String {
+    if false {
+        "first"
+    } else if true {
+        "second"
+    } else {
+        "third"
+    }
+}
+
+fn main() Void {
+    let result = check()
+}

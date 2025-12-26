@@ -432,6 +432,8 @@ impl<'a> Parser<'a> {
             TokenKind::Str => self.parse_string_lit().into(),
             TokenKind::Ch => self.parse_char_lit().into(),
             TokenKind::Num => self.parse_num_lit().into(),
+            TokenKind::True => self.parse_bool_lit(true).into(),
+            TokenKind::False => self.parse_bool_lit(false).into(),
             kind => {
                 panic!(
                     "Illegal token kind {:#?} for expression!\n\n{}",
@@ -657,6 +659,16 @@ impl<'a> Parser<'a> {
         let Token { kind: _, span } = self.expect(TokenKind::Num);
 
         self.source[RangeInclusive::from(span)].parse().unwrap()
+    }
+
+    fn parse_bool_lit(&mut self, value: bool) -> BoolLit {
+        let Token { kind: _, span } = if value {
+            self.expect(TokenKind::True)
+        } else {
+            self.expect(TokenKind::False)
+        };
+
+        BoolLit { value, span }
     }
 
     fn parse_block(&mut self) -> Expression {

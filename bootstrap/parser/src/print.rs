@@ -173,6 +173,7 @@ impl Print for Expression {
             Expression::String(s) => s.clone(),
             Expression::Number(num) => format!("{num}"),
             Expression::Char(ch) => format!("'{}'", ch),
+            Expression::BoolLit(b) => format!("{}", b.value),
         }
     }
 }
