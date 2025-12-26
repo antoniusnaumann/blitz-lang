@@ -3,7 +3,7 @@ use std::env::args;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use interpreter::{Body, Builtin, ROOT, Registry, run};
+use interpreter::{Body, Builtin, ROOT, Registry, run_checked};
 use parser::{Ast, Definition, Parser};
 
 fn main() {
@@ -45,7 +45,7 @@ fn main() {
 
     println!("--- PROGRAM OUTPUT ---\n");
     for s in statements {
-        run(s.clone(), &mut vars, &reg);
+        run_checked(s.clone(), &mut vars, &reg);
     }
 }
 

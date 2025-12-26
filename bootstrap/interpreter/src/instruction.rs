@@ -4,62 +4,25 @@ use parser::{BinaryOp, Expression, Operator, Statement};
 
 use crate::registry::{Body, Registry, Value};
 
-/// Control flow enum to handle early returns, breaks, and continues
-enum ControlFlow {
-    None(Value),
-    Return(Value),
-    Break,
-    Continue,
-}
-
-impl ControlFlow {
-    fn value(self) -> Value {
-        match self {
-            ControlFlow::None(v) | ControlFlow::Return(v) => v,
-            _ => Value::Void,
-        }
-    }
-
-    fn is_return(&self) -> bool {
-        matches!(self, ControlFlow::Return(_))
-    }
-}
-
-fn run_with_control(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> ControlFlow {
-    match st {
-        Statement::Declaration(declaration) => {
-            let init = declaration
-                .init
-                .map(|e| run_expr_with_control(e, vars, reg))
-                .unwrap_or(ControlFlow::None(Value::Void));
-            
-            if init.is_return() {
-                return init;
-            }
-            
-            _ = vars
-                .insert(declaration.name.clone(), init.value())
-                .is_none_or(|_| panic!("Illegal shadowing of {}", declaration.name));
-            ControlFlow::None(Value::Void)
-        }
-        Statement::Expression(expression) => run_expr_with_control(expression, vars, reg),
-    }
-}
-
-fn run_expr_with_control(expression: Expression, vars: &mut HashMap<String, Value>, reg: &Registry) -> ControlFlow {
-    match expression {
-        Expression::Return(expr) => {
-            let value = run_internal(expr.deref().clone().into(), vars, reg);
-            ControlFlow::Return(value)
-        }
-        Expression::Continue => ControlFlow::Continue,
-        Expression::Break => ControlFlow::Break,
-        _ => ControlFlow::None(run_internal(Statement::Expression(expression), vars, reg)),
-    }
-}
-
 pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> Value {
     run_internal(st, vars, reg)
+}
+
+/// Top-level run that checks for escaped control flow
+pub fn run_checked(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> Value {
+    let result = run_internal(st, vars, reg);
+    
+    // Check if control flow escaped inappropriately
+    if let Value::Union(label, _) = &result {
+        match label.as_str() {
+            "__return__" => panic!("Return statement outside of function"),
+            "__break__" => panic!("Break statement outside of loop"),
+            "__continue__" => panic!("Continue statement outside of loop"),
+            _ => {}
+        }
+    }
+    
+    result
 }
 
 fn run_internal(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> Value {
@@ -69,6 +32,14 @@ fn run_internal(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry
                 .init
                 .map(|e| run(e.into(), vars, reg))
                 .unwrap_or(Value::Void);
+            
+            // Propagate control flow sentinels
+            if let Value::Union(label, _) = &init {
+                if label == "__return__" || label == "__break__" || label == "__continue__" {
+                    return init;
+                }
+            }
+            
             _ = vars
                 .insert(declaration.name.clone(), init)
                 .is_none_or(|_| panic!("Illegal shadowing of {}", declaration.name));
@@ -125,19 +96,14 @@ fn run_internal(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry
                     Body::Defined(statements) => {
                         let mut result = Value::Void;
                         for s in statements {
-                            let flow = run_with_control(s.clone(), &mut args, reg);
-                            match flow {
-                                ControlFlow::Return(v) => {
-                                    result = v;
-                                    break;
-                                }
-                                ControlFlow::None(v) => result = v,
-                                ControlFlow::Break | ControlFlow::Continue => {
-                                    panic!("Break/continue outside of loop")
+                            result = run(s.clone(), &mut args, reg);
+                            // Check for return sentinel
+                            if let Value::Union(label, val) = &result {
+                                if label == "__return__" {
+                                    return *val.clone();
                                 }
                             }
                         }
-
                         result
                     }
                 };
@@ -278,11 +244,27 @@ fn run_internal(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry
                 match iter {
                     Value::List(values) => {
                         let mut results = Vec::new();
+                        let mut should_break = false;
                         for val in values {
                             vars.insert(for_loop.elem.clone(), val);
                             let mut result = Value::Void;
                             for s in &for_loop.body {
                                 result = run(s.clone(), vars, reg);
+                                // Check for control flow sentinels
+                                if let Value::Union(label, _) = &result {
+                                    if label == "__break__" {
+                                        should_break = true;
+                                        break;
+                                    } else if label == "__continue__" {
+                                        break; // Continue to next iteration
+                                    } else if label == "__return__" {
+                                        // Propagate return up
+                                        return result;
+                                    }
+                                }
+                            }
+                            if should_break {
+                                break;
                             }
                             results.push(result)
                         }
@@ -302,8 +284,24 @@ fn run_internal(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry
                                 break;
                             }
                             let mut result = Value::Void;
+                            let mut should_break = false;
                             for s in &while_.body {
                                 result = run(s.clone(), vars, reg);
+                                // Check for control flow sentinels
+                                if let Value::Union(label, _) = &result {
+                                    if label == "__break__" {
+                                        should_break = true;
+                                        break;
+                                    } else if label == "__continue__" {
+                                        break; // Continue to next iteration
+                                    } else if label == "__return__" {
+                                        // Propagate return up
+                                        return result;
+                                    }
+                                }
+                            }
+                            if should_break {
+                                break;
                             }
                             results.push(result)
                         }
@@ -320,6 +318,12 @@ fn run_internal(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry
                             let mut result = Value::Void;
                             for s in if_.body {
                                 result = run(s.clone(), vars, reg);
+                                // Propagate control flow sentinels
+                                if let Value::Union(label, _) = &result {
+                                    if label == "__return__" || label == "__break__" || label == "__continue__" {
+                                        return result;
+                                    }
+                                }
                             }
                             Value::Union("some".into(), result.into())
                         } else {
@@ -437,19 +441,28 @@ fn run_internal(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry
                 for s in statements {
                     // TODO: proper scoping
                     result = run(s, vars, reg);
+                    // Propagate control flow sentinels
+                    if let Value::Union(label, _) = &result {
+                        if label == "__return__" || label == "__break__" || label == "__continue__" {
+                            return result;
+                        }
+                    }
                 }
                 result
             }
-            Expression::Return(_expression) => {
-                // Return expressions should not be evaluated at this level
-                // They should only occur within function bodies
-                panic!("Return statement outside of function body")
+            Expression::Return(expression) => {
+                // Return a special Union value that represents a return
+                // This will be caught by function boundaries
+                let value = run(expression.deref().clone().into(), vars, reg);
+                Value::Union("__return__".into(), Box::new(value))
             }
             Expression::Continue => {
-                panic!("Continue statement outside of loop")
+                // Return a special Union value for continue
+                Value::Union("__continue__".into(), Box::new(Value::Void))
             }
             Expression::Break => {
-                panic!("Break statement outside of loop")
+                // Return a special Union value for break  
+                Value::Union("__break__".into(), Box::new(Value::Void))
             }
             Expression::String(s) => Value::String(s),
             Expression::Number(num) => {
