@@ -1,4 +1,7 @@
-use std::{iter::Peekable, ops::RangeInclusive};
+use std::{
+    iter::Peekable,
+    ops::{Not, RangeInclusive},
+};
 
 use crate::*;
 
@@ -411,7 +414,23 @@ impl<'a> Parser<'a> {
             TokenKind::Switch => self.parse_switch().into(),
             TokenKind::Return => {
                 self.lexer.next(); // Consume the return token
-                Expression::Return(self.parse_expression_bp(0).into())
+                if self.lexer.peek().is_some_and(|t| {
+                    [
+                        TokenKind::Mut,
+                        TokenKind::Let,
+                        TokenKind::Semicolon,
+                        TokenKind::Rbrace,
+                        TokenKind::Rbracket,
+                        TokenKind::Rparen,
+                        TokenKind::Newline,
+                    ]
+                    .contains(&t.kind)
+                    .not()
+                }) {
+                    Expression::Return(self.parse_expression_bp(0).into())
+                } else {
+                    Expression::Return(Expression::Block(Vec::new()).into())
+                }
             }
             TokenKind::Continue => {
                 self.lexer.next(); // Consume the continue token
@@ -1341,10 +1360,10 @@ mod tests {
         match expr {
             Expression::BinaryOp(outer_else) => {
                 assert!(matches!(outer_else.op, Operator::Else));
-                
+
                 // Left side should be: if a { x }
                 assert!(matches!(*outer_else.left, Expression::If(_)));
-                
+
                 // Right side should be: (if b { y }) else { z }
                 match *outer_else.right {
                     Expression::BinaryOp(inner_else) => {
@@ -1370,13 +1389,13 @@ mod tests {
             Expression::BinaryOp(op1) => {
                 assert!(matches!(op1.op, Operator::Else));
                 assert!(matches!(*op1.left, Expression::If(_)));
-                
+
                 // First right side: if b {} else if c {} else {}
                 match *op1.right {
                     Expression::BinaryOp(op2) => {
                         assert!(matches!(op2.op, Operator::Else));
                         assert!(matches!(*op2.left, Expression::If(_)));
-                        
+
                         // Second right side: if c {} else {}
                         match *op2.right {
                             Expression::BinaryOp(op3) => {
@@ -1403,7 +1422,7 @@ mod tests {
             Expression::BinaryOp(outer_else) => {
                 assert!(matches!(outer_else.op, Operator::Else));
                 assert!(matches!(*outer_else.left, Expression::Ident(_)));
-                
+
                 // Right side should be: b else c (another else operator)
                 match *outer_else.right {
                     Expression::BinaryOp(inner_else) => {
@@ -1411,7 +1430,10 @@ mod tests {
                         assert!(matches!(*inner_else.left, Expression::Ident(_)));
                         assert!(matches!(*inner_else.right, Expression::Ident(_)));
                     }
-                    _ => panic!("Expected nested else for right-associativity, got {:?}", outer_else.right.print()),
+                    _ => panic!(
+                        "Expected nested else for right-associativity, got {:?}",
+                        outer_else.right.print()
+                    ),
                 }
             }
             _ => panic!("Expected else operator"),
@@ -1440,7 +1462,7 @@ mod tests {
         match expr {
             Expression::BinaryOp(outer) => {
                 assert!(matches!(outer.op, Operator::Concat));
-                
+
                 // Left side should be: a ++ b
                 match *outer.left {
                     Expression::BinaryOp(inner) => {
@@ -1450,7 +1472,7 @@ mod tests {
                     }
                     _ => panic!("Expected nested concat for left-associativity"),
                 }
-                
+
                 // Right side should be: c
                 assert!(matches!(*outer.right, Expression::Ident(_)));
             }
@@ -1466,7 +1488,7 @@ mod tests {
         match expr {
             Expression::BinaryOp(eq_op) => {
                 assert!(matches!(eq_op.op, Operator::Eq));
-                
+
                 // Left side should be: a ++ b
                 match *eq_op.left {
                     Expression::BinaryOp(concat_op) => {
@@ -1474,7 +1496,7 @@ mod tests {
                     }
                     _ => panic!("Expected concat on left side"),
                 }
-                
+
                 assert!(matches!(*eq_op.right, Expression::Ident(_)));
             }
             _ => panic!("Expected comparison operator"),
@@ -1489,7 +1511,7 @@ mod tests {
         match expr {
             Expression::BinaryOp(concat_op) => {
                 assert!(matches!(concat_op.op, Operator::Concat));
-                
+
                 // Left side should be: a + b
                 match *concat_op.left {
                     Expression::BinaryOp(add_op) => {
@@ -1497,7 +1519,7 @@ mod tests {
                     }
                     _ => panic!("Expected add on left side"),
                 }
-                
+
                 assert!(matches!(*concat_op.right, Expression::Ident(_)));
             }
             _ => panic!("Expected concat operator"),

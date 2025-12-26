@@ -1,5 +1,5 @@
 struct Lexer {
-	// TODO: this should become an iterator or be byte indexed string instead of a list of chars
+	// TODO: this should become an iterator or be byte indexed string that remembers char position instead of a list of chars
 	source List(Char)
 	errors List(Error)
 	index  Int
@@ -73,10 +73,12 @@ fn next(mut lexer Lexer) Option(Token) {
 			'\0' { none }
 			'"' {
 				lexer.mut.skip_str()
+					lexer.substr(start, lexer.index).print()
 				str
 			}
 			'\'' {
 				lexer.mut.skip_ch()
+					lexer.substr(start, lexer.index).print()
 				ch
 			}
 			_ {
@@ -165,10 +167,10 @@ fn skip_str(mut lexer Lexer) {
 			switch lexer.curr() {
 				'"' {
 					lexer.mut.advance()
-					break
+					return
 				}
 				'\\' { escape = true }
-				'\0' { break }
+				'\0' { return }
 				_ { }
 			}
 		}
@@ -185,10 +187,10 @@ fn skip_ch(mut lexer Lexer) {
 			switch lexer.curr() {
 				'\'' {
 					lexer.mut.advance()
-					break
+					return
 				}
 				'\\' { escape = true }
-				'\0' { break }
+				'\0' { return }
 				_ { }
 			}
 		}
