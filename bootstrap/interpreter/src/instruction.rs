@@ -100,7 +100,9 @@ fn run_internal(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry
                             // Check for return sentinel
                             if let Value::Union(label, val) = &result {
                                 if label == "__return__" {
-                                    return *val.clone();
+                                    // Extract the value but don't return yet - we need to propagate mutable params
+                                    result = *val.clone();
+                                    break;
                                 }
                             }
                         }
