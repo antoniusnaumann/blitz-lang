@@ -187,7 +187,7 @@ impl<'a> Lexer<'a> {
         loop {
             let (curr, ch) = self.peek_char();
             match ch {
-                'A'..='Z' | 'a'..='z' | '_' => {
+                'A'..='Z' | 'a'..='z' | '_' | '0'..='9' => {
                     end = curr;
                     _ = self.chars.next();
                 }
