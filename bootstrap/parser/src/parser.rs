@@ -279,6 +279,7 @@ impl<'a> Parser<'a> {
             TokenKind::Mul => Some(Operator::Mul),
             TokenKind::Div => Some(Operator::Div),
             TokenKind::Rem => Some(Operator::Rem),
+            TokenKind::Concat => Some(Operator::Concat),
             TokenKind::Eq => Some(Operator::Eq),
             TokenKind::Ne => Some(Operator::Ne),
             TokenKind::Lt => Some(Operator::Lt),
@@ -1405,6 +1406,106 @@ mod tests {
                 }
             }
             _ => panic!("Expected else operator"),
+        }
+    }
+
+    #[test]
+    fn test_concat_operator() {
+        let expr = parse_expr("a ++ b");
+
+        match expr {
+            Expression::BinaryOp(op) => {
+                assert!(matches!(op.op, Operator::Concat));
+                assert!(matches!(*op.left, Expression::Ident(_)));
+                assert!(matches!(*op.right, Expression::Ident(_)));
+            }
+            _ => panic!("Expected BinaryOp with concat"),
+        }
+    }
+
+    #[test]
+    fn test_concat_is_left_associative() {
+        // a ++ b ++ c should parse as (a ++ b) ++ c
+        let expr = parse_expr("a ++ b ++ c");
+
+        match expr {
+            Expression::BinaryOp(outer) => {
+                assert!(matches!(outer.op, Operator::Concat));
+                
+                // Left side should be: a ++ b
+                match *outer.left {
+                    Expression::BinaryOp(inner) => {
+                        assert!(matches!(inner.op, Operator::Concat));
+                        assert!(matches!(*inner.left, Expression::Ident(_)));
+                        assert!(matches!(*inner.right, Expression::Ident(_)));
+                    }
+                    _ => panic!("Expected nested concat for left-associativity"),
+                }
+                
+                // Right side should be: c
+                assert!(matches!(*outer.right, Expression::Ident(_)));
+            }
+            _ => panic!("Expected concat operator"),
+        }
+    }
+
+    #[test]
+    fn test_concat_precedence_over_comparison() {
+        // a ++ b == c should parse as (a ++ b) == c
+        let expr = parse_expr("a ++ b == c");
+
+        match expr {
+            Expression::BinaryOp(eq_op) => {
+                assert!(matches!(eq_op.op, Operator::Eq));
+                
+                // Left side should be: a ++ b
+                match *eq_op.left {
+                    Expression::BinaryOp(concat_op) => {
+                        assert!(matches!(concat_op.op, Operator::Concat));
+                    }
+                    _ => panic!("Expected concat on left side"),
+                }
+                
+                assert!(matches!(*eq_op.right, Expression::Ident(_)));
+            }
+            _ => panic!("Expected comparison operator"),
+        }
+    }
+
+    #[test]
+    fn test_add_precedence_over_concat() {
+        // a + b ++ c should parse as (a + b) ++ c
+        let expr = parse_expr("a + b ++ c");
+
+        match expr {
+            Expression::BinaryOp(concat_op) => {
+                assert!(matches!(concat_op.op, Operator::Concat));
+                
+                // Left side should be: a + b
+                match *concat_op.left {
+                    Expression::BinaryOp(add_op) => {
+                        assert!(matches!(add_op.op, Operator::Add));
+                    }
+                    _ => panic!("Expected add on left side"),
+                }
+                
+                assert!(matches!(*concat_op.right, Expression::Ident(_)));
+            }
+            _ => panic!("Expected concat operator"),
+        }
+    }
+
+    #[test]
+    fn test_concat_with_string_literals() {
+        let expr = parse_expr("\"hello\" ++ \"world\"");
+
+        match expr {
+            Expression::BinaryOp(op) => {
+                assert!(matches!(op.op, Operator::Concat));
+                assert!(matches!(*op.left, Expression::String(_)));
+                assert!(matches!(*op.right, Expression::String(_)));
+            }
+            _ => panic!("Expected BinaryOp with concat"),
         }
     }
 }

@@ -94,7 +94,15 @@ impl<'a> Lexer<'a> {
                 end = self.skip_num();
                 Num
             }
-            '+' => self.up(Add),
+            '+' => {
+                _ = self.chars.next();
+                let (pos, ch) = self.peek_char();
+                end = pos;
+                match ch {
+                    '+' => self.up(Concat),
+                    _ => Add,
+                }
+            }
             '-' => self.up(Sub),
             '*' => self.up(Mul),
             '/' => {

@@ -43,6 +43,9 @@ union TokenKind {
 	rem
 	assign
 
+	// Collection
+	concat
+
 	// Logical
 	and
 	or
