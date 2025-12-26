@@ -267,7 +267,7 @@ pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> 
                     run(bin.right.deref().clone().into(), vars, reg)
                 } else {
                     let Value::Union(label, val) = lhs else {
-                        unreachable!()
+                        panic!("Else operator left side should be an Option (some/none), but got: {:?}", lhs);
                     };
                     assert_eq!(label, "some");
                     *val

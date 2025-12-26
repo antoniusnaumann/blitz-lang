@@ -6,7 +6,9 @@ impl Operator {
     /// Returns (left_binding_power, right_binding_power) for infix operators.
     pub fn precedence(&self) -> (u8, u8) {
         match self {
-            Operator::Else => (2, 3),
+            // Right-associative: use (n, n) for same-level recursion
+            // This allows `a else b else c` to parse as `a else (b else c)`
+            Operator::Else => (2, 2),
             Operator::Or => (7, 8),
             Operator::And => (10, 11),
             // [Space reserved for bitwise OR: |  (~14-15)]

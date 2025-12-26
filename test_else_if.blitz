@@ -1,13 +1,18 @@
-fn check() String {
-    if false {
-        "first"
-    } else if true {
-        "second"
+fn check_with_variable(x Int) String {
+    if x == 1 {
+        "one"
+    } else if x == 2 {
+        "two"
+    } else if x == 3 {
+        "three"
     } else {
-        "third"
+        "other"
     }
 }
 
 fn main() Void {
-    let result = check()
+    let result_one = check_with_variable(1)
+    let result_two = check_with_variable(2)
+    let result_three = check_with_variable(3)
+    let result_other = check_with_variable(99)
 }
