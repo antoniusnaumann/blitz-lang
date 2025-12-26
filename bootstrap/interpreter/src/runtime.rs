@@ -35,6 +35,7 @@ pub trait Builtin {
 impl Builtin for Registry {
     fn add_builtins(&mut self) {
         register_builtin!(self, print, [("s", "T", false)], "Void");
+        register_builtin!(self, debug, [("s", "T", false)], "Void");
         register_builtin!(self, read, [("path", "String", false)], "String");
         register_builtin!(self, panic, [("msg", "String", false)], "Never");
         register_builtin!(self, panic, [("msg", "String", false)], "Never");
@@ -72,6 +73,12 @@ make_builtin!(print(s) {
         }
     }
     print_val(s);
+
+    Value::Void
+});
+
+make_builtin!(debug(s) {
+    dbg!(s);
 
     Value::Void
 });

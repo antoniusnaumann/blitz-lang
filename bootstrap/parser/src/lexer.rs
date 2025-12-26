@@ -198,17 +198,17 @@ impl<'a> Lexer<'a> {
                     escape = true;
                     _ = self.chars.next();
                 }
-                '\\' if escape => {
-                    escape = false;
-                    _ = self.chars.next();
-                }
                 '"' if !escape => {
                     _ = self.chars.next();
                     return curr;
                 }
-                ch if escape => {
-                    panic!("ERROR: Illegal escape sequence: \\{ch}")
-                }
+                ch if escape => match ch {
+                    'n' | 'r' | 't' | '\'' | '\\' | '0' => {
+                        _ = self.chars.next();
+                        escape = false;
+                    }
+                    _ => panic!("ERROR: Illegal escape sequence: \\{ch}"),
+                },
                 _ => {
                     _ = self.chars.next();
                 }
@@ -227,17 +227,17 @@ impl<'a> Lexer<'a> {
                     escape = true;
                     _ = self.chars.next();
                 }
-                '\\' if escape => {
-                    escape = false;
-                    _ = self.chars.next();
-                }
                 '\'' if !escape => {
                     _ = self.chars.next();
                     return curr;
                 }
-                ch if escape => {
-                    panic!("ERROR: Illegal escape sequence: \\{ch}")
-                }
+                ch if escape => match ch {
+                    'n' | 'r' | 't' | '\'' | '\\' | '0' => {
+                        _ = self.chars.next();
+                        escape = false;
+                    }
+                    _ => panic!("ERROR: Illegal escape sequence: \\{ch}"),
+                },
                 _ => {
                     _ = self.chars.next();
                 }

@@ -464,33 +464,33 @@ fn bin_op(
             Value::Bool(lhs_label != rhs_label || lhs_value != rhs_value)
         }
 
-        (Value::Union(_, u), Value::Struct(s), op @ (Operator::Ne | Operator::Eq))
-        | (Value::Struct(s), Value::Union(_, u), op @ (Operator::Ne | Operator::Eq)) => {
-            match u.clone().deref() {
-                Value::Struct(fields) => {
-                    if fields.len() != s.len() {
-                        Value::Bool(if op == Operator::Ne { true } else { false })
-                    } else {
-                        let mut same = true;
-                        for (name, field) in fields {
-                            if let Some(other) = s.get(name) {
-                                let Value::Bool(eq) =
-                                    bin_op(Operator::Eq, vars, reg, &field, other)
-                                else {
-                                    unreachable!()
-                                };
-                                if !eq {
-                                    same = false;
-                                    break;
-                                }
-                            } else {
-                                same = false;
-                                break;
-                            }
+        (Value::Struct(lhs), Value::Struct(rhs), op @ (Operator::Ne | Operator::Eq)) => {
+            if lhs.len() != rhs.len() {
+                Value::Bool(if op == Operator::Ne { true } else { false })
+            } else {
+                let mut same = true;
+                for (name, field) in lhs {
+                    if let Some(other) = rhs.get(name) {
+                        let Value::Bool(eq) = bin_op(Operator::Eq, vars, reg, &field, other) else {
+                            unreachable!()
+                        };
+                        if !eq {
+                            same = false;
+                            break;
                         }
-                        Value::Bool(same)
+                    } else {
+                        same = false;
+                        break;
                     }
                 }
+                Value::Bool(same)
+            }
+        }
+
+        (Value::Union(_, u), s @ Value::Struct(_), op @ (Operator::Ne | Operator::Eq))
+        | (s @ Value::Struct(_), Value::Union(_, u), op @ (Operator::Ne | Operator::Eq)) => {
+            match u.clone().deref() {
+                inner @ Value::Struct(_) => bin_op(op, vars, reg, inner, s),
                 _ => Value::Bool(if op == Operator::Ne { true } else { false }),
             }
         }

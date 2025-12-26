@@ -174,7 +174,11 @@ impl<'a> Parser<'a> {
         let ty = self.expect_type();
         self.consume(TokenKind::Comma);
 
-        Field { name, r#type: ty, mutable }
+        Field {
+            name,
+            r#type: ty,
+            mutable,
+        }
     }
 
     fn parse_union(&mut self) -> Union {
@@ -307,7 +311,7 @@ impl<'a> Parser<'a> {
             }
 
             let token_kind = peek.unwrap().kind.clone();
-            
+
             // Special handling for index expressions (postfix [])
             if token_kind == TokenKind::Lbracket {
                 let _bracket = self.lexer.next().unwrap();
@@ -315,7 +319,7 @@ impl<'a> Parser<'a> {
                 let index = self.parse_expression_bp(0);
                 let end_bracket = self.expect(TokenKind::Rbracket);
                 let span = lhs.span().merge(&end_bracket.span);
-                
+
                 lhs = Index {
                     target: Box::new(lhs),
                     index: Box::new(index),
@@ -324,7 +328,7 @@ impl<'a> Parser<'a> {
                 .into();
                 continue;
             }
-            
+
             let op = match self.token_to_infix_op(&token_kind) {
                 Some(op) => op,
                 None => break,
@@ -554,41 +558,18 @@ impl<'a> Parser<'a> {
                     }
                 }
                 TokenKind::Type => self.expect_type().into(),
-                TokenKind::Str => {
-                    let token = self.lexer.next().unwrap();
-                    StringLit {
-                        value: self.source[(token.span.start + 1)..(token.span.end - 1)].into(),
-                    }
-                    .into()
+                TokenKind::Str => StringLit {
+                    value: self.parse_string_lit(),
                 }
-                TokenKind::Ch => {
-                    let token = self.lexer.next().unwrap();
-                    // Char spans include the single quotes: 'a'
-                    // Extract content between quotes
-                    let full_content = &self.source[RangeInclusive::from(token.span.clone())];
-                    let char_content = &full_content[1..(full_content.len() - 1)];
-                    let value = if char_content.starts_with('\\') {
-                        // Handle escape sequences
-                        match &char_content[1..] {
-                            "n" => '\n',
-                            "t" => '\t',
-                            "r" => '\r',
-                            "\\" => '\\',
-                            "'" => '\'',
-                            _ => panic!("Unknown escape sequence: {}", char_content),
-                        }
-                    } else {
-                        char_content.chars().next().unwrap()
-                    };
-                    CharLit { value }.into()
+                .into(),
+                TokenKind::Ch => CharLit {
+                    value: self.parse_char_lit(),
                 }
-                TokenKind::Num => {
-                    let token = self.lexer.next().unwrap();
-                    NumberLit {
-                        value: self.source[RangeInclusive::from(token.span)].parse().unwrap(),
-                    }
-                    .into()
+                .into(),
+                TokenKind::Num => NumberLit {
+                    value: self.parse_num_lit().into(),
                 }
+                .into(),
                 _ => panic!(
                     "Unexpected token in switch case: {:#?}\n\n{}",
                     kind,
@@ -649,17 +630,27 @@ impl<'a> Parser<'a> {
     fn parse_char_lit(&mut self) -> Char {
         let Token { kind: _, span } = self.expect(TokenKind::Ch);
 
-        let chars: Vec<_> = self.source[(span.start + 1)..(span.end)]
-            .trim_start_matches('\\')
-            .chars()
-            .collect();
-        assert_eq!(
-            chars.len(),
-            1,
-            "char literal must contain exactly one character, has: {:#?}",
-            chars
-        );
-        chars[0]
+        let chars: Vec<_> = self.source[(span.start + 1)..(span.end)].chars().collect();
+        assert!(!chars.is_empty(), "char cannot be empty");
+
+        if chars.len() == 1 {
+            chars[0]
+        } else if chars.len() == 2 && chars[0] == '\\' {
+            match chars[1] {
+                'n' => '\n',
+                'r' => '\r',
+                't' => '\t',
+                '0' => '\0',
+                '\\' => '\\',
+                '\'' => '\'',
+                ch => panic!("Invalid escape sequence \\{ch}"),
+            }
+        } else {
+            panic!(
+                "invalid char {}",
+                &self.source[(span.start + 1)..(span.end)]
+            )
+        }
     }
 
     fn parse_num_lit(&mut self) -> Float {
