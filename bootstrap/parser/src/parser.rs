@@ -658,7 +658,7 @@ impl<'a> Parser<'a> {
         self.source[(span.start + 1)..(span.end)].into()
     }
 
-    fn parse_char_lit(&mut self) -> Char {
+    fn parse_char_lit(&mut self) -> Rune {
         let Token { kind: _, span } = self.expect(TokenKind::Ch);
 
         let chars: Vec<_> = self.source[(span.start + 1)..(span.end)].chars().collect();

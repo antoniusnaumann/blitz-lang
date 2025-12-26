@@ -12,7 +12,7 @@ pub fn blitz_types(_: TokenStream) -> TokenStream {
         type Int = usize;
         type Float = f64;
         type Bool = bool;
-        type Char = char;
+        type Rune = char;
     });
 
     for file in files {

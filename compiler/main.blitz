@@ -8,4 +8,6 @@ fn main() {
 		print(token.kind)
 		token = lexer.mut.next()
 	}
+
+	todo("Implement the rest")
 }

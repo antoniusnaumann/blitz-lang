@@ -19,7 +19,7 @@ pub enum Type {
     Int,
     Float,
     Bool,
-    Char,
+    Rune,
     Struct(HashMap<String, Type>),
     Union(HashMap<String, Type>),
     List(Box<Type>),
@@ -53,7 +53,7 @@ pub enum Value {
     Int(isize),
     Float(f64),
     Bool(bool),
-    Char(char),
+    Rune(char),
     Struct(HashMap<String, Value>),
     Union(String, Box<Value>),
     List(Vec<Value>),
@@ -70,7 +70,7 @@ impl Value {
             (V::Int(_), T::Int) => true,
             (V::Float(_), T::Float) => true,
             (V::Bool(_), T::Bool) => true,
-            (V::Char(_), T::Char) => true,
+            (V::Rune(_), T::Rune) => true,
             (V::Struct(fields), T::Struct(members)) => fields
                 .iter()
                 .all(|(name, val)| members.get(name).is_some_and(|m| val.matches(m))),
@@ -228,7 +228,7 @@ pub(crate) fn resolve_type(
         "Int" => Type::Int,
         "Float" => Type::Float,
         "String" => Type::String,
-        "Char" => Type::Char,
+        "Rune" => Type::Rune,
         "Bool" => Type::Bool,
         "List" => Type::List(Box::new(Type::Any)),
         _ => match &tys.get(&name) {

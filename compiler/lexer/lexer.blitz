@@ -1,6 +1,6 @@
 struct Lexer {
 	// TODO: this should become an iterator or be byte indexed string that remembers char position instead of a list of chars
-	source List(Char)
+	source List(Rune)
 	errors List(Error)
 	index  Int
 }
@@ -73,12 +73,14 @@ fn next(mut lexer Lexer) Option(Token) {
 			'\0' { none }
 			'"' {
 				lexer.mut.skip_str()
-					lexer.substr(start, lexer.index).print()
+				// TODO: remove
+				lexer.substr(start, lexer.index).print()
 				str
 			}
 			'\'' {
 				lexer.mut.skip_ch()
-					lexer.substr(start, lexer.index).print()
+				// TODO: remove
+				lexer.substr(start, lexer.index).print()
 				ch
 			}
 			_ {
@@ -110,7 +112,7 @@ fn advance(mut lexer Lexer) {
 	lexer.index = lexer.index + 1
 }
 
-fn curr(mut lexer Lexer) Char {
+fn curr(mut lexer Lexer) Rune {
 	if lexer.index < lexer.source.len() {
 		lexer.source[lexer.index]
 	} else {
@@ -118,11 +120,11 @@ fn curr(mut lexer Lexer) Char {
 	}
 }
 
-fn peek(lexer Lexer) Char {
+fn peek(lexer Lexer) Rune {
 	lexer.source[lexer.index + 1]
 }
 
-fn peek(lexer Lexer, n Int) Char {
+fn peek(lexer Lexer, n Int) Rune {
 	lexer.source[lexer.index + n]
 }
 
@@ -167,10 +169,10 @@ fn skip_str(mut lexer Lexer) {
 			switch lexer.curr() {
 				'"' {
 					lexer.mut.advance()
-					return
+					break
 				}
 				'\\' { escape = true }
-				'\0' { return }
+				'\0' { break }
 				_ { }
 			}
 		}
@@ -187,10 +189,10 @@ fn skip_ch(mut lexer Lexer) {
 			switch lexer.curr() {
 				'\'' {
 					lexer.mut.advance()
-					return
+					break
 				}
 				'\\' { escape = true }
-				'\0' { return }
+				'\0' { break }
 				_ { }
 			}
 		}

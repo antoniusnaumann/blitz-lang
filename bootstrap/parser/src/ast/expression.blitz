@@ -33,7 +33,7 @@ union Expression {
 	List
 	Group
 	String
-	Char
+	Rune
 	BoolLit
 	number: Float
 	block: Vec(Statement)
@@ -127,7 +127,7 @@ struct StringLit {
 }
 
 struct CharLit {
-	value Char
+	value Rune
 }
 
 struct NumberLit {

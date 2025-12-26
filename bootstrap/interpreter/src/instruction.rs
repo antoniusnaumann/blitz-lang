@@ -11,7 +11,7 @@ pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> 
 /// Top-level run that checks for escaped control flow
 pub fn run_checked(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> Value {
     let result = run_internal(st, vars, reg);
-    
+
     // Check if control flow escaped inappropriately
     if let Value::Union(label, _) = &result {
         match label.as_str() {
@@ -21,7 +21,7 @@ pub fn run_checked(st: Statement, vars: &mut HashMap<String, Value>, reg: &Regis
             _ => {}
         }
     }
-    
+
     result
 }
 
@@ -32,14 +32,14 @@ fn run_internal(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry
                 .init
                 .map(|e| run(e.into(), vars, reg))
                 .unwrap_or(Value::Void);
-            
+
             // Propagate control flow sentinels
             if let Value::Union(label, _) = &init {
                 if label == "__return__" || label == "__break__" || label == "__continue__" {
                     return init;
                 }
             }
-            
+
             _ = vars
                 .insert(declaration.name.clone(), init)
                 .is_none_or(|_| panic!("Illegal shadowing of {}", declaration.name));
@@ -145,7 +145,7 @@ fn run_internal(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry
                         let idx = idx as usize;
                         let chars: Vec<char> = s.chars().collect();
                         if idx < chars.len() {
-                            Value::Char(chars[idx])
+                            Value::Rune(chars[idx])
                         } else {
                             panic!("Index out of bounds: {} >= {}", idx, chars.len())
                         }
@@ -320,7 +320,10 @@ fn run_internal(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry
                                 result = run(s.clone(), vars, reg);
                                 // Propagate control flow sentinels
                                 if let Value::Union(label, _) = &result {
-                                    if label == "__return__" || label == "__break__" || label == "__continue__" {
+                                    if label == "__return__"
+                                        || label == "__break__"
+                                        || label == "__continue__"
+                                    {
                                         return result;
                                     }
                                 }
@@ -339,7 +342,10 @@ fn run_internal(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry
                     run(bin.right.deref().clone().into(), vars, reg)
                 } else {
                     let Value::Union(label, val) = lhs else {
-                        panic!("Else operator left side should be an Option (some/none), but got: {:?}", lhs);
+                        panic!(
+                            "Else operator left side should be an Option (some/none), but got: {:?}",
+                            lhs
+                        );
                     };
                     assert_eq!(label, "some");
                     *val
@@ -378,8 +384,8 @@ fn run_internal(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry
                             }
                         }
                         parser::SwitchLabel::CharLit(lit) => {
-                            // Char literal matching
-                            if let Value::Char(c) = &cond_value {
+                            // Rune literal matching
+                            if let Value::Rune(c) = &cond_value {
                                 lit.value == *c
                             } else {
                                 false
@@ -443,7 +449,8 @@ fn run_internal(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry
                     result = run(s, vars, reg);
                     // Propagate control flow sentinels
                     if let Value::Union(label, _) = &result {
-                        if label == "__return__" || label == "__break__" || label == "__continue__" {
+                        if label == "__return__" || label == "__break__" || label == "__continue__"
+                        {
                             return result;
                         }
                     }
@@ -461,7 +468,7 @@ fn run_internal(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry
                 Value::Union("__continue__".into(), Box::new(Value::Void))
             }
             Expression::Break => {
-                // Return a special Union value for break  
+                // Return a special Union value for break
                 Value::Union("__break__".into(), Box::new(Value::Void))
             }
             Expression::String(s) => Value::String(s),
@@ -472,7 +479,7 @@ fn run_internal(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry
                     Value::Float(num)
                 }
             }
-            Expression::Char(ch) => Value::Char(ch),
+            Expression::Rune(ch) => Value::Rune(ch),
             Expression::BoolLit(b) => Value::Bool(b.value),
         },
     }
@@ -523,13 +530,13 @@ fn bin_op(
         (Value::Float(lhs), Value::Float(rhs), Operator::Lt) => Value::Bool(lhs < rhs),
         (Value::Float(lhs), Value::Float(rhs), Operator::Le) => Value::Bool(lhs <= rhs),
 
-        // Char comparison operations
-        (Value::Char(lhs), Value::Char(rhs), Operator::Eq) => Value::Bool(lhs == rhs),
-        (Value::Char(lhs), Value::Char(rhs), Operator::Ne) => Value::Bool(lhs != rhs),
-        (Value::Char(lhs), Value::Char(rhs), Operator::Gt) => Value::Bool(lhs > rhs),
-        (Value::Char(lhs), Value::Char(rhs), Operator::Ge) => Value::Bool(lhs >= rhs),
-        (Value::Char(lhs), Value::Char(rhs), Operator::Lt) => Value::Bool(lhs < rhs),
-        (Value::Char(lhs), Value::Char(rhs), Operator::Le) => Value::Bool(lhs <= rhs),
+        // Rune comparison operations
+        (Value::Rune(lhs), Value::Rune(rhs), Operator::Eq) => Value::Bool(lhs == rhs),
+        (Value::Rune(lhs), Value::Rune(rhs), Operator::Ne) => Value::Bool(lhs != rhs),
+        (Value::Rune(lhs), Value::Rune(rhs), Operator::Gt) => Value::Bool(lhs > rhs),
+        (Value::Rune(lhs), Value::Rune(rhs), Operator::Ge) => Value::Bool(lhs >= rhs),
+        (Value::Rune(lhs), Value::Rune(rhs), Operator::Lt) => Value::Bool(lhs < rhs),
+        (Value::Rune(lhs), Value::Rune(rhs), Operator::Le) => Value::Bool(lhs <= rhs),
 
         // String operations
         (Value::String(_lhs), Value::String(_rhs), Operator::Add) => {
@@ -538,7 +545,7 @@ fn bin_op(
         (Value::String(lhs), Value::String(rhs), Operator::Concat) => {
             Value::String(format!("{}{}", lhs, rhs))
         }
-        (Value::String(lhs), Value::Char(rhs), Operator::Concat) => {
+        (Value::String(lhs), Value::Rune(rhs), Operator::Concat) => {
             Value::String(format!("{}{}", lhs, rhs))
         }
         (Value::String(lhs), Value::String(rhs), Operator::Eq) => Value::Bool(lhs == rhs),

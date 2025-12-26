@@ -159,7 +159,7 @@ impl Expression {
             Expression::Break => Span { start: 0, end: 0 },
             Expression::String(_s) => Span { start: 0, end: 0 },
             Expression::Number(_num) => Span { start: 0, end: 0 },
-            Expression::Char(_ch) => Span { start: 0, end: 0 },
+            Expression::Rune(_ch) => Span { start: 0, end: 0 },
             Expression::BoolLit(b) => b.span.clone(),
         }
     }

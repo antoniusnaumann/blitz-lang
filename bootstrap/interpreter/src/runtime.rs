@@ -39,7 +39,7 @@ impl Builtin for Registry {
         register_builtin!(self, read, [("path", "String", false)], "String");
         register_builtin!(self, panic, [("msg", "String", false)], "Never");
         register_builtin!(self, todo, [("msg", "String", false)], "Never");
-        register_builtin!(self, chars, [("s", "String", false)], "List(Char)");
+        register_builtin!(self, chars, [("s", "String", false)], "List(Rune)");
         register_builtin!(self, len, [("arr", "List", false)], "Int");
     }
 }
@@ -50,7 +50,7 @@ fn as_str(value: &Value) -> String {
         Value::Int(i) => format!("{i}"),
         Value::Float(f) => format!("{f}"),
         Value::Bool(b) => format!("{b}"),
-        Value::Char(c) => format!("{c}"),
+        Value::Rune(c) => format!("{c}"),
         Value::Struct(_hash_map) => todo!(),
         Value::Union(label, value) => format!("{label}: {}", as_str(value)),
         Value::List(values) => {
@@ -64,7 +64,7 @@ fn as_str(value: &Value) -> String {
                     Value::Int(i) => format!("{i}"),
                     Value::Float(f) => format!("{f}"),
                     Value::Bool(b) => format!("{b}"),
-                    Value::Char(c) => format!("'{c}'"),
+                    Value::Rune(c) => format!("'{c}'"),
                     Value::Struct(_) => "struct".to_string(),
                     Value::Union(label, v) => format!("{label}: {}", as_str(v)),
                     Value::List(_) => "[...]".to_string(),
@@ -85,7 +85,7 @@ make_builtin!(print(s) {
             Value::Int(i) => println!("{i}"),
             Value::Float(f) => println!("{f}"),
             Value::Bool(b) => println!("{b}"),
-            Value::Char(c) => println!("{c}"),
+            Value::Rune(c) => println!("{c}"),
             Value::Struct(_hash_map) => println!("struct"),
             Value::Union(label, value) => { print!("{label}: "); print_val(value) },
             Value::List(values) => {
@@ -99,7 +99,7 @@ make_builtin!(print(s) {
                         Value::Int(i) => print!("{i}"),
                         Value::Float(f) => print!("{f}"),
                         Value::Bool(b) => print!("{b}"),
-                        Value::Char(c) => print!("'{c}'"),
+                        Value::Rune(c) => print!("'{c}'"),
                         Value::Struct(_) => print!("struct"),
                         Value::Union(label, value) => { print!("{label}: "); print_val(value) },
                         Value::List(_) => print!("[...]"), // Nested lists shown as [...]
@@ -149,7 +149,7 @@ make_builtin!(todo(msg) {
 
 make_builtin!(chars(s) {
     match s {
-        Value::String(s) => Value::List(s.chars().map(|c| Value::Char(c)).collect()),
+        Value::String(s) => Value::List(s.chars().map(|c| Value::Rune(c)).collect()),
         _ => panic!("'chars' requires String as args")
     }
 });
