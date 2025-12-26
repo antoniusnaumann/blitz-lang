@@ -4,7 +4,65 @@ use parser::{BinaryOp, Expression, Operator, Statement};
 
 use crate::registry::{Body, Registry, Value};
 
+/// Control flow enum to handle early returns, breaks, and continues
+enum ControlFlow {
+    None(Value),
+    Return(Value),
+    Break,
+    Continue,
+}
+
+impl ControlFlow {
+    fn value(self) -> Value {
+        match self {
+            ControlFlow::None(v) | ControlFlow::Return(v) => v,
+            _ => Value::Void,
+        }
+    }
+
+    fn is_return(&self) -> bool {
+        matches!(self, ControlFlow::Return(_))
+    }
+}
+
+fn run_with_control(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> ControlFlow {
+    match st {
+        Statement::Declaration(declaration) => {
+            let init = declaration
+                .init
+                .map(|e| run_expr_with_control(e, vars, reg))
+                .unwrap_or(ControlFlow::None(Value::Void));
+            
+            if init.is_return() {
+                return init;
+            }
+            
+            _ = vars
+                .insert(declaration.name.clone(), init.value())
+                .is_none_or(|_| panic!("Illegal shadowing of {}", declaration.name));
+            ControlFlow::None(Value::Void)
+        }
+        Statement::Expression(expression) => run_expr_with_control(expression, vars, reg),
+    }
+}
+
+fn run_expr_with_control(expression: Expression, vars: &mut HashMap<String, Value>, reg: &Registry) -> ControlFlow {
+    match expression {
+        Expression::Return(expr) => {
+            let value = run_internal(expr.deref().clone().into(), vars, reg);
+            ControlFlow::Return(value)
+        }
+        Expression::Continue => ControlFlow::Continue,
+        Expression::Break => ControlFlow::Break,
+        _ => ControlFlow::None(run_internal(Statement::Expression(expression), vars, reg)),
+    }
+}
+
 pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> Value {
+    run_internal(st, vars, reg)
+}
+
+fn run_internal(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> Value {
     match st {
         Statement::Declaration(declaration) => {
             let init = declaration
@@ -67,7 +125,17 @@ pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> 
                     Body::Defined(statements) => {
                         let mut result = Value::Void;
                         for s in statements {
-                            result = run(s.clone(), &mut args, reg);
+                            let flow = run_with_control(s.clone(), &mut args, reg);
+                            match flow {
+                                ControlFlow::Return(v) => {
+                                    result = v;
+                                    break;
+                                }
+                                ControlFlow::None(v) => result = v,
+                                ControlFlow::Break | ControlFlow::Continue => {
+                                    panic!("Break/continue outside of loop")
+                                }
+                            }
                         }
 
                         result
@@ -372,9 +440,17 @@ pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> 
                 }
                 result
             }
-            Expression::Return(_expression) => todo!(),
-            Expression::Continue => todo!(),
-            Expression::Break => todo!(),
+            Expression::Return(_expression) => {
+                // Return expressions should not be evaluated at this level
+                // They should only occur within function bodies
+                panic!("Return statement outside of function body")
+            }
+            Expression::Continue => {
+                panic!("Continue statement outside of loop")
+            }
+            Expression::Break => {
+                panic!("Break statement outside of loop")
+            }
             Expression::String(s) => Value::String(s),
             Expression::Number(num) => {
                 if num.round() == num {

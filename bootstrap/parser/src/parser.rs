@@ -409,9 +409,18 @@ impl<'a> Parser<'a> {
             TokenKind::While => self.parse_while().into(),
             TokenKind::If => self.parse_if().into(),
             TokenKind::Switch => self.parse_switch().into(),
-            TokenKind::Return => Expression::Return(self.parse_expression_bp(0).into()),
-            TokenKind::Continue => Expression::Continue,
-            TokenKind::Break => Expression::Break,
+            TokenKind::Return => {
+                self.lexer.next(); // Consume the return token
+                Expression::Return(self.parse_expression_bp(0).into())
+            }
+            TokenKind::Continue => {
+                self.lexer.next(); // Consume the continue token
+                Expression::Continue
+            }
+            TokenKind::Break => {
+                self.lexer.next(); // Consume the break token
+                Expression::Break
+            }
             TokenKind::Lbrace => self.parse_block().into(),
             TokenKind::Ident => {
                 let span = token.span;
