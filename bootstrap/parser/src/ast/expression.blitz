@@ -6,7 +6,7 @@ union Statement {
 struct Declaration {
 	name   String
 	type   Type
-	is_mut bool
+	is_mut Bool
 	init   Option(Expression)
 	span   Span
 }
