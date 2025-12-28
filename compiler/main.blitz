@@ -1,6 +1,7 @@
 fn main() {
+	// unwrapping here since we know the file exists
 	let content = read("main.blitz").unwrap()
-	print(content)
+	print(content) // should print the content of this file
 
 	mut lexer = new_lexer(content)
 	mut token = lexer.mut.next()

@@ -29,7 +29,12 @@ fn next(mut lexer Lexer) Option(Token) {
 			'*' { mul }
 			'/' {
 				switch lexer.curr() {
-					'/' { panic("Comments not implemented yet") }
+					'/' {
+						lexer.mut.skip_comment()
+						// TODO: remove
+						lexer.substr(start, lexer.index).print()
+						comment
+					}
 					_ { div }
 				}
 			}
@@ -144,6 +149,11 @@ fn is_ident_char(lexer Lexer) Bool {
 	(ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z') or (ch >= '0' and ch <= '9') or ch == '_'
 }
 
+fn is_newline(lexer Lexer) Bool {
+	let ch = lexer.curr()
+	ch == '\n' or ch == '\r'
+}
+
 fn skip_space(mut lexer Lexer) {
 	while lexer.curr() == ' ' or lexer.curr() == '\t' {
 		lexer.mut.advance()
@@ -156,8 +166,14 @@ fn skip_ident(mut lexer Lexer) {
 	}
 }
 
+fn skip_comment(mut lexer Lexer) {
+	while !lexer.is_newline() {
+		lexer.mut.advance()		
+	}
+}
+
 fn skip_str(mut lexer Lexer) {
-	mut escape = false
+	mut escape = false	
 	while true {
 		if escape {
 			switch lexer.curr() {
