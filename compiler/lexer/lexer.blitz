@@ -92,8 +92,29 @@ fn next(mut lexer Lexer) Option(Token) {
 				if ch >= 'a' and ch <= 'z' {
 					lexer.mut.skip_ident()
 					// TODO: remove
-					lexer.substr(start, lexer.index).print()
-					ident
+					let name = lexer.substr(start, lexer.index).print()
+					switch name {
+						"struct" { struct_ }
+						"union" { union_ }
+						"actor" { actor_ }
+						"alias" { alias_ }
+						"fn" { fn_ }
+						"pub" { pub_ }
+						"let" { let_ }
+						"mut" { mut_ }
+						"for" { for_ }
+						"while" { while_ }
+						"if" { if_ }
+						"else" { else_ }
+						"switch" { switch_ }
+						"test" { test_ }
+						"break" { break_ }
+						"continue" { continue_ }
+						"return" { return_ }
+						"and" { and_ }
+						"or" { or_ }
+						_ { ident }
+					}
 				} else if ch >= 'A' and ch <= 'Z' {
 					lexer.mut.skip_ident()
 					// TODO: remove
