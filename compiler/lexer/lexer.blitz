@@ -107,12 +107,19 @@ fn next(mut lexer Lexer) Option(Token) {
 						"if" { if_ }
 						"else" { else_ }
 						"switch" { switch_ }
+						"as" { as_ }
 						"test" { test_ }
+						"assert" { assert_ }
 						"break" { break_ }
 						"continue" { continue_ }
 						"return" { return_ }
 						"and" { and_ }
 						"or" { or_ }
+						"async" { async_ }
+						"await" { await_ }
+						"try" { try_ }
+						"catch" { catch_ }
+						"raise" { raise_ }
 						_ { ident }
 					}
 				} else if ch >= 'A' and ch <= 'Z' {

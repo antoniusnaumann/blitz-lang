@@ -18,10 +18,19 @@ union TokenKind {
 	if_
 	else_
 	switch_
+	as_
 	test_
+	assert_
 	break_
 	continue_
 	return_
+
+	// Reserved
+	async_
+	await_
+	try_
+	catch_
+	raise_
 
 	// Identifier
 	type

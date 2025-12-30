@@ -80,8 +80,8 @@ fn main() {
 	let downloader = Downloader()
 	// all variables are always initialized with their respective zero value
 	let images [Image~] = for 1..5 |i| {
-		// by default, actor methods block. To continue execution without waiting for the result, use the `go` keyword
-		go downloader.load("cats.lol/\(i)")
+		// by default, actor methods block. To continue execution without waiting for the result, use the `async` keyword
+		async downloader.load("cats.lol/\(i)")
 	}
 
 	while images.some_loading() {
@@ -94,7 +94,7 @@ fn main() {
 		print(await img)
 	}
 
-	// due to structural typing, the typename can be ommitted for struct constructors
+	// due to structural typing, the typename can be ommitted for struct constructors <== probably won't be implemented as it clashes with auto-deriving comparison operations on structs
 	mut v = (x: 1, y: 1, z: 3)
 	// structs automatically implement all operators that are supported by their fields
 	// mutability is only local, methods receive a copy of their struct params
