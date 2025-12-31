@@ -1,12 +1,27 @@
 struct Lexer {
 	// TODO: this should become an iterator or be byte indexed string that remembers char position instead of a list of chars
 	source List(Rune)
-	errors List(Error)
 	index  Int
 }
 
 fn new_lexer(source String) Lexer {
-	Lexer(source: source.chars(), errors: [], index: 0)
+	Lexer(source: source.chars(), index: 0)
+}
+
+fn lex(mut lexer Lexer) List(Token) {
+	mut tokens = []
+	mut token = lexer.mut.next()
+
+	while token != none {
+		tokens = tokens ++ token		
+		token = lexer.mut.next()
+	}
+		
+	tokens
+}
+
+fn reset(mut lexer Lexer) {
+	lexer.index = 0
 }
 
 fn next(mut lexer Lexer) Option(Token) {
@@ -31,8 +46,6 @@ fn next(mut lexer Lexer) Option(Token) {
 				switch lexer.curr() {
 					'/' {
 						lexer.mut.skip_comment()
-						// TODO: remove
-						lexer.substr(start, lexer.index).print()
 						comment
 					}
 					_ { div }
@@ -78,21 +91,17 @@ fn next(mut lexer Lexer) Option(Token) {
 			'\0' { none }
 			'"' {
 				lexer.mut.skip_str()
-				// TODO: remove
-				lexer.substr(start, lexer.index).print()
 				str
 			}
 			'\'' {
 				lexer.mut.skip_ch()
-				// TODO: remove
-				lexer.substr(start, lexer.index).print()
 				ch
 			}
 			_ {
 				if ch >= 'a' and ch <= 'z' {
 					lexer.mut.skip_ident()
 					// TODO: remove
-					let name = lexer.substr(start, lexer.index).print()
+					let name = lexer.substr(start, lexer.index)
 					switch name {
 						"struct" { struct_ }
 						"union" { union_ }
@@ -124,8 +133,6 @@ fn next(mut lexer Lexer) Option(Token) {
 					}
 				} else if ch >= 'A' and ch <= 'Z' {
 					lexer.mut.skip_ident()
-					// TODO: remove
-					lexer.substr(start, lexer.index).print()
 					type
 				} else { error }
 			}
@@ -170,6 +177,14 @@ fn substr(lexer Lexer, start Int, until Int) String {
 	}
 
 	str
+}
+
+fn substr(lexer Lexer, range Range) String {
+	substr(lexer, range.begin, range.until)		
+}
+
+fn substr(lexer Lexer, span Span) String {
+	substr(lexer, span.range)		
 }
 
 fn is_ident_char(lexer Lexer) Bool {

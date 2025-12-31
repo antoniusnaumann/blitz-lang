@@ -1,0 +1,43 @@
+fn parse_def(mut parser Parser) Option(Definition) {
+    let token = tokens[index]
+    switch token {
+    	struct_ { parser.mut.parse_struct() }
+    	union_ { parser.mut.parse_union() }
+    	actor_ { parser.mut.parse_actor() }
+    	alias_ { parser.mut.parse_alias() }
+    	fn_ { parser.mut.parse_fn() }
+    	test_ { parser.mut.parse_test() }
+    	pub_ {
+    	    Pub(item: parser.mut.parse_def.unwrap()) // TODO: generate an error instead of unwrapping
+    	}
+        _ {
+            parser.errors = parser.errors ++ Error(span: token.span, msg: "Unexpected token!")
+            parser.tok()
+            none
+        }
+    }
+}
+
+fn parse_struct(mut parser Parser) Option(Struct) {
+    todo("Parse struct")
+}
+
+fn parse_union(mut parser Parser) Option(Union) {
+    todo("Parse union")
+}
+
+fn parse_actor(mut parser Parser) Option(Actor) {
+    todo("Parse actor")
+}
+
+fn parse_alias(mut parser Parser) Option(Alias) {
+    todo("Parse alias")
+}
+
+fn parse_fn(mut parser Parser) Option(Fn) {
+    todo("Parse fn")
+}
+
+fn parse_test(mut parser Parser) Option(Test) {
+    todo("Parse test")
+}

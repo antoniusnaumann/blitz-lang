@@ -1,0 +1,10 @@
+struct Span {
+	range Range
+	path  String // source file path
+}
+
+struct Pos {
+	line Int
+	col  Int
+}
+

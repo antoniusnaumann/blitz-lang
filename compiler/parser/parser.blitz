@@ -1,0 +1,60 @@
+struct Parser {
+    tokens List(Token)
+    errors List(Error)
+    index Int
+}
+
+fn new_parser(source String) Parser {
+    mut lexer = new_lexer(source)
+    let tokens = lexer.mut.lex()
+    let errors = lexer.errors
+
+    Parser(tokens: tokens, errors: errors)
+}
+
+fn parse(mut parser Parser) List(Definition) {
+           
+}
+
+fn next(mut parser Parser) Option(Definition) {
+    mut def = none
+
+    while def == none and !parser.eof() {
+        def = parser.mut.parse_def()
+    }
+
+    def
+}
+
+fn tok(mut parser Parser) Token {
+    if parser.tokens.len() > parser.index {
+        let token = parser.tokens[parser.index]
+    	parser.index = parser.index + 1
+	} else {
+	    eof
+	}
+}
+
+fn last(parser Parser) Token {
+    if parser.index == 0 {
+        panic("Called 'last' before consuming a token!")
+    }
+
+    parser.tokens[parser.index - 1]
+}
+
+fn eof(parser Parser) Bool {
+    parser.index >= parser.tokens.len()
+}
+
+fn expect(mut parser Parser, expected Token) {
+    let actual = parser.mut.tok()
+    if tok != actual {
+        parser.mut.err("Unexpected token!")
+    }
+}
+
+fn err(mut parser Parser, msg String) {
+   parser.errors = parser.errors ++ Error(span: parser.last().span, msg: msg)
+} 
+

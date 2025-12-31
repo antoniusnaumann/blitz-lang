@@ -3,11 +3,9 @@ fn main() {
 	let content = read("main.blitz").unwrap()
 	print(content) // should print the content of this file
 
-	mut lexer = new_lexer(content)
-	mut token = lexer.mut.next()
-	while token != none {
+	mut parser = new_parser(content)
+	for parser.tokens |token| {
 		print(token.kind)
-		token = lexer.mut.next()
 	}
 
 	todo("Implement the rest")

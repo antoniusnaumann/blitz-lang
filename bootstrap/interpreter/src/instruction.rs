@@ -382,6 +382,7 @@ fn run_internal(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry
                             if let Value::String(s) = &cond_value {
                                 lit.value == *s
                             } else {
+                                println!("NOT A STRING: {:?}", cond_value);
                                 false
                             }
                         }
