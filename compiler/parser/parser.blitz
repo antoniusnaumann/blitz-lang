@@ -13,7 +13,15 @@ fn new_parser(source String) Parser {
 }
 
 fn parse(mut parser Parser) List(Definition) {
-           
+    mut result = []
+    mut def = parser.mut.next()
+
+    while def != none {
+        result = result ++ def
+        def = parser.mut.next()
+    }
+
+    result
 }
 
 fn next(mut parser Parser) Option(Definition) {
@@ -30,6 +38,7 @@ fn tok(mut parser Parser) Token {
     if parser.tokens.len() > parser.index {
         let token = parser.tokens[parser.index]
     	parser.index = parser.index + 1
+    	token
 	} else {
 	    eof
 	}

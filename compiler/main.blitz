@@ -8,5 +8,6 @@ fn main() {
 		print(token.kind)
 	}
 
-	todo("Implement the rest")
+	let ast = parser.mut.parse()
+	ast.print()
 }
