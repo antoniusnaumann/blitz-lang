@@ -160,23 +160,35 @@ fn curr(mut lexer Lexer) Rune {
 	}
 }
 
-fn peek(lexer Lexer) Rune {
+fn peekch(lexer Lexer) Rune {
 	lexer.source[lexer.index + 1]
 }
 
-fn peek(lexer Lexer, n Int) Rune {
+fn peekch(lexer Lexer, n Int) Rune {
 	lexer.source[lexer.index + n]
 }
 
-fn substr(lexer Lexer, start Int, until Int) String {
+fn substr(source String, start Int, until Int) String {
 	let str = ""
 	mut index = start
 	while index < until {
-		str = str ++ lexer.source[index]
+		str = str ++ source[index]
 		index = index + 1
 	}
 
 	str
+}
+
+fn substr(source String, range Range) String {
+	substr(source, range.begin, range.until)		
+}
+
+fn substr(source String, span Span) String {
+	substr(source, span.range)		
+}
+
+fn substr(lexer Lexer, start Int, until Int) String {
+	substr(lexer.source, start, until)
 }
 
 fn substr(lexer Lexer, range Range) String {

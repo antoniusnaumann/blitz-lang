@@ -1,15 +1,15 @@
 struct Parser {
     tokens List(Token)
     errors List(Error)
+    source String
     index Int
 }
 
 fn new_parser(source String) Parser {
     mut lexer = new_lexer(source)
     let tokens = lexer.mut.lex()
-    let errors = lexer.errors
 
-    Parser(tokens: tokens, errors: errors)
+    Parser(tokens: tokens, errors: [], source: source, index: 0)
 }
 
 fn parse(mut parser Parser) List(Definition) {
@@ -40,7 +40,15 @@ fn tok(mut parser Parser) Token {
     	parser.index = parser.index + 1
     	token
 	} else {
-	    eof
+	    Token(kind: eof, span: parser.last().span)
+	}
+}
+
+fn peek(parser Parser) Token {
+    if parser.tokens.len() > parser.index {
+        parser.tokens[parser.index]
+	} else {
+	    Token(kind: eof, span: parser.last().span)
 	}
 }
 
@@ -56,12 +64,19 @@ fn eof(parser Parser) Bool {
     parser.index >= parser.tokens.len()
 }
 
-fn expect(mut parser Parser, expected Token) {
+fn expect(mut parser Parser, expected TokenKind) Option(Token) {
     let actual = parser.mut.tok()
-    if tok != actual {
+    if expected != actual.kind {
         parser.mut.err("Unexpected token!")
+        return none
     }
+
+    actual
 }
+
+fn has(parser Parser, expected TokenKind) Bool {
+    parser.peek().kind == expected
+} 
 
 fn err(mut parser Parser, msg String) {
    parser.errors = parser.errors ++ Error(span: parser.last().span, msg: msg)

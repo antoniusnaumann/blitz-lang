@@ -3,6 +3,10 @@ struct Span {
 	path  String // source file path
 }
 
+fn empty_span() Span {
+	Span(range: Range(begin: 0, end: 0), path: "")
+}
+
 struct Pos {
 	line Int
 	col  Int

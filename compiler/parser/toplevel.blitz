@@ -1,6 +1,6 @@
 fn parse_def(mut parser Parser) Option(Definition) {
-    let token = tokens[index]
-    switch token {
+    let token = parser.peek()
+    switch token.kind {
     	struct_ { parser.mut.parse_struct() }
     	union_ { parser.mut.parse_union() }
     	actor_ { parser.mut.parse_actor() }
@@ -13,31 +13,40 @@ fn parse_def(mut parser Parser) Option(Definition) {
         _ {
             parser.errors = parser.errors ++ Error(span: token.span, msg: "Unexpected token!")
             parser.tok()
+
             none
         }
     }
 }
 
 fn parse_struct(mut parser Parser) Option(Struct) {
+    let kw = parser.mut.expect(struct_) else return none
     todo("Parse struct")
 }
 
 fn parse_union(mut parser Parser) Option(Union) {
+    let kw = parser.mut.expect(union_) else return none
     todo("Parse union")
 }
 
 fn parse_actor(mut parser Parser) Option(Actor) {
+    let kw = parser.mut.expect(actor_) else return none
     todo("Parse actor")
 }
 
 fn parse_alias(mut parser Parser) Option(Alias) {
+    let kw = parser.mut.expect(alias_) else return none
     todo("Parse alias")
 }
 
 fn parse_fn(mut parser Parser) Option(Fn) {
+    let kw = parser.mut.expect(fn_) else return none
+    let ident = parser.mut.expect(ident) else return none
+    let name = 
     todo("Parse fn")
 }
 
 fn parse_test(mut parser Parser) Option(Test) {
+    let kw = parser.mut.expect(test_) else return none
     todo("Parse test")
 }

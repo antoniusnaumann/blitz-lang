@@ -128,7 +128,10 @@ fn run_internal(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry
                 else {
                     panic!("Member operator on non-struct")
                 };
-                parent[&member.member].clone()
+                parent
+                    .get(&member.member)
+                    .unwrap_or_else(|| panic!("No entry for {}", member.member))
+                    .clone()
             }
             Expression::Index(index) => {
                 let target = run(index.target.deref().clone().into(), vars, reg);
@@ -343,14 +346,13 @@ fn run_internal(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry
                 if lhs == Value::Union("none".into(), Value::Void.into()) {
                     run(bin.right.deref().clone().into(), vars, reg)
                 } else {
-                    let Value::Union(label, val) = lhs else {
-                        panic!(
-                            "Else operator left side should be an Option (some/none), but got: {:?}",
-                            lhs
-                        );
-                    };
-                    assert_eq!(label, "some");
-                    *val
+                    if let Value::Union(label, val) = &lhs
+                        && label == "some"
+                    {
+                        val.deref().clone()
+                    } else {
+                        lhs
+                    }
                 }
             }
             Expression::Switch(switch) => {
