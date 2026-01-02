@@ -440,6 +440,40 @@ impl<'a> Parser<'a> {
                 self.lexer.next(); // Consume the break token
                 Expression::Break
             }
+            TokenKind::Assert => {
+                self.lexer.next(); // Consume the assert token
+                let condition = self.parse_expression_bp(0);
+                
+                // Convert the condition to a string for the error message
+                let condition_str = condition.print();
+                
+                // Create: if !(condition) { panic("Assertion 'condition' failed") }
+                let negated_condition = Expression::UnaryOp(
+                    crate::UnaryOp {
+                        op: Operator::Not,
+                        expr: Box::new(condition),
+                        span: self.span.clone(),
+                    }
+                );
+                
+                let panic_message = format!("Assertion '{}' failed", condition_str);
+                let panic_call = Expression::Call(
+                    crate::Call {
+                        name: "panic".into(),
+                        args: vec![Expression::String(panic_message)],
+                        ufcs: false,
+                        span: self.span.clone(),
+                    }
+                );
+                
+                Expression::If(
+                    crate::If {
+                        cond: Box::new(negated_condition),
+                        body: vec![panic_call.into()],
+                        span: self.span.clone(),
+                    }
+                )
+            }
             TokenKind::Lbrace => self.parse_block().into(),
             TokenKind::Ident => {
                 let span = token.span;

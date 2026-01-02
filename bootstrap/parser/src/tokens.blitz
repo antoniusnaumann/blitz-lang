@@ -22,6 +22,7 @@ union TokenKind {
 	break_
 	continue_
 	return_
+	assert_
 
 	// Identifier
 	type
