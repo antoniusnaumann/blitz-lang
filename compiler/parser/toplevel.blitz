@@ -48,6 +48,7 @@ fn parse_fn(mut parser Parser) Option(Fn) {
     while parser.mut.accept(rparen) == none {
         let arg = parser.mut.parse_arg() else return none
         args = args ++ arg
+        parser.mut.accept(comma)
     }
     
     let type = parser.mut.accept(type)
@@ -58,6 +59,7 @@ fn parse_fn(mut parser Parser) Option(Fn) {
     while !parser.has(rbrace) {
         let statement = parser.mut.parse_statement() else return none
         body = body ++ statement
+        parser.mut.accept(semicolon)
     }
 
     Fn(name: name, args: args, type: type, body: body, span: parser.span(from: kw))
@@ -69,16 +71,24 @@ fn parse_arg(mut parser Parser) Option(Arg) {
     let ident = parser.mut.parse_ident() else return none
     let type = parser.mut.parse_type() else return none
 
-    Arg(name: , type: , is_mut: is_mut, span: parser.span(from: span))
+    Arg(name: ident, type: type, is_mut: is_mut, span: parser.span(from: span))
 }
 
 fn parse_statement(mut parser Parser) Option(Statement) {
     todo("Parse statement")
 }
 
-fn parse_ident(mut parser Parser) Option(String) {
-    let ident = parser.mut.expect(ident) else return none
-    parser.source.substr(ident.span)
+fn parse_ident(mut parser Parser) Option(Ident) {
+    let token = parser.mut.expect(ident) else return none
+    let name = parser.source.substr(token.span)
+    Ident(name: name, span: token.span)
+}
+
+fn parse_type(mut parser Parser) Option(Type) {
+    let token = parser.mut.expect(type) else return none
+    let name = parser.source.substr(token.span)
+    if parser.has(lparen) { todo("Parse generic types") }
+    Type(name: name, span: token.span)
 }
 
 fn parse_test(mut parser Parser) Option(Test) {
