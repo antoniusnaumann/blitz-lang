@@ -43,6 +43,12 @@ union TokenKind {
 	div
 	rem
 	assign
+	add_assign
+	sub_assign
+	mul_assign
+	div_assign
+	rem_assign
+	concat_assign
 
 	// Collection
 	concat
