@@ -83,6 +83,15 @@ impl Value {
             }
             (V::List(list), T::List(ty)) => list.iter().all(|v| v.matches(ty)),
             (V::Void, T::Void) => true,
+            // Treat Void as none: Void matches Union types with "none" label
+            (V::Void, T::Union(cases)) => {
+                if let Some(none_ty) = cases.get("none") {
+                    // Check if none case expects Void (symbolic none)
+                    matches!(none_ty, T::Void)
+                } else {
+                    false
+                }
+            }
             // For now, we just treat generics as "Any"
             (_, T::Any) => true,
             _ => false,
