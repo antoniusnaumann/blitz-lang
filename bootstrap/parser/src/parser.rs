@@ -523,7 +523,7 @@ impl<'a> Parser<'a> {
         };
 
         let expr = self.parse_precedence(lhs, min_prec);
-        if let Some(_assignment) = self.consume_assignment() {
+        if let Some(op) = self.consume_assignment() {
             let left = match expr {
                 Expression::Ident(ident) => Lval::Ident(ident),
                 Expression::Member(member) => Lval::Member(member),
@@ -531,16 +531,53 @@ impl<'a> Parser<'a> {
                 e => panic!("Assignment on invalid lval {:#?}", e),
             };
 
-            let right = self.parse_expression().into();
-            Assignment { left, right }.into()
+            let right = self.parse_expression();
+            
+            // Desugar compound assignments: a += b becomes a = a + b
+            let right = if let Some(binary_op) = op {
+                // Reconstruct the left side as an expression
+                let left_expr = match &left {
+                    Lval::Ident(ident) => Expression::Ident(ident.clone()),
+                    Lval::Member(member) => Expression::Member(member.clone()),
+                    Lval::Index(index) => Expression::Index(index.clone()),
+                };
+                
+                let span = left_expr.span().merge(&right.span());
+                Expression::BinaryOp(BinaryOp {
+                    op: binary_op,
+                    left: Box::new(left_expr),
+                    right: Box::new(right),
+                    span,
+                })
+            } else {
+                right
+            };
+            
+            Assignment { left, right: Box::new(right) }.into()
         } else {
             expr
         }
     }
 
-    // TODO: introduce assignment operator union
-    fn consume_assignment(&mut self) -> Option<()> {
-        self.consume(TokenKind::Assign).map(|_| ())
+    // Returns Some(operator) for compound assignments (+=, -=, etc.) or None for simple assignment (=)
+    fn consume_assignment(&mut self) -> Option<Option<Operator>> {
+        if self.consume(TokenKind::Add_assign).is_some() {
+            Some(Some(Operator::Add))
+        } else if self.consume(TokenKind::Sub_assign).is_some() {
+            Some(Some(Operator::Sub))
+        } else if self.consume(TokenKind::Mul_assign).is_some() {
+            Some(Some(Operator::Mul))
+        } else if self.consume(TokenKind::Div_assign).is_some() {
+            Some(Some(Operator::Div))
+        } else if self.consume(TokenKind::Rem_assign).is_some() {
+            Some(Some(Operator::Rem))
+        } else if self.consume(TokenKind::Concat_assign).is_some() {
+            Some(Some(Operator::Concat))
+        } else if self.consume(TokenKind::Assign).is_some() {
+            Some(None)
+        } else {
+            None
+        }
     }
 
     fn parse_expression(&mut self) -> Expression {
@@ -1750,6 +1787,246 @@ mod tests {
                 }
             }
             _ => panic!("Expected Constructor, got {:?}", expr.print()),
+        }
+    }
+
+    #[test]
+    fn test_add_assign() {
+        // a += b should parse as a = a + b
+        let expr = parse_expr("a += b");
+
+        match expr {
+            Expression::Assignment(assignment) => {
+                // Check that left side is 'a'
+                match &assignment.left {
+                    Lval::Ident(ident) => assert_eq!(ident.name, "a"),
+                    _ => panic!("Expected Ident on left side"),
+                }
+
+                // Check that right side is a + b
+                match assignment.right.as_ref() {
+                    Expression::BinaryOp(op) => {
+                        assert!(matches!(op.op, Operator::Add));
+                        match op.left.as_ref() {
+                            Expression::Ident(ident) => assert_eq!(ident.name, "a"),
+                            _ => panic!("Expected Ident 'a' on left of addition"),
+                        }
+                        match op.right.as_ref() {
+                            Expression::Ident(ident) => assert_eq!(ident.name, "b"),
+                            _ => panic!("Expected Ident 'b' on right of addition"),
+                        }
+                    }
+                    _ => panic!("Expected BinaryOp on right side"),
+                }
+            }
+            _ => panic!("Expected Assignment, got {:?}", expr.print()),
+        }
+    }
+
+    #[test]
+    fn test_sub_assign() {
+        // a -= b should parse as a = a - b
+        let expr = parse_expr("a -= b");
+
+        match expr {
+            Expression::Assignment(assignment) => {
+                match assignment.right.as_ref() {
+                    Expression::BinaryOp(op) => {
+                        assert!(matches!(op.op, Operator::Sub));
+                    }
+                    _ => panic!("Expected BinaryOp on right side"),
+                }
+            }
+            _ => panic!("Expected Assignment"),
+        }
+    }
+
+    #[test]
+    fn test_mul_assign() {
+        // a *= b should parse as a = a * b
+        let expr = parse_expr("a *= b");
+
+        match expr {
+            Expression::Assignment(assignment) => {
+                match assignment.right.as_ref() {
+                    Expression::BinaryOp(op) => {
+                        assert!(matches!(op.op, Operator::Mul));
+                    }
+                    _ => panic!("Expected BinaryOp on right side"),
+                }
+            }
+            _ => panic!("Expected Assignment"),
+        }
+    }
+
+    #[test]
+    fn test_div_assign() {
+        // a /= b should parse as a = a / b
+        let expr = parse_expr("a /= b");
+
+        match expr {
+            Expression::Assignment(assignment) => {
+                match assignment.right.as_ref() {
+                    Expression::BinaryOp(op) => {
+                        assert!(matches!(op.op, Operator::Div));
+                    }
+                    _ => panic!("Expected BinaryOp on right side"),
+                }
+            }
+            _ => panic!("Expected Assignment"),
+        }
+    }
+
+    #[test]
+    fn test_rem_assign() {
+        // a %= b should parse as a = a % b
+        let expr = parse_expr("a %= b");
+
+        match expr {
+            Expression::Assignment(assignment) => {
+                match assignment.right.as_ref() {
+                    Expression::BinaryOp(op) => {
+                        assert!(matches!(op.op, Operator::Rem));
+                    }
+                    _ => panic!("Expected BinaryOp on right side"),
+                }
+            }
+            _ => panic!("Expected Assignment"),
+        }
+    }
+
+    #[test]
+    fn test_concat_assign() {
+        // a ++= b should parse as a = a ++ b
+        let expr = parse_expr("a ++= b");
+
+        match expr {
+            Expression::Assignment(assignment) => {
+                match assignment.right.as_ref() {
+                    Expression::BinaryOp(op) => {
+                        assert!(matches!(op.op, Operator::Concat));
+                    }
+                    _ => panic!("Expected BinaryOp on right side"),
+                }
+            }
+            _ => panic!("Expected Assignment"),
+        }
+    }
+
+    #[test]
+    fn test_compound_assignment_with_complex_rhs() {
+        // a += b * c should parse as a = a + (b * c)
+        let expr = parse_expr("a += b * c");
+
+        match expr {
+            Expression::Assignment(assignment) => {
+                match assignment.right.as_ref() {
+                    Expression::BinaryOp(add_op) => {
+                        assert!(matches!(add_op.op, Operator::Add));
+                        
+                        // Left side should be 'a'
+                        match add_op.left.as_ref() {
+                            Expression::Ident(ident) => assert_eq!(ident.name, "a"),
+                            _ => panic!("Expected 'a' on left"),
+                        }
+                        
+                        // Right side should be b * c
+                        match add_op.right.as_ref() {
+                            Expression::BinaryOp(mul_op) => {
+                                assert!(matches!(mul_op.op, Operator::Mul));
+                            }
+                            _ => panic!("Expected multiplication on right"),
+                        }
+                    }
+                    _ => panic!("Expected BinaryOp on right side"),
+                }
+            }
+            _ => panic!("Expected Assignment"),
+        }
+    }
+
+    #[test]
+    fn test_compound_assignment_with_member() {
+        // obj.field += 5 should parse as obj.field = obj.field + 5
+        let expr = parse_expr("obj.field += 5");
+
+        match expr {
+            Expression::Assignment(assignment) => {
+                // Left side should be obj.field
+                match &assignment.left {
+                    Lval::Member(member) => {
+                        assert_eq!(member.member, "field");
+                    }
+                    _ => panic!("Expected Member on left side"),
+                }
+
+                // Right side should be obj.field + 5
+                match assignment.right.as_ref() {
+                    Expression::BinaryOp(op) => {
+                        assert!(matches!(op.op, Operator::Add));
+                        match op.left.as_ref() {
+                            Expression::Member(member) => {
+                                assert_eq!(member.member, "field");
+                            }
+                            _ => panic!("Expected Member on left of addition"),
+                        }
+                    }
+                    _ => panic!("Expected BinaryOp on right side"),
+                }
+            }
+            _ => panic!("Expected Assignment"),
+        }
+    }
+
+    #[test]
+    fn test_compound_assignment_with_index() {
+        // arr[0] += 1 should parse as arr[0] = arr[0] + 1
+        let expr = parse_expr("arr[0] += 1");
+
+        match expr {
+            Expression::Assignment(assignment) => {
+                // Left side should be arr[0]
+                match &assignment.left {
+                    Lval::Index(_) => {},
+                    _ => panic!("Expected Index on left side"),
+                }
+
+                // Right side should be arr[0] + 1
+                match assignment.right.as_ref() {
+                    Expression::BinaryOp(op) => {
+                        assert!(matches!(op.op, Operator::Add));
+                        match op.left.as_ref() {
+                            Expression::Index(_) => {},
+                            _ => panic!("Expected Index on left of addition"),
+                        }
+                    }
+                    _ => panic!("Expected BinaryOp on right side"),
+                }
+            }
+            _ => panic!("Expected Assignment"),
+        }
+    }
+
+    #[test]
+    fn test_simple_assignment() {
+        // a = b should still parse correctly (no desugaring)
+        let expr = parse_expr("a = b");
+
+        match expr {
+            Expression::Assignment(assignment) => {
+                // Left side should be 'a'
+                match &assignment.left {
+                    Lval::Ident(ident) => assert_eq!(ident.name, "a"),
+                    _ => panic!("Expected Ident on left side"),
+                }
+
+                // Right side should just be 'b' (no BinaryOp)
+                match assignment.right.as_ref() {
+                    Expression::Ident(ident) => assert_eq!(ident.name, "b"),
+                    _ => panic!("Expected simple Ident 'b' on right side, not a BinaryOp"),
+                }
+            }
+            _ => panic!("Expected Assignment"),
         }
     }
 }

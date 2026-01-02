@@ -100,12 +100,37 @@ impl<'a> Lexer<'a> {
                 let (pos, ch) = self.peek_char();
                 end = pos;
                 match ch {
-                    '+' => self.up(Concat),
+                    '+' => {
+                        _ = self.chars.next();
+                        let (pos, ch) = self.peek_char();
+                        end = pos;
+                        match ch {
+                            '=' => self.up(Concat_assign),
+                            _ => Concat,
+                        }
+                    }
+                    '=' => self.up(Add_assign),
                     _ => Add,
                 }
             }
-            '-' => self.up(Sub),
-            '*' => self.up(Mul),
+            '-' => {
+                _ = self.chars.next();
+                let (pos, ch) = self.peek_char();
+                end = pos;
+                match ch {
+                    '=' => self.up(Sub_assign),
+                    _ => Sub,
+                }
+            }
+            '*' => {
+                _ = self.chars.next();
+                let (pos, ch) = self.peek_char();
+                end = pos;
+                match ch {
+                    '=' => self.up(Mul_assign),
+                    _ => Mul,
+                }
+            }
             '/' => {
                 _ = self.chars.next();
                 let (pos, ch) = self.peek_char();
@@ -117,10 +142,19 @@ impl<'a> Lexer<'a> {
                         end = pos;
                         Comment
                     }
+                    '=' => self.up(Div_assign),
                     _ => Div,
                 }
             }
-            '%' => self.up(Rem),
+            '%' => {
+                _ = self.chars.next();
+                let (pos, ch) = self.peek_char();
+                end = pos;
+                match ch {
+                    '=' => self.up(Rem_assign),
+                    _ => Rem,
+                }
+            }
             '=' => {
                 _ = self.chars.next();
                 let (pos, ch) = self.peek_char();
