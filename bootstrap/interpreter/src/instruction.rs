@@ -86,7 +86,18 @@ fn run_internal(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry
                     .map(|call_arg| run(call_arg.init.as_ref().clone().into(), vars, reg))
                     .collect();
                 
-                let func = reg.select_func(funcs, &arg_vals, None, None);
+                // Check if we have named arguments
+                let has_any_labels = call.args.iter().any(|arg| arg.label.is_some());
+                
+                // For named arguments, we need to select the function differently
+                // For now, we'll just take the first function if there's only one option
+                // In the future, proper overload resolution with named args would be needed
+                let func = if has_any_labels && funcs.len() == 1 {
+                    &funcs[0]
+                } else {
+                    reg.select_func(funcs, &arg_vals, None, None)
+                };
+                
                 let mut args = HashMap::new();
                 let params = &func.params;
                 
