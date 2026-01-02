@@ -70,8 +70,8 @@ fn run_internal(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry
                 let arg_idents: Vec<Option<String>> = call
                     .args
                     .iter()
-                    .map(|arg| {
-                        if let Expression::Ident(ident) = arg {
+                    .map(|call_arg| {
+                        if let Expression::Ident(ident) = call_arg.init.as_ref() {
                             Some(ident.name.clone())
                         } else {
                             None
@@ -79,16 +79,68 @@ fn run_internal(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry
                     })
                     .collect();
 
-                let arg_vals = call
+                // Evaluate all argument expressions
+                let arg_vals: Vec<_> = call
                     .args
                     .iter()
-                    .map(|arg| run(arg.clone().into(), vars, reg))
-                    .collect::<Vec<_>>();
-                let func = reg.select_func(funcs, &arg_vals, None, None);
+                    .map(|call_arg| run(call_arg.init.as_ref().clone().into(), vars, reg))
+                    .collect();
+                
+                // Check if we have named arguments
+                let has_any_labels = call.args.iter().any(|arg| arg.label.is_some());
+                
+                // For named arguments, we need to select the function differently
+                // For now, we'll just take the first function if there's only one option
+                // In the future, proper overload resolution with named args would be needed
+                let func = if has_any_labels && funcs.len() == 1 {
+                    &funcs[0]
+                } else {
+                    reg.select_func(funcs, &arg_vals, None, None)
+                };
+                
                 let mut args = HashMap::new();
                 let params = &func.params;
-                for (param, arg) in params.iter().zip(arg_vals) {
-                    args.insert(param.name.clone(), arg);
+                
+                // Validate argument count
+                if call.args.len() > params.len() {
+                    panic!("Function '{}' expects {} arguments, but {} were provided", 
+                        call.name, params.len(), call.args.len());
+                }
+                
+                // Match arguments to parameters by name if labels are present, otherwise by position
+                let has_any_labels = call.args.iter().any(|arg| arg.label.is_some());
+                
+                if has_any_labels {
+                    // Named argument matching (with support for mixed positional/named)
+                    let mut positional_idx = 0;
+                    for (call_arg_idx, call_arg) in call.args.iter().enumerate() {
+                        if let Some(label) = &call_arg.label {
+                            // Named argument - match by parameter name
+                            if !params.iter().any(|p| p.name == label.name) {
+                                panic!("Parameter '{}' not found in function '{}'", label.name, call.name);
+                            }
+                            args.insert(label.name.clone(), arg_vals[call_arg_idx].clone());
+                        } else {
+                            // Positional argument - match to the next unfilled positional parameter
+                            if positional_idx >= params.len() {
+                                panic!("Too many positional arguments for function '{}'", call.name);
+                            }
+                            // Find the next parameter that hasn't been filled by a named argument
+                            while positional_idx < params.len() && args.contains_key(&params[positional_idx].name) {
+                                positional_idx += 1;
+                            }
+                            if positional_idx >= params.len() {
+                                panic!("Positional argument has no available parameter in function '{}'", call.name);
+                            }
+                            args.insert(params[positional_idx].name.clone(), arg_vals[call_arg_idx].clone());
+                            positional_idx += 1;
+                        }
+                    }
+                } else {
+                    // Positional argument matching (original behavior)
+                    for (param, arg) in params.iter().zip(arg_vals.iter()) {
+                        args.insert(param.name.clone(), arg.clone());
+                    }
                 }
 
                 let result = match &func.body {

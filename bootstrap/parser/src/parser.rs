@@ -473,7 +473,10 @@ impl<'a> Parser<'a> {
                 let panic_call = Expression::Call(
                     crate::Call {
                         name: "panic".into(),
-                        args: vec![Expression::String(panic_message)],
+                        args: vec![CallArg {
+                            label: None,
+                            init: Box::new(Expression::String(panic_message)),
+                        }],
                         ufcs: false,
                         span: self.span.clone(),
                     }
@@ -547,10 +550,16 @@ impl<'a> Parser<'a> {
     fn parse_member_call(&mut self, parent: Expression, method: String) -> Call {
         self.expect(TokenKind::Lparen);
 
-        let mut args = vec![parent.clone()];
+        let mut args = vec![CallArg {
+            label: None,
+            init: Box::new(parent.clone()),
+        }];
         while !self.has(TokenKind::Rparen) {
             let _is_mut = self.consume(TokenKind::Mut).is_some();
-            args.push(self.parse_expression());
+            args.push(CallArg {
+                label: None,
+                init: Box::new(self.parse_expression()),
+            });
             self.consume(TokenKind::Comma);
         }
         let end_span = self.expect(TokenKind::Rparen).span;
@@ -757,7 +766,47 @@ impl<'a> Parser<'a> {
         let mut args = Vec::new();
         while !self.has(TokenKind::Rparen) {
             let _is_mut = self.consume(TokenKind::Mut).is_some();
-            args.push(self.parse_expression());
+            
+            // Parse the argument expression
+            let expr = self.parse_expression();
+            
+            // Check if this is a named argument (expression must be just an Ident followed by colon)
+            if let Expression::Ident(ident_expr) = &expr {
+                if self.consume(TokenKind::Colon).is_some() {
+                    // This is a named argument or shorthand
+                    let label = ident_expr.clone();
+                    
+                    // Check for shorthand syntax (comma or rparen after colon)
+                    if self.has(TokenKind::Comma) || self.has(TokenKind::Rparen) {
+                        // Shorthand: foo(bar:) means foo(bar: bar)
+                        let init = Box::new(Expression::Ident(ident_expr.clone()));
+                        args.push(CallArg {
+                            label: Some(label),
+                            init,
+                        });
+                    } else {
+                        // Full named argument: foo(bar: expr)
+                        let init = Box::new(self.parse_expression());
+                        args.push(CallArg {
+                            label: Some(label),
+                            init,
+                        });
+                    }
+                } else {
+                    // Not followed by colon, treat as positional
+                    args.push(CallArg {
+                        label: None,
+                        init: Box::new(expr),
+                    });
+                }
+            } else {
+                // Not an Ident, must be positional
+                args.push(CallArg {
+                    label: None,
+                    init: Box::new(expr),
+                });
+            }
+            
             self.consume(TokenKind::Comma);
         }
         self.expect(TokenKind::Rparen);
@@ -781,7 +830,19 @@ impl<'a> Parser<'a> {
         while !self.has(TokenKind::Rparen) {
             let label = self.expect_ident();
             self.expect(TokenKind::Colon);
-            let init = self.parse_expression().into();
+            
+            // Check for shorthand syntax (no expression after colon)
+            let init = if self.has(TokenKind::Comma) || self.has(TokenKind::Rparen) {
+                // Shorthand: Type(field:) means Type(field: field)
+                Box::new(Expression::Ident(Ident {
+                    name: label.name.clone(),
+                    span: label.span.clone(),
+                }))
+            } else {
+                // Full syntax: Type(field: expr)
+                self.parse_expression().into()
+            };
+            
             self.consume(TokenKind::Comma);
             args.push(ConstructorArg { label, init })
         }
@@ -1104,7 +1165,7 @@ mod tests {
                 assert_eq!(c.name, "method");
                 assert!(c.ufcs);
                 assert_eq!(c.args.len(), 1);
-                assert!(matches!(c.args[0], Expression::Ident(_)));
+                assert!(matches!(c.args[0].init.as_ref(), Expression::Ident(_)));
             }
             _ => panic!("Expected Call, got {:?}", expr.print()),
         }
@@ -1120,9 +1181,9 @@ mod tests {
                 assert_eq!(c.name, "method");
                 assert!(c.ufcs);
                 assert_eq!(c.args.len(), 3);
-                assert!(matches!(c.args[0], Expression::Ident(_))); // obj
-                assert!(matches!(c.args[1], Expression::Ident(_))); // a
-                assert!(matches!(c.args[2], Expression::Ident(_))); // b
+                assert!(matches!(c.args[0].init.as_ref(), Expression::Ident(_))); // obj
+                assert!(matches!(c.args[1].init.as_ref(), Expression::Ident(_))); // a
+                assert!(matches!(c.args[2].init.as_ref(), Expression::Ident(_))); // b
             }
             _ => panic!("Expected Call"),
         }
@@ -1584,6 +1645,111 @@ mod tests {
                 assert!(matches!(*op.right, Expression::String(_)));
             }
             _ => panic!("Expected BinaryOp with concat"),
+        }
+    }
+
+    #[test]
+    fn test_named_arguments() {
+        // foo(a: 1, b: 2) should parse with named arguments
+        let expr = parse_expr("foo(a: 1, b: 2)");
+
+        match expr {
+            Expression::Call(c) => {
+                assert_eq!(c.name, "foo");
+                assert_eq!(c.args.len(), 2);
+                
+                // First argument: a: 1
+                assert!(c.args[0].label.is_some());
+                assert_eq!(c.args[0].label.as_ref().unwrap().name, "a");
+                assert!(matches!(c.args[0].init.as_ref(), Expression::Number(_)));
+                
+                // Second argument: b: 2
+                assert!(c.args[1].label.is_some());
+                assert_eq!(c.args[1].label.as_ref().unwrap().name, "b");
+                assert!(matches!(c.args[1].init.as_ref(), Expression::Number(_)));
+            }
+            _ => panic!("Expected Call, got {:?}", expr.print()),
+        }
+    }
+
+    #[test]
+    fn test_shorthand_arguments() {
+        // foo(bar:, baz:) should parse as foo(bar: bar, baz: baz)
+        let expr = parse_expr("foo(bar:, baz:)");
+
+        match expr {
+            Expression::Call(c) => {
+                assert_eq!(c.name, "foo");
+                assert_eq!(c.args.len(), 2);
+                
+                // First argument: bar: (shorthand for bar: bar)
+                assert!(c.args[0].label.is_some());
+                assert_eq!(c.args[0].label.as_ref().unwrap().name, "bar");
+                match c.args[0].init.as_ref() {
+                    Expression::Ident(ident) => assert_eq!(ident.name, "bar"),
+                    _ => panic!("Expected Ident in shorthand init"),
+                }
+                
+                // Second argument: baz: (shorthand for baz: baz)
+                assert!(c.args[1].label.is_some());
+                assert_eq!(c.args[1].label.as_ref().unwrap().name, "baz");
+                match c.args[1].init.as_ref() {
+                    Expression::Ident(ident) => assert_eq!(ident.name, "baz"),
+                    _ => panic!("Expected Ident in shorthand init"),
+                }
+            }
+            _ => panic!("Expected Call, got {:?}", expr.print()),
+        }
+    }
+
+    #[test]
+    fn test_mixed_positional_and_named() {
+        // foo(1, b: 2) should parse with mixed arguments
+        let expr = parse_expr("foo(1, b: 2)");
+
+        match expr {
+            Expression::Call(c) => {
+                assert_eq!(c.name, "foo");
+                assert_eq!(c.args.len(), 2);
+                
+                // First argument: positional
+                assert!(c.args[0].label.is_none());
+                assert!(matches!(c.args[0].init.as_ref(), Expression::Number(_)));
+                
+                // Second argument: named
+                assert!(c.args[1].label.is_some());
+                assert_eq!(c.args[1].label.as_ref().unwrap().name, "b");
+                assert!(matches!(c.args[1].init.as_ref(), Expression::Number(_)));
+            }
+            _ => panic!("Expected Call, got {:?}", expr.print()),
+        }
+    }
+
+    #[test]
+    fn test_constructor_shorthand() {
+        // Person(name:, age:) should parse with shorthand
+        let expr = parse_expr("Person(name:, age:)");
+        
+        match expr {
+            Expression::Constructor(c) => {
+                assert_eq!(c.r#type.name, "Person");
+                assert_eq!(c.args.len(), 2);
+                
+                // First argument: name: (shorthand)
+                assert_eq!(c.args[0].label.name, "name");
+                match c.args[0].init.as_ref() {
+                    Expression::Ident(ident) => assert_eq!(ident.name, "name"),
+                    _ => panic!("Expected Ident in constructor shorthand"),
+                }
+                
+                // Second argument: age: (shorthand)
+                assert_eq!(c.args[1].label.name, "age");
+                match c.args[1].init.as_ref() {
+                    Expression::Ident(ident) => assert_eq!(ident.name, "age"),
+                    _ => panic!("Expected Ident in constructor shorthand"),
+                }
+            }
+            _ => panic!("Expected Constructor, got {:?}", expr.print()),
         }
     }
 }
