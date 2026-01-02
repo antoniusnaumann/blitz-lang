@@ -110,11 +110,17 @@ impl Print for Expression {
                 if c.ufcs {
                     format!(
                         "{}.{}({})",
-                        c.args[0].print(),
+                        c.args[0].init.print(),
                         c.name,
                         c.args[1..]
                             .iter()
-                            .map(|e| e.print())
+                            .map(|e| {
+                                if let Some(label) = &e.label {
+                                    format!("{}: {}", label.name, e.init.print())
+                                } else {
+                                    e.init.print()
+                                }
+                            })
                             .collect::<Vec<_>>()
                             .join(", ")
                     )
@@ -124,7 +130,13 @@ impl Print for Expression {
                         c.name,
                         c.args
                             .iter()
-                            .map(|e| e.print())
+                            .map(|e| {
+                                if let Some(label) = &e.label {
+                                    format!("{}: {}", label.name, e.init.print())
+                                } else {
+                                    e.init.print()
+                                }
+                            })
                             .collect::<Vec<_>>()
                             .join(", ")
                     )

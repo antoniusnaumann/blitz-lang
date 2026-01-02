@@ -72,9 +72,14 @@ struct ConstructorArg {
 
 struct Call {
 	name String
-	args Vec(Expression)
+	args Vec(CallArg)
 	ufcs Bool
 	span Span
+}
+
+struct CallArg {
+	label Option(Ident)
+	init  Box(Expression)
 }
 
 struct Assignment {

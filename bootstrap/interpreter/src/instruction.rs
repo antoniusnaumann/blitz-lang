@@ -70,8 +70,8 @@ fn run_internal(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry
                 let arg_idents: Vec<Option<String>> = call
                     .args
                     .iter()
-                    .map(|arg| {
-                        if let Expression::Ident(ident) = arg {
+                    .map(|call_arg| {
+                        if let Expression::Ident(ident) = call_arg.init.as_ref() {
                             Some(ident.name.clone())
                         } else {
                             None
@@ -79,16 +79,40 @@ fn run_internal(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry
                     })
                     .collect();
 
-                let arg_vals = call
+                // Evaluate all argument expressions
+                let arg_vals: Vec<_> = call
                     .args
                     .iter()
-                    .map(|arg| run(arg.clone().into(), vars, reg))
-                    .collect::<Vec<_>>();
+                    .map(|call_arg| run(call_arg.init.as_ref().clone().into(), vars, reg))
+                    .collect();
+                
                 let func = reg.select_func(funcs, &arg_vals, None, None);
                 let mut args = HashMap::new();
                 let params = &func.params;
-                for (param, arg) in params.iter().zip(arg_vals) {
-                    args.insert(param.name.clone(), arg);
+                
+                // Match arguments to parameters by name if labels are present, otherwise by position
+                let has_any_labels = call.args.iter().any(|arg| arg.label.is_some());
+                
+                if has_any_labels {
+                    // Named argument matching
+                    for (call_arg_idx, call_arg) in call.args.iter().enumerate() {
+                        if let Some(label) = &call_arg.label {
+                            // Verify the parameter exists
+                            if !params.iter().any(|p| p.name == label.name) {
+                                panic!("Parameter '{}' not found in function '{}'", label.name, call.name);
+                            }
+                            args.insert(label.name.clone(), arg_vals[call_arg_idx].clone());
+                        } else {
+                            // Mixed named and positional - use positional matching for unlabeled args
+                            let param = &params[call_arg_idx];
+                            args.insert(param.name.clone(), arg_vals[call_arg_idx].clone());
+                        }
+                    }
+                } else {
+                    // Positional argument matching (original behavior)
+                    for (param, arg) in params.iter().zip(arg_vals.iter()) {
+                        args.insert(param.name.clone(), arg.clone());
+                    }
                 }
 
                 let result = match &func.body {
