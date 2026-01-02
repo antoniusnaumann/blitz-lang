@@ -13,11 +13,18 @@ struct Pub {
 }
 
 struct Fn {
-	name String
-	args List(Field)
+	name Ident
+	args List(Arg)
 	type Option(Type)
 	body List(Statement)
 	span Span
+}
+
+struct Arg {
+	name   Ident
+	type   Type
+	is_mut Bool
+	span   Span
 }
 
 struct Struct {
@@ -27,8 +34,9 @@ struct Struct {
 }
 
 struct Field {
-	name String
+	name Ident
 	type Type
+	span Span
 }
 
 struct Union {

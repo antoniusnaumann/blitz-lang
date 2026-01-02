@@ -64,6 +64,10 @@ fn eof(parser Parser) Bool {
     parser.index >= parser.tokens.len()
 }
 
+fn span(parser Parser) Span {
+    parser.peek().span
+}
+
 fn span(parser Parser, from Token) Span {
     parser.span(from.span)
 }
@@ -90,9 +94,17 @@ fn expect(mut parser Parser, expected TokenKind) Option(Token) {
     actual
 }
 
+fn accept(mut parser Parser, expected TokenKind) Option(Token) {
+    if parser.has(expected) {
+        parser.mut.expect(expected)
+    } else {
+        none
+    }
+}
+
 fn has(parser Parser, expected TokenKind) Bool {
     parser.peek().kind == expected
-} 
+}
 
 fn err(mut parser Parser, msg String) {
    parser.errors = parser.errors ++ Error(span: parser.last().span, msg: msg)
