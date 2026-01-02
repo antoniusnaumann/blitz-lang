@@ -255,6 +255,19 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn parse_test(&mut self) -> Test {
+        let start = self.expect(TokenKind::Test).span;
+        let name = self.parse_string_lit();
+
+        let body = self.parse_body();
+
+        Test {
+            name,
+            body,
+            span: start.merge(&self.span),
+        }
+    }
+
     fn parse_body(&mut self) -> Vec<Statement> {
         self.expect(TokenKind::Lbrace);
 
@@ -836,8 +849,8 @@ impl<'a> Iterator for Parser<'a> {
             Tk::Struct => Some(self.parse_struct().into()),
             Tk::Union => Some(self.parse_union().into()),
             Tk::Fn => Some(self.parse_fn().into()),
+            Tk::Test => Some(self.parse_test().into()),
             Tk::Actor => todo!("actor"),
-            Tk::Test => todo!("test"),
             Tk::Alias => todo!("alias"),
             Tk::Eof => None,
             kind => panic!(

@@ -52,7 +52,9 @@ struct Actor {
 }
 
 struct Test {
-	
+	name String
+	body Vec(Statement)
+	span Span
 }
 
 struct Type {

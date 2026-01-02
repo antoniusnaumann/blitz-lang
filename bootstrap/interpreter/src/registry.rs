@@ -3,12 +3,13 @@ use std::{
     ops::Deref,
 };
 
-use parser::{Ast, Definition, Fn, Span, Statement, Struct, Union};
+use parser::{Ast, Definition, Fn, Span, Statement, Struct, Test, Union};
 
 #[derive(Default)]
 pub struct Registry {
     types: HashMap<String, Type>,
     funcs: HashMap<String, Vec<Func>>,
+    pub tests: Vec<Test>,
 
     ast_types: HashMap<String, AstType>,
 }
@@ -222,7 +223,9 @@ fn insert_def(reg: &mut Registry, tys: &HashMap<String, AstType>, ast: &Ast, def
         }
         Definition::Alias(_alias) => todo!(),
         Definition::Actor(_actor) => todo!(),
-        Definition::Test(_test) => todo!(),
+        Definition::Test(test) => {
+            reg.tests.push(test.clone());
+        }
     }
 }
 

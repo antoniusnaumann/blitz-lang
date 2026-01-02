@@ -138,8 +138,9 @@ make_builtin!(read(path) {
 });
 
 make_builtin!(panic(msg) {
-    eprintln!("\x1b[91m{}", as_str(msg));
-    exit(1)
+    let msg_str = as_str(msg);
+    eprintln!("\x1b[91m{}", msg_str);
+    panic!("{}", msg_str);
 });
 
 make_builtin!(todo(msg) {
