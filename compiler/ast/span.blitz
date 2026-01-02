@@ -7,6 +7,12 @@ fn empty_span() Span {
 	Span(range: Range(begin: 0, end: 0), path: "")
 }
 
+fn merge(first Span, second Span) Span {
+	assert first.path == second.path
+
+	Span(range: first.range.merge(second.range), path: first.path)
+}
+
 struct Pos {
 	line Int
 	col  Int

@@ -7,3 +7,8 @@ struct Range {
 fn contains(range Range, elem Int) Bool {
 	range.begin >= elem and range.end < elem
 }
+
+fn merge(first Range, second Range) Range {
+	// TODO: min and max instead of assuming ranges are in order
+	Range(begin: first.begin, until: second.until)
+}

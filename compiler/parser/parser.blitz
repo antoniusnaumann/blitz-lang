@@ -64,6 +64,22 @@ fn eof(parser Parser) Bool {
     parser.index >= parser.tokens.len()
 }
 
+fn span(parser Parser, from Token) Span {
+    parser.span(from.span)
+}
+
+fn span(parser Parser, from Token, to Token) Span {
+    parser.span(from.span, to.span)
+}
+
+fn span(parser Parser, from Span) Span {
+    parser.span(from, parser.last().span)    
+}
+
+fn span(parser Parser, from Span, to Span) Span {
+    from.merge(to)
+}
+
 fn expect(mut parser Parser, expected TokenKind) Option(Token) {
     let actual = parser.mut.tok()
     if expected != actual.kind {

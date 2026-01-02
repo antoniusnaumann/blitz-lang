@@ -42,8 +42,23 @@ fn parse_alias(mut parser Parser) Option(Alias) {
 fn parse_fn(mut parser Parser) Option(Fn) {
     let kw = parser.mut.expect(fn_) else return none
     let ident = parser.mut.expect(ident) else return none
-    let name = 
-    todo("Parse fn")
+    let name = parser.source.substr(ident.span)
+
+    parser.mut.expect(lparen) else return none
+    mut args = []
+    while parser.accept(rparen) == none {
+        let arg = parser.mut.parse_arg() else return none
+    }
+    
+    let type = parser.mut.accept(type)
+
+    parser.mut.expect(lbrace) else return none
+
+    while !parser.has(rbrace) {
+        todo("Parse statement")
+    }
+
+    Fn(name: name, args: args, type: type,  body:, span: kw.span.merge(parser.last.span))
 }
 
 fn parse_test(mut parser Parser) Option(Test) {
