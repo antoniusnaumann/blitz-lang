@@ -95,7 +95,10 @@ impl Value {
             }
             // For now, we just treat generics as "Any"
             (_, T::Any) => true,
-            _ => false,
+            (_v, _t) => {
+                // println!("{v:?} does not match {t:?}");
+                false
+            }
         }
     }
 }

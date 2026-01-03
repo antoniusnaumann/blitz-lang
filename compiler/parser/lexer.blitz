@@ -165,7 +165,7 @@ fn next(mut lexer Lexer) Option(Token) {
 			}
 		}
 
-		let span = Span(range: Range(begin: start, until: lexer.index))
+		let span = Span(range: Range(begin: start, until: lexer.index), path: "TODO")
 		Token(kind: kind, span: span)
 	}
 }

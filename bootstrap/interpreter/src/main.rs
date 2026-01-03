@@ -101,11 +101,11 @@ fn run_test_suite(reg: &Registry) {
                 .or_else(|| info.payload().downcast_ref::<String>().map(String::as_str))
                 .unwrap_or("panic");
 
-            if let Some(loc) = info.location() {
-                eprintln!("\x1b[91m{msg} ({}:{})\x1b[0m", loc.file(), loc.line());
+            *slot.write().unwrap() = if let Some(loc) = info.location() {
+                format!("\x1b[91m{msg} ({}:{})\x1b[0m", loc.file(), loc.line())
             } else {
-                eprintln!("\x1b[91m{msg}\x1b[0m");
-            }
+                format!("\x1b[91m{msg}\x1b[0m")
+            };
         }));
         // Run the test and catch panics
         let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {

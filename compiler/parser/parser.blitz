@@ -24,6 +24,11 @@ fn parse(mut parser Parser) List(Definition) {
     result
 }
 
+fn parse(source String) List(Definition) {
+    mut parser = new_parser(source)
+    parser.mut.parse()
+}
+
 fn next(mut parser Parser) Option(Definition) {
     mut def = none
 

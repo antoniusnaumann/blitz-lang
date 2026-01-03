@@ -58,7 +58,7 @@ fn run_internal(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry
                 }
 
                 let result = Value::Struct(fields);
-                assert!(result.matches(ty));
+                assert!(result.matches(ty), "{:?} does not match {:?}", result, ty);
                 result
             }
             Expression::Call(call) => {
@@ -433,19 +433,16 @@ fn run_internal(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry
 
                 for case in switch.cases {
                     let matches = match &case.label {
-                        parser::SwitchLabel::Type(ty) => {
-                            // Union type matching
-                            if let Value::Union(label, _) = &cond_value {
-                                ty.name == *label
-                            } else {
-                                false
-                            }
-                        }
+                        parser::SwitchLabel::Type(ty) => cond_value.matches(
+                            reg.select_type(&ty.name)
+                                .expect("Type in switch label must exist"),
+                        ),
                         parser::SwitchLabel::Ident(ident) => {
                             // Union label matching
                             if let Value::Union(label, _) = &cond_value {
                                 ident.name == *label
                             } else {
+                                println!("LABEL: {ident:?}");
                                 false
                             }
                         }
