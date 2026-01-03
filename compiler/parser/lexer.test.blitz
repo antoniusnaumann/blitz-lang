@@ -19,6 +19,5 @@ test "Lex operators" {
 
 test "Lex assignment operators" {
     let tokens = "++=+=-=*= /=%=".lex().kinds()
-    assert false
     assert tokens == [concat_assign, add_assign, sub_assign, mul_assign, div_assign, rem_assign]
 }

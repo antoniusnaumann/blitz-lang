@@ -3,6 +3,9 @@ use std::env::args;
 use std::fs;
 use std::panic;
 use std::path::{Path, PathBuf};
+use std::process::exit;
+use std::sync::Arc;
+use std::sync::RwLock;
 
 use interpreter::{Body, Builtin, ROOT, Registry, run_checked};
 use parser::{Ast, Definition, Parser};
@@ -72,30 +75,7 @@ fn run_test_suite(reg: &Registry) {
     }
 
     // Set up panic hook to suppress backtraces in test mode
-    let default_hook = panic::take_hook();
-    panic::set_hook(Box::new(move |info| {
-        // Do nothing - we handle the panic message ourselves
-        if info
-            .payload()
-            .downcast_ref::<interpreter::SilentPanic>()
-            .is_some()
-        {
-            return;
-        }
-
-        let msg = info
-            .payload()
-            .downcast_ref::<&str>()
-            .copied()
-            .or_else(|| info.payload().downcast_ref::<String>().map(String::as_str))
-            .unwrap_or("panic");
-
-        if let Some(loc) = info.location() {
-            eprintln!("\x1b[91m{msg} ({}:{})\x1b[0m", loc.file(), loc.line());
-        } else {
-            eprintln!("\x1b[91m{msg}\x1b[0m");
-        }
-    }));
+    let last_panic = Arc::new(RwLock::new(String::new()));
 
     let mut passed = 0;
     let mut failed = 0;
@@ -105,28 +85,51 @@ fn run_test_suite(reg: &Registry) {
     for test in tests {
         let mut vars = HashMap::new();
 
+        let slot = last_panic.clone();
+        let default_hook = panic::take_hook();
+        panic::set_hook(Box::new(move |info| {
+            // Do nothing - we handle the panic message ourselves
+            if let Some(info) = info.payload().downcast_ref::<interpreter::UserPanic>() {
+                *slot.write().unwrap() = format!("{}", info.0);
+                return;
+            }
+
+            let msg = info
+                .payload()
+                .downcast_ref::<&str>()
+                .copied()
+                .or_else(|| info.payload().downcast_ref::<String>().map(String::as_str))
+                .unwrap_or("panic");
+
+            if let Some(loc) = info.location() {
+                eprintln!("\x1b[91m{msg} ({}:{})\x1b[0m", loc.file(), loc.line());
+            } else {
+                eprintln!("\x1b[91m{msg}\x1b[0m");
+            }
+        }));
         // Run the test and catch panics
         let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
             for statement in &test.body {
                 run_checked(statement.clone(), &mut vars, reg);
             }
         }));
+        // Restore original panic hook
+        panic::set_hook(default_hook);
 
         match result {
             Ok(_) => {
                 print!("\x1b[92mPASS\x1b[0m");
                 passed += 1;
+                println!(" ... \"{}\"", test.name);
             }
             Err(_) => {
-                print!("\n\x1b[91mFAIL\x1b[0m");
+                print!("\x1b[91mFAIL\x1b[0m");
                 failed += 1;
+                println!(" ... \"{}\"", test.name);
+                println!("  -> {}", last_panic.read().unwrap())
             }
         }
-        println!(" ... \"{}\"", test.name);
     }
-
-    // Restore original panic hook
-    panic::set_hook(default_hook);
 
     println!(
         "\ntest result: {}. {} passed; {} failed\n",
@@ -147,11 +150,8 @@ fn run_test_suite(reg: &Registry) {
 pub fn install_panic_hook() {
     let default = panic::take_hook();
     panic::set_hook(Box::new(move |info| {
-        if info
-            .payload()
-            .downcast_ref::<interpreter::SilentPanic>()
-            .is_some()
-        {
+        if let Some(info) = info.payload().downcast_ref::<interpreter::UserPanic>() {
+            eprintln!("{}", info.0);
             return;
         }
 
