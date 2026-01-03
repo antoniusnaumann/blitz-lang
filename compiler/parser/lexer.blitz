@@ -41,22 +41,45 @@ fn next(mut lexer Lexer) Option(Token) {
 		let kind = switch ch {
 			'+' {
 				switch lexer.curr() {
-					'+' { lexer.mut.up(concat) }
+					'+' {
+						lexer.mut.advance()
+						switch lexer.curr() {
+							'=' { lexer.mut.up(concat_assign) }
+							_ { concat }
+						}
+					}
+					'=' { lexer.mut.up(add_assign) }
 					_ { add }
 				}
 			}
-			'-' { sub }
-			'*' { mul }
+			'-' {
+				switch lexer.curr() {
+					'=' { lexer.mut.up(sub_assign) }
+					_ { sub }
+				}
+			}
+			'*' {
+				switch lexer.curr() {
+					'=' { lexer.mut.up(mul_assign) }
+					_ { mul }
+				}
+			}
 			'/' {
 				switch lexer.curr() {
 					'/' {
 						lexer.mut.skip_comment()
 						comment
 					}
+					'=' { lexer.mut.up(div_assign) }
 					_ { div }
 				}
 			}
-			'%' { rem }
+			'%' {
+				switch lexer.curr() {
+					'=' { lexer.mut.up(rem_assign) }
+					_ { rem }
+				}
+			}
 			'=' {
 				switch lexer.curr() {
 					'=' { lexer.mut.up(eq) }

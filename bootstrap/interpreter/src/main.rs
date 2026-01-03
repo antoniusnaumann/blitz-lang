@@ -3,7 +3,6 @@ use std::env::args;
 use std::fs;
 use std::panic;
 use std::path::{Path, PathBuf};
-use std::process::exit;
 use std::sync::Arc;
 use std::sync::RwLock;
 
@@ -80,6 +79,7 @@ fn run_test_suite(reg: &Registry) {
     let mut passed = 0;
     let mut failed = 0;
 
+    println!("--- TEST OUTPUT ---\n");
     println!("Running {} test(s)...\n", tests.len());
 
     for test in tests {

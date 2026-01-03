@@ -5,7 +5,7 @@ fn main() {
 
 	mut parser = new_parser(content)
 	for parser.tokens |token| {
-		assert token.kind != ident
+		assert token.kind != error
 	}
 
 	let ast = parser.mut.parse()
