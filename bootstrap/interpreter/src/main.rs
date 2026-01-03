@@ -118,11 +118,11 @@ fn run_test_suite(reg: &Registry) {
                 passed += 1;
             }
             Err(_) => {
-                print!("\x1b[91mFAIL\x1b[0m");
+                print!("\n\x1b[91mFAIL\x1b[0m");
                 failed += 1;
             }
         }
-        println!(" ... test \"{}\"", test.name);
+        println!(" ... \"{}\"", test.name);
     }
 
     // Restore original panic hook
