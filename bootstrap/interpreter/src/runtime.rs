@@ -1,8 +1,13 @@
-use std::{collections::HashMap, path::PathBuf, process::exit, sync::OnceLock};
+use std::{collections::HashMap, path::PathBuf, sync::OnceLock};
 
 use crate::{Body, Func, Param, Registry, Value};
 
 pub static ROOT: OnceLock<PathBuf> = OnceLock::new();
+
+pub struct SilentPanic;
+fn silent_panic() -> ! {
+    std::panic::panic_any(SilentPanic)
+}
 
 macro_rules! make_builtin {
     ($name:ident ( $($param:ident),* $(,)? ) $body:block) => {
@@ -140,12 +145,12 @@ make_builtin!(read(path) {
 make_builtin!(panic(msg) {
     let msg_str = as_str(msg);
     eprintln!("\x1b[91m{}", msg_str);
-    panic!("{}", msg_str);
+    silent_panic();
 });
 
 make_builtin!(todo(msg) {
     eprintln!("\x1b[96m{}", as_str(msg));
-    exit(1)
+    silent_panic();
 });
 
 make_builtin!(chars(s) {

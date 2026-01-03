@@ -1,0 +1,5 @@
+test "Lex empty func" {
+    let tokens = "fn foo() {}".lex()
+    let kinds = for tokens |token| { token.kind }
+    assert kinds == [fn_, ident, lparen, rparen, lbrace, rbrace]
+}

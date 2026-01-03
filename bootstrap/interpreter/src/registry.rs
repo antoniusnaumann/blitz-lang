@@ -152,9 +152,14 @@ impl Registry {
         }
 
         panic!(
-            "No function named matching arguments {:?},\n\nselection: {:?}",
+            "No function named matching arguments {:?},\n\nselection: {:?}\n{}",
             args,
-            funcs.iter().map(|f| &f.params).collect::<Vec<_>>()
+            funcs.iter().map(|f| &f.params).collect::<Vec<_>>(),
+            if let (Some(span), Some(source)) = (span, source) {
+                span.report(source)
+            } else {
+                "NO SPAN".into()
+            }
         )
     }
 

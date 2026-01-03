@@ -4,12 +4,12 @@ use std::fs;
 use std::panic;
 use std::path::{Path, PathBuf};
 
-use interpreter::{Body, Builtin, Registry, run_checked, ROOT};
+use interpreter::{Body, Builtin, ROOT, Registry, run_checked};
 use parser::{Ast, Definition, Parser};
 
 fn main() {
     let args: Vec<String> = args().collect();
-    
+
     let (run_tests, path) = if args.len() > 2 && args[1] == "test" {
         (true, args[2].clone())
     } else if args.len() > 1 {
@@ -18,7 +18,7 @@ fn main() {
         eprintln!("Usage: interpreter [test] <file-or-directory>");
         std::process::exit(1);
     };
-    
+
     let path = Path::new(&path);
     assert_eq!(path, ROOT.get_or_init(|| path.into()));
 
@@ -56,6 +56,7 @@ fn main() {
         };
 
         println!("--- PROGRAM OUTPUT ---\n");
+        install_panic_hook();
         for s in statements {
             run_checked(s.clone(), &mut vars, &reg);
         }
@@ -64,59 +65,99 @@ fn main() {
 
 fn run_test_suite(reg: &Registry) {
     let tests = &reg.tests;
-    
+
     if tests.is_empty() {
         println!("No tests found.");
         return;
     }
-    
+
     // Set up panic hook to suppress backtraces in test mode
     let default_hook = panic::take_hook();
-    panic::set_hook(Box::new(|_| {
+    panic::set_hook(Box::new(move |info| {
         // Do nothing - we handle the panic message ourselves
+        if info
+            .payload()
+            .downcast_ref::<interpreter::SilentPanic>()
+            .is_some()
+        {
+            return;
+        }
+
+        let msg = info
+            .payload()
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| info.payload().downcast_ref::<String>().map(String::as_str))
+            .unwrap_or("panic");
+
+        if let Some(loc) = info.location() {
+            eprintln!("\x1b[91m{msg} ({}:{})\x1b[0m", loc.file(), loc.line());
+        } else {
+            eprintln!("\x1b[91m{msg}\x1b[0m");
+        }
     }));
-    
+
     let mut passed = 0;
     let mut failed = 0;
-    
+
     println!("Running {} test(s)...\n", tests.len());
-    
+
     for test in tests {
-        print!("test {} ... ", test.name);
-        
         let mut vars = HashMap::new();
-        
+
         // Run the test and catch panics
         let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
             for statement in &test.body {
                 run_checked(statement.clone(), &mut vars, reg);
             }
         }));
-        
+
         match result {
             Ok(_) => {
-                println!("\x1b[92mok\x1b[0m");
+                print!("\x1b[92mPASS\x1b[0m");
                 passed += 1;
             }
             Err(_) => {
-                println!("\x1b[91mFAILED\x1b[0m");
+                print!("\x1b[91mFAIL\x1b[0m");
                 failed += 1;
             }
         }
+        println!(" ... test \"{}\"", test.name);
     }
-    
+
     // Restore original panic hook
     panic::set_hook(default_hook);
-    
-    println!("\ntest result: {}. {} passed; {} failed\n", 
-        if failed == 0 { "\x1b[92mok\x1b[0m" } else { "\x1b[91mFAILED\x1b[0m" },
-        passed, 
+
+    println!(
+        "\ntest result: {}. {} passed; {} failed\n",
+        if failed == 0 {
+            "\x1b[92mok\x1b[0m"
+        } else {
+            "\x1b[91mFAILED\x1b[0m"
+        },
+        passed,
         failed
     );
-    
+
     if failed > 0 {
         std::process::exit(1);
     }
+}
+
+pub fn install_panic_hook() {
+    let default = panic::take_hook();
+    panic::set_hook(Box::new(move |info| {
+        if info
+            .payload()
+            .downcast_ref::<interpreter::SilentPanic>()
+            .is_some()
+        {
+            return;
+        }
+
+        // everything else: behave exactly like Rust normally does
+        default(info);
+    }));
 }
 
 fn collect_definitions(path: &Path) -> Vec<Ast> {

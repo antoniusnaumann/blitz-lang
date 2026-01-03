@@ -8,6 +8,11 @@ fn new_lexer(source String) Lexer {
 	Lexer(source: source.chars(), index: 0)
 }
 
+fn lex(source String) List(Token) {
+	mut lexer = new_lexer(source)
+	lexer.mut.lex()
+}
+
 fn lex(mut lexer Lexer) List(Token) {
 	mut tokens = []
 	mut token = lexer.mut.next()
@@ -100,7 +105,6 @@ fn next(mut lexer Lexer) Option(Token) {
 			_ {
 				if ch >= 'a' and ch <= 'z' {
 					lexer.mut.skip_ident()
-					// TODO: remove
 					let name = lexer.substr(start, lexer.index)
 					switch name {
 						"struct" { struct_ }
@@ -168,7 +172,7 @@ fn peekch(lexer Lexer, n Int) Rune {
 	lexer.source[lexer.index + n]
 }
 
-fn substr(source String, start Int, until Int) String {
+fn substr(source List(Rune), start Int, until Int) String {
 	let str = ""
 	mut index = start
 	while index < until {
@@ -177,6 +181,18 @@ fn substr(source String, start Int, until Int) String {
 	}
 
 	str
+}
+
+fn substr(source List(Rune), range Range) String {
+	substr(source, range.begin, range.until)		
+}
+
+fn substr(source List(Rune), span Span) String {
+	substr(source, span.range)		
+}
+
+fn substr(source String, start Int, until Int) String {
+	substr(source.chars(), start, until)
 }
 
 fn substr(source String, range Range) String {
