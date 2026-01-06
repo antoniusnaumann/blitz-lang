@@ -75,7 +75,28 @@ fn parse_arg(mut parser Parser) Option(Arg) {
 }
 
 fn parse_statement(mut parser Parser) Option(Statement) {
-    todo("Parse statement")
+    parser.mut.skip_newlines()
+    let token = parser.peek()
+    switch debug(token.kind) {
+        mut_ { parser.mut.parse_declaration() }
+        let_ { parser.mut.parse_declaration() }
+        _ { parser.mut.parse_expression() }
+    }
+}
+
+fn parse_declaration(mut parser Parser) Option(Declaration) {
+    let modifier = parser.tok()
+    let is_mut = switch modifier.kind {
+        mut_ { false }
+        let_ { true }
+        _ { panic("unreachable") }
+    }
+    let name = parser.mut.parse_ident() else return none
+    let type = parser.mut.parse_type() else todo("Allow variables without type annotations")
+    parser.mut.expect(assign) else todo("Allow declaration without init")
+    let init = parser.mut.parse_expression() else return none
+    
+    Declaration(name:, type:, init:, is_mut:, span: parser.span(modifier))
 }
 
 fn parse_ident(mut parser Parser) Option(Ident) {

@@ -5,7 +5,7 @@ union Statement {
 
 struct Declaration {
 	name   String
-	type   Type
+	type   Option(Type)
 	is_mut Bool
 	init   Option(Expression)
 	span   Span
