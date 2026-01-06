@@ -2,7 +2,18 @@
 // Bool, Int, Float, Rune, String
 
 // complex built-in shorthands for types
-// T? (Option(T)), [T] (List(T)), [K: V] (OrderedDict(K, V)), {T} (Set(T)), {K: V} (Dict(K, V)), T! (Result(T)), T!E (Result(T, E)), T~ (Future(T)), |P| R (Fn(P, R))
+// T? (Option(T)),
+// T! (Result(T)),
+// T!E (Result(T, E)),
+// T|E (Either(T, E)), A|B|C (Either(A, Either(B, C)))
+// [T] (List(T)),
+// [K: V] (OrderedDict(K, V)),
+// {T} (Set(T)),
+// {K: V} (Dict(K, V)),
+// T~ (Future(T)),
+// (A, B) (Tuple(A, B))
+// |P, Q| R (Fn(Tuple(P, Q), R))
+// Int.. Range(Int)
 
 // literals
 // list: [1, 2, 3]
