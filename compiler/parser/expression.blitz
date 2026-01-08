@@ -1,9 +1,6 @@
-fn parse_expression(mut parser Parser) Option(Statement) {
-    todo("Parse Expression")
-}
-
 fn parse_precedence(mut parser Parser, mut lhs Expression, min_prec Int) Option(Expression) {
     parser.mut.skip_newlines()
+    print("ENTER PARSE PRECEDENCE")
 
     while true {
         let peek = parser.peek()
@@ -40,7 +37,7 @@ fn parse_precedence(mut parser Parser, mut lhs Expression, min_prec Int) Option(
                     none { }
                 }
 
-                let member = parser.mut.expect_ident()
+                let member = parser.mut.parse_ident()
                 let span = lhs.span.merge(parser.span(member.span))
 
                 switch parser.peek().kind {
@@ -63,6 +60,7 @@ fn parse_expression(mut parser Parser) Expression {
 }
 
 fn parse_expression_bp(mut parser Parser, min_prec Int) Expression {
+    print("ENTER PARSE EXPRESSION BP")
     parser.mut.skip_newlines()
     let token = parser.peek()
 
@@ -86,7 +84,7 @@ fn parse_expression_bp(mut parser Parser, min_prec Int) Expression {
                 rbracket { empty_return }
                 rparen { empty_return }
                 newline { empty_return }
-                _ { Return(parser.mut.parse_expression_bp(0), span: parser.span(span)) }
+                _ { Return(expr: parser.mut.parse_expression_bp(0), span: parser.span(span)) }
             }
         }
         continue_ {
@@ -101,14 +99,14 @@ fn parse_expression_bp(mut parser Parser, min_prec Int) Expression {
             parser.mut.next()
             let condition = parser.mut.parse_expression_bp(0)
             let negated = UnaryOp(op: not, expr: condition, span: parser.span)
-            let panic_arg = String("Assertion failed")
+            let panic_arg = "Assertion failed"
             let panic_call = Call(name: "panic", args: [panic_arg], ufcs: false, span: parser.span)
             If(cond: negated, body: [panic_call], span: parser.span)
         }
-        lbrace { block: parser.mut.parse_body() }
+        lbrace { parser.mut.parse_body() }
         ident {
             let span = token.span
-            let name = parser.mut.expect_ident()
+            let name = parser.mut.parse_ident()
             switch parser.peek().kind {
                 lparen { parser.mut.parse_call(name) }
                 _ { Ident(name:, span:) }
@@ -117,9 +115,9 @@ fn parse_expression_bp(mut parser Parser, min_prec Int) Expression {
         type { parser.mut.parse_constructor() }
         lbracket { parser.mut.parse_list() }
         lparen { parser.mut.parse_group() }
-        str { String(parser.mut.parse_string_lit()) }
-        ch { Rune(parser.mut.parse_char_lit()) }
-        num { number: parser.mut.parse_num_lit() }
+        str { parser.mut.parse_string_lit() }
+        ch { parser.mut.parse_char_lit() }
+        num { parser.mut.parse_num_lit() }
         true_ { parser.mut.parse_bool_lit(true) }
         false_ { parser.mut.parse_bool_lit(false) }
         _ { todo("Error handling: Illegal token for expression") }
@@ -138,7 +136,12 @@ fn parse_expression_bp(mut parser Parser, min_prec Int) Expression {
 }
 
 union Assignment {
-    Operator
+    add
+    sub
+    mul
+    div
+    rem
+    concat
     plain
 }
 
@@ -146,12 +149,12 @@ fn consume_assignment(mut parser Parser) Option(Assignment) {
     let token = parser.mut.accept([add_assign, sub_assign, mul_assign, div_assign, rem_assign, concat_assign, assign]) else return none
     
     switch token.kind {
-        add_assign { Operator(add) }
-        sub_assign { Operator(sub) }
-        mul_assign { Operator(mul) }
-        div_assign { Operator(div) }
-        rem_assign { Operator(rem) }
-        concat_assign { Operator(concat) }
+        add_assign { add }
+        sub_assign { sub }
+        mul_assign { mul }
+        div_assign { div }
+        rem_assign { rem }
+        concat_assign { concat }
         assign { plain }
         _ { panic("unreachable") }
     }
@@ -178,7 +181,33 @@ fn parse_member_call(mut parser Parser, target Expression, method Ident) Express
 }
 
 fn parse_call(mut parser Parser, name Ident) Expression {
-    todo("parse_call")
+    let token = parser.mut.expect(lparen)
+    mut args = []
+
+    while !parser.has(rparen) {
+        let param = parser.peek()
+        switch param.kind {
+            ident {
+                switch parser.peek(2) {
+                    colon {
+                        let label = parser.mut.expect(ident) else panic("unreachable")
+                        parser.mut.expect(colon) else panic("unreachable")
+                        let init = switch parser.peek() {
+                            comma { label }
+                            _ { parser.mut.parse_expression() }
+                        }
+                        args ++= CallArg(label:, init:)
+                    }
+                    _ { args ++= CallArg(label: none, init: parser.mut.parse_expression()) }
+                }
+            }
+            _ { args ++= CallArg(label: none, init: parser.mut.parse_expression()) }
+        }
+        parser.mut.accept(comma)        
+    }
+    parser.mut.expect(rparen)
+
+    Call(name:, args:, ufcs: false, span: parser.span(token))
 }
 
 fn parse_constructor(mut parser Parser) Expression {
@@ -194,7 +223,8 @@ fn parse_group(mut parser Parser) Expression {
 }
 
 fn parse_string_lit(mut parser Parser) String {
-    todo("parse_string_lit")
+    let token = parser.mut.expect(str)
+    parser.source.substr(Range(begin: token.span.range.begin + 1, until: token.span.range.until - 1))
 }
 
 fn parse_char_lit(mut parser Parser) Rune {

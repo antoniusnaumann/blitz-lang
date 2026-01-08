@@ -57,6 +57,15 @@ fn peek(parser Parser) Token {
 	}
 }
 
+fn peek(parser Parser, n Int) Token {
+    let index = parser.index + n - 1    
+    if parser.tokens.len() > index and index >= 0 {
+        parser.tokens[index]
+	} else {
+	    Token(kind: eof, span: parser.last().span)
+	}
+}
+
 fn last(parser Parser) Token {
     if parser.index == 0 {
         panic("Called 'last' before consuming a token!")
@@ -125,6 +134,7 @@ fn accept(mut parser Parser, expected List(TokenKind)) Option(Token) {
 
 fn skip_newlines(mut parser Parser) {
     while parser.has(newline) or parser.has(comment) {
+        print("SKIPPING NEWLINE")
         parser.mut.tok()
     } 
 }

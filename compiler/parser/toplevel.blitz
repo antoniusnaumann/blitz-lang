@@ -57,6 +57,7 @@ fn parse_fn(mut parser Parser) Option(Fn) {
 
     mut body = []
     while !parser.has(rbrace) {
+        print("FUNC BODY")
         let statement = parser.mut.parse_statement() else return none
         body = body ++ statement
         parser.mut.accept(semicolon)
@@ -77,7 +78,7 @@ fn parse_arg(mut parser Parser) Option(Arg) {
 fn parse_statement(mut parser Parser) Option(Statement) {
     parser.mut.skip_newlines()
     let token = parser.peek()
-    switch debug(token.kind) {
+    switch token.kind {
         mut_ { parser.mut.parse_declaration() else todo("recover") }
         let_ { parser.mut.parse_declaration() else todo("recover") }
         _ { parser.mut.parse_expression() else todo("recover") }

@@ -29,7 +29,7 @@ union Expression {
 	Group
 	String
 	Rune
-	number: Float
+	Float
 	continue_
 	break_
 }
@@ -59,13 +59,18 @@ struct ConstructorArg {
 
 struct Call {
 	name String
-	args List(Expression)
+	args List(CallArg)
 	ufcs Bool
 	span Span
 }
 
+struct CallArg {
+	label Ident
+	expr  Expression
+}
+
 struct Assignment {
-	left  Lval
+	left  Box(Expression)
 	right Box(Expression)
 }
 
@@ -106,7 +111,7 @@ union SwitchLabel {
 }
 
 struct Return {
-	expr Expression
+	expr Box(Expression)
 	span Span
 }
 
