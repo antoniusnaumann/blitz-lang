@@ -107,6 +107,22 @@ fn accept(mut parser Parser, expected TokenKind) Option(Token) {
     }
 }
 
+fn accept(mut parser Parser, expected List(TokenKind)) Option(Token) {
+    mut any = false
+    for expected |kind| {
+        if parser.has(kind) {
+            any = true
+            break
+        } 
+    }
+
+    if any {
+        parser.mut.next()
+    } else {
+        none
+    }
+}
+
 fn skip_newlines(mut parser Parser) {
     while parser.has(newline) or parser.has(comment) {
         parser.mut.tok()

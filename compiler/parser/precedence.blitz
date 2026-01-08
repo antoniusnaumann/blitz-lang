@@ -9,13 +9,48 @@ union Operator {
 }
 
 union BinaryOperator {
-    // TODO LLM: Adapt  from the bootstrap interpreter
+    add
+    sub
+    mul
+    div
+    rem
+    concat
+    member
+    eq
+    ne
+    gt
+    ge
+    lt
+    le
+    and_
+    or_
+    else_
 }
 
 union UnaryOperator {
-    // TODO LLM: Adapt  from the bootstrap interpreter
+    not
+    neg
 }
 
 fn precedence(operator Operator) Precedence {
-    // TODO LLM: Adapt from precedence.rs
+    switch operator {
+        else_ { Precedence(left: 2, right: 2) }
+        or_ { Precedence(left: 7, right: 8) }
+        and_ { Precedence(left: 10, right: 11) }
+        eq { Precedence(left: 24, right: 25) }
+        ne { Precedence(left: 24, right: 25) }
+        lt { Precedence(left: 24, right: 25) }
+        le { Precedence(left: 24, right: 25) }
+        gt { Precedence(left: 24, right: 25) }
+        ge { Precedence(left: 24, right: 25) }
+        concat { Precedence(left: 35, right: 36) }
+        add { Precedence(left: 42, right: 43) }
+        sub { Precedence(left: 42, right: 43) }
+        mul { Precedence(left: 45, right: 46) }
+        div { Precedence(left: 45, right: 46) }
+        rem { Precedence(left: 45, right: 46) }
+        not { Precedence(left: 0, right: 53) }
+        neg { Precedence(left: 0, right: 53) }
+        member { Precedence(left: 59, right: 60) }
+    }
 } 

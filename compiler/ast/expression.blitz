@@ -11,11 +11,6 @@ struct Declaration {
 	span   Span
 }
 
-union Lval {
-	Member
-	ident: String
-}
-
 union Expression {
 	Constructor
 	Call
