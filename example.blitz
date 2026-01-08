@@ -130,13 +130,13 @@ fn result(download Download(T, E)) T!E {
 	}
 }
 
-fn status(download Download) {
+fn status(download Download(T, E)) {
 	switch download {
-		T as success {
+		T |success| {
 			// stringify result with debug formatting
 			"\(success:#)"
 		}
-		E as error {
+		E |error| {
 			"error: \(error)"
 		}
 		loading {
