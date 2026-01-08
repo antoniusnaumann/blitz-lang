@@ -1,3 +1,140 @@
 fn parse_expression(mut parser Parser) Option(Statement) {
     todo("Parse Expression")
 }
+
+fn parse_precedence(mut parser Parser, mut lhs Expression, min_prec Int) Option(Expression) {
+    parser.mut.skip_newlines()
+
+    while true {
+        let peek = parser.peek()
+
+        if peek.kind == lbracket {
+            parser.mut.expect(lbracket)
+            parser.mut.skip_newlines()
+            let index = parser.mut.parse_expression_bp(0)
+            let end_bracket = parser.mut.expect(rbracket) else return none
+            let span = lhs.span.merge(end_bracket.span)
+
+            lhs = Index(target: lhs, index: index, span: span)
+            continue
+        }
+
+        let op = switch peek.kind {
+            Operator { peek.kind }
+            _ { break }
+        }
+
+        let prec = op.precedence()
+        if prec.left < min_prec { break }
+
+        parser.mut.next()
+        parser.mut.skip_newlines()
+
+        switch op {
+            member {
+                switch parser.mut.accept(mut_) {
+                    some {
+                        lhs = Mut(target: lhs)
+                        continue
+                    }
+                    none { }
+                }
+
+                let member = parser.mut.expect_ident()
+                let span = lhs.span.merge(parser.span(member.span))
+
+                switch parser.peek().kind {
+                    lparen {
+                        lhs = parser.mut.parse_member_call(lhs, member)
+                    }
+                    _ { lhs = Member(parent: lhs, member:, span:) }
+                }
+            }
+            _ {
+                let rhs = parser.mut.parse_expression_bp(prec.right)
+                lhs = BinaryOp(op:, left: lhs, right: rhs, span: lhs.span.merge(rhs.span))
+            }
+        }
+    }
+}
+
+fn parse_expression(mut parser Parser) Expression {
+    parser.mut.parse_expression_bp(0)
+}
+
+fn parse_expression_bp(mut parser Parser, min_prec Int) Expression {
+    parser.mut.skip_newlines()
+    let token = parser.peek()
+
+    // TODO: handle prefix operators here
+
+    let lhs = switch token.kind {
+        for_ { parser.mut.parse_for() }
+        while_ { parser.mut.parse_while() }
+        if_ { parser.mut.parse_if() }
+        switch_ { parser.mut.parse_switch() }
+        return_ {
+            parser.mut.next()
+            let peek = parser.peek()
+            let span = token.span
+            let emtpy_return = Return(expr: Block(statements: [], span:), span:)
+            switch peek.kind {
+                mut_ { empty_return }
+                let_ { empty_return }
+                semicolon { empty_return }
+                rbrace { empty_return }
+                rbracket { empty_return }
+                rparen { empty_return }
+                newline { empty_return }
+                _ { Return(parser.mut.parse_expression_bp(0), span: parser.span(span)) }
+            }
+        }
+        continue_ {
+            parser.mut.next()
+            continue_
+        }
+        break_ {
+            parser.mut.next()
+            break_
+        }
+        assert_ {
+            parser.mut.next()
+            let condition = parser.mut.parse_expression_bp(0)
+            let negated = UnaryOp(op: not, expr: condition, span: parser.span)
+            let panic_arg = String("Assertion failed")
+            let panic_call = Call(name: "panic", args: [panic_arg], ufcs: false, span: parser.span)
+            If(cond: negated, body: [panic_call], span: parser.span)
+        }
+        lbrace { block: parser.mut.parse_body() }
+        ident {
+            let span = token.span
+            let name = parser.mut.expect_ident()
+            switch parser.peek().kind {
+                lparen { parser.mut.parse_call(name) }
+                _ { Ident(name:, span:) }
+            }
+        }
+        type { parser.mut.parse_constructor() }
+        lbracket { parser.mut.parse_list() }
+        lparen { parser.mut.parse_group() }
+        str { String(parser.mut.parse_string_lit()) }
+        ch { Rune(parser.mut.parse_char_lit()) }
+        num { number: parser.mut.parse_num_lit() }
+        true_ { parser.mut.parse_bool_lit(true) }
+        false_ { parser.mut.parse_bool_lit(false) }
+        _ { todo("Error handling: Illegal token for expression") }
+    }
+
+    let expr = self.parse_precedence(lhs, min_prec)     
+}
+
+union Assignment {
+    Operator
+    plain
+}
+
+fn consume_assignment(mut parser Parser) Option(Assignment) {
+    // TODO LLM: adapt method from parser.rs
+}
+
+// TODO LLM: Add the method scaffolding for methods like parse_for

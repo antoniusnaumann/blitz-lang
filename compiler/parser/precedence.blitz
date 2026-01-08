@@ -1,0 +1,21 @@
+struct Precedence {
+    left  Int
+    right Int
+}
+
+union Operator {
+    BinaryOperator
+    UnaryOperator
+}
+
+union BinaryOperator {
+    // TODO LLM: Adapt  from the bootstrap interpreter
+}
+
+union UnaryOperator {
+    // TODO LLM: Adapt  from the bootstrap interpreter
+}
+
+fn precedence(operator Operator) Precedence {
+    // TODO LLM: Adapt from precedence.rs
+} 

@@ -28,13 +28,13 @@ union Expression {
 	While
 	If
 	Switch
+	Block
+	Return
 	List_
 	Group
 	String
 	Rune
 	number: Float
-	block: List(Statement)
-	return_: Box(Expression)
 	continue_
 	break_
 }
@@ -110,6 +110,15 @@ union SwitchLabel {
 	Ident	
 }
 
+struct Return {
+	expr Expression
+	span Span
+}
+
+struct Block {
+	statements List(Statement)
+	span       Span
+}
 
 struct List_ {
 	elems List(Expression)
