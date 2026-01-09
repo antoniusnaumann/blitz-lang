@@ -1,4 +1,5 @@
-fn parse_precedence(mut parser Parser, mut lhs Expression, min_prec Int) Option(Expression) {
+fn parse_precedence(mut parser Parser, lhs Expression, min_prec Int) Option(Expression) {
+    mut left = lhs
     parser.mut.skip_newlines()
     print("ENTER PARSE PRECEDENCE")
 
@@ -10,9 +11,9 @@ fn parse_precedence(mut parser Parser, mut lhs Expression, min_prec Int) Option(
             parser.mut.skip_newlines()
             let index = parser.mut.parse_expression_bp(0)
             let end_bracket = parser.mut.expect(rbracket) else return none
-            let span = lhs.span.merge(end_bracket.span)
+            let span = left.span.merge(end_bracket.span)
 
-            lhs = Index(target: lhs, index: index, span: span)
+            left = Index(target: left, index: index, span: span)
             continue
         }
 
@@ -31,25 +32,25 @@ fn parse_precedence(mut parser Parser, mut lhs Expression, min_prec Int) Option(
             member {
                 switch parser.mut.accept(mut_) {
                     some {
-                        lhs = Mut(target: lhs)
+                        left = Mut(target: left)
                         continue
                     }
                     none { }
                 }
 
                 let member = parser.mut.parse_ident()
-                let span = lhs.span.merge(parser.span(member.span))
+                let span = left.span.merge(parser.span(member.span))
 
                 switch parser.peek().kind {
                     lparen {
-                        lhs = parser.mut.parse_member_call(lhs, member)
+                        left = parser.mut.parse_member_call(left, member)
                     }
-                    _ { lhs = Member(parent: lhs, member:, span:) }
+                    _ { left = Member(parent: left, member:, span:) }
                 }
             }
             _ {
-                let rhs = parser.mut.parse_expression_bp(prec.right)
-                lhs = BinaryOp(op:, left: lhs, right: rhs, span: lhs.span.merge(rhs.span))
+                let rhs = parser.mut.parse_expression_bp(debug(prec.right))
+                left = BinaryOp(op:, left:, right: rhs, span: lhs.span.merge(rhs.span))
             }
         }
     }
@@ -123,13 +124,26 @@ fn parse_expression_bp(mut parser Parser, min_prec Int) Expression {
         _ { todo("Error handling: Illegal token for expression") }
     }
 
-    let expr = self.parse_precedence(lhs, min_prec)
+    print("BEFORE PARSE PREC")
+    let expr = parser.mut.parse_precedence(lhs, min_prec)
     switch parser.mut.consume_assignment() {
         some {
+            let assignment = some
             let right = parser.mut.parse_expression()
-            // TODO LLM: desugar compound assignment as seen in parser.rs. but don't use Lval, we will validate that expr is a valid lval later
+            debug(right)
+            
+            // Desugar compound assignments: a += b becomes a = a + b
+            let desugared_right = switch assignment {
+                add { BinaryOp(op: add, left: expr, right:, span: expr.span.merge(right.span)) }
+                sub { BinaryOp(op: sub, left: expr, right:, span: expr.span.merge(right.span)) }
+                mul { BinaryOp(op: mul, left: expr, right:, span: expr.span.merge(right.span)) }
+                div { BinaryOp(op: div, left: expr, right:, span: expr.span.merge(right.span)) }
+                rem { BinaryOp(op: rem, left: expr, right:, span: expr.span.merge(right.span)) }
+                concat { BinaryOp(op: concat, left: expr, right:, span: expr.span.merge(right.span)) }
+                plain { right }
+            }
 
-            Assignment(left: expr, right:)
+            Assignment(left: expr, right: desugared_right)
         }
         none { expr }
     }
@@ -181,6 +195,7 @@ fn parse_member_call(mut parser Parser, target Expression, method Ident) Express
 }
 
 fn parse_call(mut parser Parser, name Ident) Expression {
+    print("BEGIN PARSE CALL")
     let token = parser.mut.expect(lparen)
     mut args = []
 
@@ -223,8 +238,11 @@ fn parse_group(mut parser Parser) Expression {
 }
 
 fn parse_string_lit(mut parser Parser) String {
+    print("BEGIN PARSE STRING")
     let token = parser.mut.expect(str)
-    parser.source.substr(Range(begin: token.span.range.begin + 1, until: token.span.range.until - 1))
+    let str = parser.source.substr(token.span.range.begin + 1, token.span.range.until - 1)
+    print("END PARSE STRING")
+    str
 }
 
 fn parse_char_lit(mut parser Parser) Rune {

@@ -93,6 +93,27 @@ impl Value {
                     false
                 }
             }
+            (V::String(_), T::Union(cases)) => {
+                cases.iter().any(|(_label, ty)| matches!(ty, Type::String))
+            }
+            (V::Int(_), T::Union(cases)) => {
+                cases.iter().any(|(_label, ty)| matches!(ty, Type::Int))
+            }
+            (V::Float(_), T::Union(cases)) => {
+                cases.iter().any(|(_label, ty)| matches!(ty, Type::Float))
+            }
+            (V::Bool(_), T::Union(cases)) => {
+                cases.iter().any(|(_label, ty)| matches!(ty, Type::Bool))
+            }
+            (V::Rune(_), T::Union(cases)) => {
+                cases.iter().any(|(_label, ty)| matches!(ty, Type::Rune))
+            }
+            (V::Struct(_), T::Union(cases)) => cases
+                .iter()
+                .any(|(_label, ty)| matches!(ty, Type::Struct(_))),
+            (V::List(_), T::Union(cases)) => {
+                cases.iter().any(|(_label, ty)| matches!(ty, Type::List(_)))
+            }
             // For now, we just treat generics as "Any"
             (_, T::Any) => true,
             (_v, _t) => {
@@ -147,6 +168,7 @@ impl Registry {
                         span.clone(),
                     );
                     if !arg.matches(ty) {
+                        // println!("ARG {arg:?} does not match {ty:?}");
                         continue 'outer;
                     }
                 }

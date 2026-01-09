@@ -58,7 +58,7 @@ fn run_internal(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry
                 }
 
                 let result = Value::Struct(fields);
-                assert!(result.matches(ty), "{:?} does not match {:?}", result, ty);
+                assert!(result.matches(ty), "{:#?} does not match {:#?}", result, ty);
                 result
             }
             Expression::Call(call) => {

@@ -65,8 +65,8 @@ struct Call {
 }
 
 struct CallArg {
-	label Ident
-	expr  Expression
+	label Option(Ident)
+	init  Expression
 }
 
 struct Assignment {

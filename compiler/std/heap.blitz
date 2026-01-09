@@ -1,1 +1,6 @@
 struct Box(T) {}
+
+struct Pair(U, V) {
+    left  U
+    right V
+}
