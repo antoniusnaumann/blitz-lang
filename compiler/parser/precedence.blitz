@@ -3,35 +3,6 @@ struct Precedence {
     right Int
 }
 
-union Operator {
-    BinaryOperator
-    UnaryOperator
-}
-
-union BinaryOperator {
-    add
-    sub
-    mul
-    div
-    rem
-    concat
-    member
-    eq
-    ne
-    gt
-    ge
-    lt
-    le
-    and_
-    or_
-    else_
-}
-
-union UnaryOperator {
-    not
-    neg
-}
-
 fn precedence(operator Operator) Precedence {
     switch operator {
         else_ { Precedence(left: 2, right: 2) }
@@ -51,6 +22,6 @@ fn precedence(operator Operator) Precedence {
         rem { Precedence(left: 45, right: 46) }
         not { Precedence(left: 0, right: 53) }
         neg { Precedence(left: 0, right: 53) }
-        member { Precedence(left: 59, right: 60) }
+        dot { Precedence(left: 59, right: 60) }
     }
 } 

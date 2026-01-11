@@ -1,27 +1,29 @@
 union Operator {
-	add  // +
-	sub  // -
-	div  // /
-	mul  // *
-	rem  // %
-	
-	concat // ++
-	member // .
-
-	eq // ==
-	ne // !=
-	gt // >
-	ge // >=
-	lt // <
-	le // <=
-
-	// unary
-	not // !
-	neg // -
-
- 	// short-circuiting keyword operators
-	and_
-	or_
-
-	else_
+    BinaryOperator
+    UnaryOperator
 }
+
+union BinaryOperator {
+    add
+    sub
+    mul
+    div
+    rem
+    concat
+    dot
+    eq
+    ne
+    gt
+    ge
+    lt
+    le
+    and_
+    or_
+    else_
+}
+
+union UnaryOperator {
+    not
+    neg
+}
+

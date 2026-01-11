@@ -4,10 +4,10 @@ union Statement {
 }
 
 struct Declaration {
-	name   String
+	name   Ident
 	type   Option(Type)
 	is_mut Bool
-	init   Option(Expression)
+	init   Expression
 	span   Span
 }
 
@@ -58,7 +58,7 @@ struct ConstructorArg {
 }
 
 struct Call {
-	name String
+	name Ident
 	args List(CallArg)
 	ufcs Bool
 	span Span

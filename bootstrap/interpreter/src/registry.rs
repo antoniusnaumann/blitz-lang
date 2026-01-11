@@ -72,15 +72,42 @@ impl Value {
             (V::Float(_), T::Float) => true,
             (V::Bool(_), T::Bool) => true,
             (V::Rune(_), T::Rune) => true,
-            (V::Struct(fields), T::Struct(members)) => fields
-                .iter()
-                .all(|(name, val)| members.get(name).is_some_and(|m| val.matches(m))),
+            (V::Struct(fields), T::Struct(members)) => fields.iter().all(|(name, val)| {
+                members.get(name).is_some_and(|m| {
+                    if val.matches(m) {
+                        true
+                    } else {
+                        // println!("{val:?} <!> {m:?}");
+                        false
+                    }
+                })
+            }),
             (V::Union(label, val), T::Union(cases)) => {
+                // First check if the label exists directly in this union
                 if let Some(case) = cases.get(label) {
-                    val.matches(case)
-                } else {
-                    false
+                    return val.matches(case);
                 }
+
+                // If not found directly, recursively check nested unions
+                // This allows 'add' to match union Operator { BinaryOperator, UnaryOperator }
+                // where BinaryOperator itself is a union containing 'add'
+                for (_case_label, case_ty) in cases.iter() {
+                    if let T::Union(nested_cases) = case_ty {
+                        // Recursively check if the label exists in nested union
+                        if nested_cases.contains_key(label) {
+                            if let Some(nested_case) = nested_cases.get(label) {
+                                return val.matches(nested_case);
+                            }
+                        }
+                        // Also recursively check deeper nested unions
+                        let nested_union_value = V::Union(label.clone(), val.clone());
+                        if nested_union_value.matches(case_ty) {
+                            return true;
+                        }
+                    }
+                }
+
+                false
             }
             (V::List(list), T::List(ty)) => list.iter().all(|v| v.matches(ty)),
             (V::Void, T::Void) => true,
