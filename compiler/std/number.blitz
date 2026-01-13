@@ -1,0 +1,17 @@
+// TODO: uncomment once we have type aliases
+// alias I8 = Int(8)
+// alias I16 = Int(16)
+// alias I32 = Int(32)
+// alias I64 = Int(64)
+// alias I128 = Int(128)
+//
+// alias U8 = UInt(8)
+// alias U16 = UInt(16)
+// alias U32 = UInt(32)
+// alias U64 = UInt(64)
+// alias U128 = UInt(128)
+//
+// alias F16 = Float(16)
+// alias F32 = Float(32)
+// alias F64 = Float(64)
+// alias F128 = Float(128)

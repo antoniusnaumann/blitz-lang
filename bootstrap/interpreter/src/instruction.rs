@@ -194,14 +194,15 @@ fn run_internal(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry
                 result
             }
             Expression::Member(member) => {
-                let Value::Struct(parent) = run(member.parent.deref().clone().into(), vars, reg)
-                else {
-                    panic!("Member operator on non-struct")
-                };
-                parent
-                    .get(&member.member)
-                    .unwrap_or_else(|| panic!("No entry for {}", member.member))
-                    .clone()
+                match run(member.parent.deref().clone().into(), vars, reg) {
+                    Value::Struct(parent) => parent
+                        .get(&member.member)
+                        .unwrap_or_else(|| panic!("No entry for {}", member.member))
+                        .clone(),
+                    other => {
+                        panic!("Member operator on non-struct: Queried {member:?} on {other:?}")
+                    }
+                }
             }
             Expression::Index(index) => {
                 let target = run(index.target.deref().clone().into(), vars, reg);

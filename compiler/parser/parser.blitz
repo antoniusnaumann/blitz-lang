@@ -40,8 +40,9 @@ fn next(mut parser Parser) Option(Definition) {
 }
 
 fn tok(mut parser Parser) Token {
-    if parser.tokens.len() > parser.index {
+    if !parser.eof() {
         let token = parser.tokens[parser.index]
+        print(token.kind)
     	parser.index = parser.index + 1
     	token
 	} else {
@@ -50,7 +51,7 @@ fn tok(mut parser Parser) Token {
 }
 
 fn peek(parser Parser) Token {
-    if parser.tokens.len() > parser.index {
+    if !parser.eof() {
         parser.tokens[parser.index]
 	} else {
 	    Token(kind: eof, span: parser.last().span)
@@ -59,7 +60,7 @@ fn peek(parser Parser) Token {
 
 fn peek(parser Parser, n Int) Token {
     let index = parser.index + n - 1    
-    if parser.tokens.len() > index and index >= 0 {
+    if index < parser.tokens.len() and index >= 0 {
         parser.tokens[index]
 	} else {
 	    Token(kind: eof, span: parser.last().span)
@@ -75,7 +76,14 @@ fn last(parser Parser) Token {
 }
 
 fn eof(parser Parser) Bool {
-    parser.index >= parser.tokens.len()
+    if parser.index >= parser.tokens.len() {
+        print("INDEX")
+        print(parser.index)
+        print("LEN")
+        print(parser.tokens.len())
+        panic("Parser is EOF")
+    }
+    false
 }
 
 fn span(parser Parser) Span {
@@ -126,7 +134,7 @@ fn accept(mut parser Parser, expected List(TokenKind)) Option(Token) {
     }
 
     if any {
-        parser.mut.next()
+        parser.mut.tok()
     } else {
         none
     }

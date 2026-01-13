@@ -9,7 +9,7 @@ fn parse_precedence(mut parser Parser, lhs Expression, min_prec Int) Option(Expr
         if peek.kind == lbracket {
             parser.mut.expect(lbracket)
             parser.mut.skip_newlines()
-            let index = parser.mut.parse_expression_bp(0)
+            let index = parser.mut.parse_expression()
             let end_bracket = parser.mut.expect(rbracket) else return none
             let span = left.span.merge(end_bracket.span)
 
@@ -31,7 +31,7 @@ fn parse_precedence(mut parser Parser, lhs Expression, min_prec Int) Option(Expr
         let prec = op.precedence()
         if prec.left < min_prec { break }
 
-        parser.mut.next()
+        parser.mut.tok()
         parser.mut.skip_newlines()
 
         switch op {
@@ -43,7 +43,7 @@ fn parse_precedence(mut parser Parser, lhs Expression, min_prec Int) Option(Expr
                     }
                     none { }
                 }
-
+                debug(parser.peek())
                 let member = parser.mut.parse_ident()
                 let span = left.span.merge(parser.span(member.span))
 
@@ -65,7 +65,12 @@ fn parse_precedence(mut parser Parser, lhs Expression, min_prec Int) Option(Expr
 }
 
 fn parse_expression(mut parser Parser) Expression {
-    parser.mut.parse_expression_bp(0)
+    print("NEW EXPRESSION")
+    print(parser.peek().kind)
+    let expr = parser.mut.parse_expression_bp(0)
+    print("FINISH EXPRESSION")
+    print(parser.peek().kind)
+    expr
 }
 
 fn parse_expression_bp(mut parser Parser, min_prec Int) Expression {
@@ -81,7 +86,7 @@ fn parse_expression_bp(mut parser Parser, min_prec Int) Expression {
         if_ { parser.mut.parse_if() }
         switch_ { parser.mut.parse_switch() }
         return_ {
-            parser.mut.next()
+            parser.mut.tok()
             let peek = parser.peek()
             let span = token.span
             let emtpy_return = Return(expr: Block(statements: [], span:), span:)
@@ -93,20 +98,20 @@ fn parse_expression_bp(mut parser Parser, min_prec Int) Expression {
                 rbracket { empty_return }
                 rparen { empty_return }
                 newline { empty_return }
-                _ { Return(expr: parser.mut.parse_expression_bp(0), span: parser.span(span)) }
+                _ { Return(expr: parser.mut.parse_expression(), span: parser.span(span)) }
             }
         }
-        continue_ {
-            parser.mut.next()
+        continue_ { 
+            parser.mut.tok()
             continue_
         }
         break_ {
-            parser.mut.next()
+            parser.mut.tok()
             break_
         }
         assert_ {
-            parser.mut.next()
-            let condition = parser.mut.parse_expression_bp(0)
+            parser.mut.tok()
+            let condition = parser.mut.parse_expression()
             let negated = UnaryOp(op: not, expr: condition, span: parser.span)
             let panic_arg = "Assertion failed"
             let panic_call = Call(name: "panic", args: [panic_arg], ufcs: false, span: parser.span)
