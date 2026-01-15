@@ -4,9 +4,9 @@ fn parse_precedence(mut parser Parser, lhs Expression, min_prec Int) Option(Expr
     print("ENTER PARSE PRECEDENCE")
 
     while true {
-        let peek = parser.peek()
+        let peek_ = parser.peek()
        
-        if peek.kind == lbracket {
+        if peek_.kind == lbracket {
             parser.mut.expect(lbracket)
             parser.mut.skip_newlines()
             let index = parser.mut.parse_expression()
@@ -17,10 +17,10 @@ fn parse_precedence(mut parser Parser, lhs Expression, min_prec Int) Option(Expr
             continue
         }
 
-        let op = switch peek.kind {
+        let op = switch peek_.kind {
             Operator {
                 print("OPERATOR")
-                peek.kind
+                peek_.kind
             }
             _ {
                 print("NO OPERATOR -- BREAKING")
@@ -207,7 +207,10 @@ fn parse_switch(mut parser Parser) Expression {
 }
 
 fn parse_member_call(mut parser Parser, target Expression, method Ident) Expression {
-    todo("parse_member_call")
+    mut call = parser.mut.parse_call(method)
+    call.ufcs = true
+    call.args = [CallArg(label: none, init: target)] ++ call.args
+    call
 }
 
 fn parse_call(mut parser Parser, name Ident) Expression {

@@ -1,4 +1,7 @@
-use std::{collections::HashMap, ops::Deref};
+use std::{
+    collections::{HashMap, HashSet},
+    ops::Deref,
+};
 
 use parser::{BinaryOp, Expression, Operator, Statement};
 
@@ -40,9 +43,13 @@ fn run_internal(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry
                 }
             }
 
-            _ = vars
-                .insert(declaration.name.clone(), init)
-                .is_none_or(|_| panic!("Illegal shadowing of {}", declaration.name));
+            _ = vars.insert(declaration.name.clone(), init).is_none_or(|_| {
+                panic!(
+                    "Illegal shadowing of {}\n\n{:?}",
+                    declaration.name,
+                    vars.keys(),
+                )
+            });
             Value::Void
         }
         Statement::Expression(expression) => match expression {
@@ -351,6 +358,7 @@ fn run_internal(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry
             }
             Expression::While(while_) => {
                 let mut results = Vec::new();
+                let vars_before_loop: HashSet<_> = vars.keys().cloned().collect();
 
                 loop {
                     let cond = run(while_.cond.deref().clone().into(), vars, reg);
@@ -383,6 +391,9 @@ fn run_internal(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry
                         }
                         _ => panic!("While needs boolean as condition"),
                     }
+
+                    // Discard all vars that were created this iteration
+                    vars.retain(|k, _| vars_before_loop.contains(k));
                 }
                 Value::List(results)
             }
@@ -443,7 +454,6 @@ fn run_internal(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry
                             if let Value::Union(label, _) = &cond_value {
                                 ident.name == *label
                             } else {
-                                println!("LABEL: {ident:?}");
                                 false
                             }
                         }
@@ -452,7 +462,6 @@ fn run_internal(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry
                             if let Value::String(s) = &cond_value {
                                 lit.value == *s
                             } else {
-                                println!("NOT A STRING: {:?}", cond_value);
                                 false
                             }
                         }

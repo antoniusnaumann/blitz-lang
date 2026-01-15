@@ -18,7 +18,7 @@ fn lex(mut lexer Lexer) List(Token) {
 	mut token = lexer.mut.next()
 
 	while token != none {
-		tokens = tokens ++ token		
+		tokens ++= token		
 		token = lexer.mut.next()
 	}
 		
@@ -199,7 +199,7 @@ fn substr(source List(Rune), start Int, until Int) String {
 	let str = ""
 	mut index = start
 	while index < until {
-		str = str ++ source[index]
+		str ++= source[index]
 		index = index + 1
 	}
 

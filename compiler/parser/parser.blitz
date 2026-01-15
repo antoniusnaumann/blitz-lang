@@ -17,7 +17,7 @@ fn parse(mut parser Parser) List(Definition) {
     mut def = parser.mut.next()
 
     while def != none {
-        result = result ++ def
+        result ++= def
         def = parser.mut.next()
     }
 
@@ -76,14 +76,7 @@ fn last(parser Parser) Token {
 }
 
 fn eof(parser Parser) Bool {
-    if parser.index >= parser.tokens.len() {
-        print("INDEX")
-        print(parser.index)
-        print("LEN")
-        print(parser.tokens.len())
-        panic("Parser is EOF")
-    }
-    false
+    parser.index >= parser.tokens.len()
 }
 
 fn span(parser Parser) Span {

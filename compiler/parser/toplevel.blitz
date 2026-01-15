@@ -47,7 +47,7 @@ fn parse_fn(mut parser Parser) Option(Fn) {
     mut args = []
     while parser.mut.accept(rparen) == none {
         let arg = parser.mut.parse_arg() else return none
-        args = args ++ arg
+        args ++= arg
         parser.mut.accept(comma)
     }
     
@@ -59,7 +59,7 @@ fn parse_fn(mut parser Parser) Option(Fn) {
     while !parser.has(rbrace) {
         print("FUNC BODY")
         let statement = parser.mut.parse_statement() else return none
-        body = body ++ statement
+        body ++= statement
         parser.mut.accept(semicolon)
     }
 
