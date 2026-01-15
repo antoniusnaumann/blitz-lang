@@ -191,7 +191,17 @@ fn consume_assignment(mut parser Parser) Option(Assignment) {
 }
 
 fn parse_for(mut parser Parser) Expression {
-    todo("parse_for")
+    let token = parser.mut.expect(for_) else return none
+    let iter = parser.mut.parse_expression() else return none
+
+    // TODO: implement implicit argument it
+    parser.mut.expect(pipe) else return none
+    let elem = parser.parse_ident() else return none
+    parser.mut.expect(pipe) else return none
+
+    let body = parser.mut.parse_body else return none
+
+    For(iter:, elem:, body:, span: parser.span(token))
 }
 
 fn parse_while(mut parser Parser) Expression {
@@ -284,5 +294,14 @@ fn parse_bool_lit(mut parser Parser, value Bool) Expression {
 }
 
 fn parse_body(mut parser Parser) Block {
-    todo("parse_body")
+    let first = parser.peek()
+    mut body = []
+    while !parser.has(rbrace) {
+        let statement = parser.mut.parse_statement() else return none
+        body ++= statement
+        parser.mut.accept(semicolon)
+    }
+    parser.mut.expect(rbrace)
+
+    Block(statements: body, span: parser.span(first))
 }

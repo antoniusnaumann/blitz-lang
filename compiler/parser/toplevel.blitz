@@ -62,6 +62,7 @@ fn parse_fn(mut parser Parser) Option(Fn) {
         body ++= statement
         parser.mut.accept(semicolon)
     }
+    parser.mut.expect(rbrace)
 
     Fn(name: ident, args:, type:, body:, span: parser.span(kw))
 }
