@@ -16,7 +16,7 @@ struct Fn {
 	name Ident
 	args List(Arg)
 	type Option(Type)
-	body List(Statement)
+	body Block
 	span Span
 }
 

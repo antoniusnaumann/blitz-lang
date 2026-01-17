@@ -72,6 +72,8 @@ impl Value {
             (V::Float(_), T::Float) => true,
             (V::Bool(_), T::Bool) => true,
             (V::Rune(_), T::Rune) => true,
+            // HACK: make our builtin Box type work for now
+            (_, T::Struct(members)) if members.is_empty() => true,
             (V::Struct(fields), T::Struct(members)) => fields.iter().all(|(name, val)| {
                 members.get(name).is_some_and(|m| {
                     if val.matches(m) {
@@ -141,7 +143,7 @@ impl Value {
             (V::List(_), T::Union(cases)) => {
                 cases.iter().any(|(_label, ty)| matches!(ty, Type::List(_)))
             }
-            // For now, we just treat generics as "Any"
+            // HACK: For now, we just treat generics as "Any"
             (_, T::Any) => true,
             (_v, _t) => {
                 // println!("{v:?} does not match {t:?}");

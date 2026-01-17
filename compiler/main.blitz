@@ -9,5 +9,6 @@ fn main() {
 	}
 
 	let ast = parser.mut.parse()
+	print("---- AST")
 	ast.print()
 }

@@ -204,7 +204,9 @@ fn run_internal(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry
                 match run(member.parent.deref().clone().into(), vars, reg) {
                     Value::Struct(parent) => parent
                         .get(&member.member)
-                        .unwrap_or_else(|| panic!("No entry for {}", member.member))
+                        .unwrap_or_else(|| {
+                            panic!("No entry for {} on {:?}", member.member, member.parent)
+                        })
                         .clone(),
                     other => {
                         panic!("Member operator on non-struct: Queried {member:?} on {other:?}")
@@ -449,6 +451,12 @@ fn run_internal(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry
                             reg.select_type(&ty.name)
                                 .expect("Type in switch label must exist"),
                         ),
+                        parser::SwitchLabel::Ident(ident) if ident.name == "some" => {
+                            match &cond_value {
+                                Value::Union(label, _) => label != "none",
+                                _ => true,
+                            }
+                        }
                         parser::SwitchLabel::Ident(ident) => {
                             // Union label matching
                             if let Value::Union(label, _) = &cond_value {

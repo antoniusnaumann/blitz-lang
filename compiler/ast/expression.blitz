@@ -19,6 +19,8 @@ union Expression {
 	Assignment
 	BinaryOp
 	UnaryOp
+	Assert
+	Mut
 	For
 	While
 	If
@@ -41,7 +43,7 @@ struct Ident {
 
 struct Member {
 	parent Box(Expression)
-	member String
+	member Ident
 	span   Span
 }
 
@@ -76,8 +78,8 @@ struct Assignment {
 
 struct For {
 	iter Box(Expression)
-	elem String
-	body List(Statement)
+	elem Ident
+	body Block
 	span Span
 }
 
@@ -141,4 +143,16 @@ struct UnaryOp {
 	op   Operator
 	expr Box(Expression)
 	span Span
+}
+
+struct Assert {
+	cond Box(Expression)
+	span Span
+	ufcs Bool
+}
+
+struct Mut {
+	expr Box(Expression)
+	span Span
+	ufcs Bool
 }

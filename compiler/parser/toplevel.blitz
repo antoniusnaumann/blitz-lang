@@ -52,18 +52,8 @@ fn parse_fn(mut parser Parser) Option(Fn) {
     }
     
     let type = parser.mut.accept(type)
-
-    parser.mut.expect(lbrace) else return none
-
-    mut body = []
-    while !parser.has(rbrace) {
-        print("FUNC BODY")
-        let statement = parser.mut.parse_statement() else return none
-        body ++= statement
-        parser.mut.accept(semicolon)
-    }
-    parser.mut.expect(rbrace)
-
+    let body = parser.mut.parse_body()
+    
     Fn(name: ident, args:, type:, body:, span: parser.span(kw))
 }
 
