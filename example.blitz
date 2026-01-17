@@ -124,7 +124,7 @@ fn result(download Download(T, E)) T!E {
 		loading {
 			panic("Still loading!")
 		}
-		_ as res {
+		else |res| {
 			res
 		}
 	}

@@ -489,8 +489,8 @@ fn run_internal(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry
                                 _ => false,
                             }
                         }
-                        parser::SwitchLabel::Discard(_) => {
-                            // Discard pattern matches everything
+                        parser::SwitchLabel::Else(_) => {
+                            // Else pattern matches everything
                             true
                         }
                     };

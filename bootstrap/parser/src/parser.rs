@@ -671,17 +671,13 @@ impl<'a> Parser<'a> {
 
             let label = match kind {
                 TokenKind::Ident => {
-                    // Check if it's the discard pattern "_"
-                    let token = self.lexer.peek().unwrap();
-                    let ident_str = &self.source[RangeInclusive::from(token.span.clone())];
-                    if ident_str == "_" {
-                        self.lexer.next();
-                        Discard {}.into()
-                    } else {
-                        self.expect_ident().into()
-                    }
+                    self.expect_ident().into()
                 }
                 TokenKind::Type => self.expect_type().into(),
+                TokenKind::Else => {
+                    self.lexer.next(); // Consume 'else' token
+                    Else {}.into()
+                }
                 TokenKind::Str => StringLit {
                     value: self.parse_string_lit(),
                 }

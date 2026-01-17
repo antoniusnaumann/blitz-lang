@@ -3,6 +3,6 @@ test "Parse empty func" {
     assert defs.len() == 1
     switch defs[0] {
         Fn { print("FUNCTION") }
-        _ { panic("Expected function") }
+        else { panic("Expected function") }
     }
 }

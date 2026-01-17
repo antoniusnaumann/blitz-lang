@@ -45,23 +45,23 @@ fn next(mut lexer Lexer) Option(Token) {
 						lexer.mut.advance()
 						switch lexer.curr() {
 							'=' { lexer.mut.up(concat_assign) }
-							_ { concat }
+							else { concat }
 						}
 					}
 					'=' { lexer.mut.up(add_assign) }
-					_ { add }
+					else { add }
 				}
 			}
 			'-' {
 				switch lexer.curr() {
 					'=' { lexer.mut.up(sub_assign) }
-					_ { sub }
+					else { sub }
 				}
 			}
 			'*' {
 				switch lexer.curr() {
 					'=' { lexer.mut.up(mul_assign) }
-					_ { mul }
+					else { mul }
 				}
 			}
 			'/' {
@@ -71,37 +71,37 @@ fn next(mut lexer Lexer) Option(Token) {
 						comment
 					}
 					'=' { lexer.mut.up(div_assign) }
-					_ { div }
+					else { div }
 				}
 			}
 			'%' {
 				switch lexer.curr() {
 					'=' { lexer.mut.up(rem_assign) }
-					_ { rem }
+					else { rem }
 				}
 			}
 			'=' {
 				switch lexer.curr() {
 					'=' { lexer.mut.up(eq) }
-					_  { assign }
+					else  { assign }
 				}
 			}
 			'<' {
 				switch lexer.curr() {
 					'=' { lexer.mut.up(le) }
-					_ { lt }
+					else { lt }
 				}
 			}
 			'>' {
 				switch lexer.curr() {
 					'=' { lexer.mut.up(ge) }
-					_ { gt }
+					else { gt }
 				}
 			}
 			'!' {
 				switch lexer.curr() {
 					'=' { lexer.mut.up(ne) }
-					_ { not }
+					else { not }
 				}
 			}
 			'(' { lparen }
@@ -125,7 +125,7 @@ fn next(mut lexer Lexer) Option(Token) {
 				lexer.mut.skip_ch()
 				ch
 			}
-			_ {
+			else {
 				if ch >= 'a' and ch <= 'z' {
 					lexer.mut.skip_ident()
 					let name = lexer.substr(start, lexer.index)
@@ -156,7 +156,7 @@ fn next(mut lexer Lexer) Option(Token) {
 						"try" { try_ }
 						"catch" { catch_ }
 						"raise" { raise_ }
-						_ { ident }
+						else { ident }
 					}
 				} else if ch >= 'A' and ch <= 'Z' {
 					lexer.mut.skip_ident()
@@ -272,7 +272,7 @@ fn skip_str(mut lexer Lexer) {
 		if escape {
 			switch lexer.curr() {
 				'(' { todo("Implement format strings") }
-				_ { } // escape sequences are generally handled in parser
+				else { } // escape sequences are generally handled in parser
 			}
 			escape = false
 		} else {
@@ -283,7 +283,7 @@ fn skip_str(mut lexer Lexer) {
 				}
 				'\\' { escape = true }
 				'\0' { break }
-				_ { }
+				else { }
 			}
 		}
 		lexer.mut.advance()
@@ -303,7 +303,7 @@ fn skip_ch(mut lexer Lexer) {
 				}
 				'\\' { escape = true }
 				'\0' { break }
-				_ { }
+				else { }
 			}
 		}
 		lexer.mut.advance()

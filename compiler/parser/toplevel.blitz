@@ -10,7 +10,7 @@ fn parse_def(mut parser Parser) Option(Definition) {
     	pub_ {
     	    Pub(item: parser.mut.parse_def.unwrap()) // TODO: generate an error instead of unwrapping
     	}
-        _ {
+        else {
             parser.errors = parser.errors ++ Error(span: token.span, msg: "Unexpected token!")
             parser.tok()
 
@@ -72,7 +72,7 @@ fn parse_statement(mut parser Parser) Option(Statement) {
     switch token.kind {
         mut_ { parser.mut.parse_declaration() else todo("recover") }
         let_ { parser.mut.parse_declaration() else todo("recover") }
-        _ { parser.mut.parse_expression() else todo("recover") }
+        else { parser.mut.parse_expression() else todo("recover") }
     }
 }
 
@@ -81,7 +81,7 @@ fn parse_declaration(mut parser Parser) Option(Declaration) {
     let is_mut = switch modifier.kind {
         mut_ { false }
         let_ { true }
-        _ { panic("unreachable") }
+        else { panic("unreachable") }
     }
     let name = parser.mut.parse_ident() else return none
     let type = if parser.peek().kind != assign { parser.mut.parse_type() else return none }

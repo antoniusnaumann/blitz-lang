@@ -124,7 +124,7 @@ union SwitchLabel {
 	StringLit
 	CharLit
 	NumberLit
-	Discard
+	Else
 }
 
 struct StringLit {
@@ -139,7 +139,7 @@ struct NumberLit {
 	value Float
 }
 
-struct Discard {
+struct Else {
 }
 
 struct List {
