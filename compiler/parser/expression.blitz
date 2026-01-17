@@ -36,11 +36,10 @@ fn parse_precedence(mut parser Parser, lhs Expression, min_prec Int) Option(Expr
 
         switch op {
             dot {
-                switch debug(parser.mut.accept(mut_)) {
+                switch parser.mut.accept(mut_) {
                     some {
                         left = Mut(expr: left, span: parser.span(), ufcs: true)
                         continue
-                        panic("OOOOPS")
                     }
                     none { }
                 }

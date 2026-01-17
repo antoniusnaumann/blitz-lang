@@ -5,10 +5,21 @@ fn main() {
 
 	mut parser = new_parser(content)
 	for parser.tokens |token| {
+		print(token.kind)
 		assert token.kind != error
 	}
 
 	let ast = parser.mut.parse()
 	print("---- AST")
 	ast.print()
+	for ast |item| {
+		switch item {
+			Fn {
+				for item.body.statements |s| {
+					print(s)
+				}
+			}
+			// else { todo("print other stuff") }
+		}
+	}
 }
