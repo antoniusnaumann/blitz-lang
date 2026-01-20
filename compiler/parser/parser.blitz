@@ -145,6 +145,8 @@ fn has(parser Parser, expected TokenKind) Bool {
 }
 
 fn err(mut parser Parser, msg String) {
-   parser.errors = parser.errors ++ Error(span: parser.last().span, msg: msg)
+    // TODO: for now, we panic, later we should maintain an error list
+    panic(msg)
+    parser.errors ++= Error(span: parser.last().span, msg: msg)
 } 
 

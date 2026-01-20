@@ -220,28 +220,36 @@ fn parse_switch(mut parser Parser) Option(Expression) {
     let token = parser.mut.expect(switch_) else return none
     let expr = parser.mut.parse_expression() else return none
     parser.mut.expect(lbrace) else return none
+    parser.mut.skip_newlines()
 
     mut cases = []
     while !parser.has(rbrace) {
         let label = parser.mut.parse_switch_label() else return none
+        parser.mut.skip_newlines()
+        print("END SWITCH LABEL")
         let body = parser.mut.parse_body() else return none
+        parser.mut.skip_newlines()
 
         cases ++= SwitchCase(label:, body:, span: parser.span(label))
+        print("END SWITCH CASE")
     }
     parser.mut.expect(rbrace)
+
+    print("END SWITCH")
 
     Switch(expr:, cases:, span: parser.span(token))
 }
 
 fn parse_switch_label(mut parser Parser) Option(SwitchLabel) {
-    switch parser.peek() {
+    switch parser.peek().kind {
         ident { parser.mut.parse_ident() else return none }
         type { parser.mut.parse_type() else return none }
         else_ {
-            parser.next()
+            print("DEFAULT CASE")
+            parser.mut.tok()
             default
         }
-        else { parser.mut.err("Unexpected token!") }
+        else { parser.mut.err("Unexpected token for switch label!") }
     }
 }
 

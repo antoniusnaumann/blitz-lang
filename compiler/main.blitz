@@ -19,7 +19,7 @@ fn main() {
 					print(s)
 				}
 			}
-			// else { todo("print other stuff") }
+			else { todo("print other stuff") }
 		}
 	}
 }
