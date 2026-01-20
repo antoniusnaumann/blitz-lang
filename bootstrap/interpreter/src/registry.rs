@@ -207,7 +207,13 @@ impl Registry {
 
         panic!(
             "No function named matching arguments {:?},\n\nselection: {:?}\n{}",
-            args,
+            args.iter()
+                .map(|arg| match arg {
+                    Value::String(s) => s.chars().take(20).collect::<String>(),
+                    _ => format!("{arg:?}"),
+                })
+                .collect::<Vec<String>>()
+                .join(", "),
             funcs.iter().map(|f| &f.params).collect::<Vec<_>>(),
             if let (Some(span), Some(source)) = (span, source) {
                 span.report(source)

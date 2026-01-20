@@ -109,7 +109,8 @@ struct SwitchCase {
 
 union SwitchLabel {
 	Type
-	Ident	
+	Ident
+	default	
 }
 
 struct Return {

@@ -217,7 +217,32 @@ fn parse_if(mut parser Parser) Option(Expression) {
 }
 
 fn parse_switch(mut parser Parser) Option(Expression) {
-    todo("parse_switch")
+    let token = parser.mut.expect(switch_) else return none
+    let expr = parser.mut.parse_expression() else return none
+    parser.mut.expect(lbrace) else return none
+
+    mut cases = []
+    while !parser.has(rbrace) {
+        let label = parser.mut.parse_switch_label() else return none
+        let body = parser.mut.parse_body() else return none
+
+        cases ++= SwitchCase(label:, body:, span: parser.span(label))
+    }
+    parser.mut.expect(rbrace)
+
+    Switch(expr:, cases:, span: parser.span(token))
+}
+
+fn parse_switch_label(mut parser Parser) Option(SwitchLabel) {
+    switch parser.peek() {
+        ident { parser.mut.parse_ident() else return none }
+        type { parser.mut.parse_type() else return none }
+        else_ {
+            parser.next()
+            default
+        }
+        else { parser.mut.err("Unexpected token!") }
+    }
 }
 
 fn parse_member_call(mut parser Parser, target Expression, method Ident) Option(Expression) {
