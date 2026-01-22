@@ -25,7 +25,26 @@ fn parse_def(mut parser Parser) Option(Definition) {
 
 fn parse_struct(mut parser Parser) Option(Struct) {
     let kw = parser.mut.expect(struct_) else return none
-    todo("Parse struct")
+    let ty = parser.mut.parse_type() else return none
+    let fields = parser.mut.parse_fields() else return none
+
+    Struct(sig: ty, fields:, span: parser.span(kw))
+}
+
+fn parse_fields(mut parser Parser) List(Field) {
+    parser.mut.expect(lbrace)
+    mut fields = []
+    while !parser.has(rbrace) {
+        let span = parser.span()
+        let name = parser.mut.parse_ident() else break
+        let type = parser.mut.parse_type() else break
+        parser.mut.accept(comma)
+
+        fields ++= Field(name:, type:, span: parser.span(span))
+    }
+    parser.mut.expect(rbrace) // TODO recover
+
+    fields
 }
 
 fn parse_union(mut parser Parser) Option(Union) {
