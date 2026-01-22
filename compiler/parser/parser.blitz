@@ -32,6 +32,7 @@ fn parse(source String) List(Definition) {
 fn next(mut parser Parser) Option(Definition) {
     mut def = none
 
+    parser.mut.skip_newlines()
     while def == none and !parser.eof() {
         def = parser.mut.parse_def()
     }
@@ -101,6 +102,7 @@ fn span(parser Parser, from Span, to Span) Span {
 fn expect(mut parser Parser, expected TokenKind) Option(Token) {
     let actual = parser.mut.tok()
     if expected != actual.kind {
+        print(actual.kind)
         parser.mut.err("Unexpected token!")
         return none
     }

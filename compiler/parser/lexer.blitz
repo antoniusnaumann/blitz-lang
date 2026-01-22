@@ -123,7 +123,7 @@ fn next(mut lexer Lexer) Option(Token) {
 			}
 			'\'' {
 				lexer.mut.skip_ch()
-				ch
+				char
 			}
 			else {
 				if ch >= 'a' and ch <= 'z' {
@@ -161,6 +161,9 @@ fn next(mut lexer Lexer) Option(Token) {
 				} else if ch >= 'A' and ch <= 'Z' {
 					lexer.mut.skip_ident()
 					type
+				} else if ch >= '0' and ch <= '9' {
+					lexer.mut.skip_num()
+					num
 				} else { error }
 			}
 		}
@@ -310,3 +313,17 @@ fn skip_ch(mut lexer Lexer) {
 	}
 }
 
+fn skip_num(mut lexer Lexer) {
+	mut dot = false	
+	while true {
+		let ch = lexer.curr()
+		if !(ch >= '0' and ch <= '9') and ch != '.' { return }
+		lexer.mut.advance()
+		if ch == '.' {
+			if dot { return }
+			if !(lexer.curr() >= '0' and lexer.curr() <= '9') { return }
+			dot = true
+			lexer.mut.advance()
+		}
+	}
+}

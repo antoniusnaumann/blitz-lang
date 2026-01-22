@@ -55,7 +55,7 @@ fn parse_fn(mut parser Parser) Option(Fn) {
         parser.mut.accept(comma)
     }
     
-    let type = parser.mut.accept(type)
+    let type = if parser.has(type) { parser.mut.parse_type() }
     let body = parser.mut.parse_body()
     
     Fn(name: ident, args:, type:, body:, span: parser.span(kw))

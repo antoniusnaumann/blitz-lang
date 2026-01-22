@@ -21,3 +21,13 @@ test "Lex assignment operators" {
     let tokens = "++=+=-=*= /=%=".lex().kinds()
     assert tokens == [concat_assign, add_assign, sub_assign, mul_assign, div_assign, rem_assign]
 }
+
+test "Lex int" {
+    let tokens = "123".lex().kinds()
+    assert tokens == [num]
+}
+
+test "Lex float" {
+    let tokens = "2137.1238".lex().kinds()
+    assert tokens == [num]
+}

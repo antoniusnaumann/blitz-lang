@@ -8,3 +8,34 @@ test "Parse empty func" {
     }
     assert count == 1
 }
+
+fn parse_file(path String) {
+    let content = read(path).unwrap()
+    mut parser = new_parser(content)
+	for parser.tokens |token| {
+	    if token.kind == error { print(parser.source.substr(token.span)) }
+		assert token.kind != error
+	}
+
+	let ast = parser.mut.parse()
+}
+
+test "Parse main.blitz" { parse_file("main.blitz") }
+
+test "Parse parser/parser.blitz" { parse_file("parser/parser.blitz") }
+test "Parse parser/toplevel.blitz" { parse_file("parser/toplevel.blitz") }
+test "Parse parser/expression.blitz" { parse_file("parser/expression.blitz") }
+test "Parse parser/lexer.blitz" { parse_file("parser/lexer.blitz") }
+test "Parse parser/precedence.blitz" { parse_file("parser/precedence.blitz") }
+test "Parse parser/tokens.blitz" { parse_file("parser/tokens.blitz") }
+
+test "Parse ast/expression.blitz" { parse_file("ast/expression.blitz") }
+test "Parse ast/definition.blitz" { parse_file("ast/definition.blitz") }
+test "Parse ast/operator.blitz" { parse_file("ast/operator.blitz") }
+test "Parse ast/span.blitz" { parse_file("ast/span.blitz") }
+test "Parse ast/error.blitz" { parse_file("ast/error.blitz") }
+
+test "Parse std/number.blitz" { parse_file("std/number.blitz") }
+test "Parse std/heap.blitz" { parse_file("std/heap.blitz") }
+test "Parse std/range.blitz" { parse_file("std/range.blitz") }
+test "Parse std/result.blitz" { parse_file("std/result.blitz") }

@@ -104,11 +104,11 @@ make_builtin!(read(path) {
 
 make_builtin!(panic(msg) {
     let msg_str = as_str(msg);
-    user_panic(format!("\x1b[91m{}", msg_str));
+    user_panic(format!("\x1b[91m{}\x1b[0m", msg_str));
 });
 
 make_builtin!(todo(msg) {
-    user_panic(format!("\x1b[96m{}", as_str(msg)));
+    user_panic(format!("\x1b[96m{}\x1b[0m", as_str(msg)));
 });
 
 make_builtin!(chars(s) {
