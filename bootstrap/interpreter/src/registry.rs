@@ -206,15 +206,19 @@ impl Registry {
         }
 
         panic!(
-            "No function named matching arguments {:?},\n\nselection: {:?}\n{}",
+            "No function named matching arguments {},\n\nselection: {}\n{}",
             args.iter()
                 .map(|arg| match arg {
                     Value::String(s) => s.chars().take(20).collect::<String>(),
-                    _ => format!("{arg:?}"),
+                    _ => format!("{arg:?}").chars().take(20).collect::<String>(),
                 })
                 .collect::<Vec<String>>()
-                .join(", "),
-            funcs.iter().map(|f| &f.params).collect::<Vec<_>>(),
+                .join(",\n"),
+            funcs
+                .iter()
+                .map(|f| format!("{:?}", &f.params))
+                .collect::<Vec<_>>()
+                .join("\n"),
             if let (Some(span), Some(source)) = (span, source) {
                 span.report(source)
             } else {

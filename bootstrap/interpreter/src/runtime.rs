@@ -3,6 +3,7 @@ use std::{collections::HashMap, path::PathBuf, sync::OnceLock};
 use crate::{Body, Func, Param, Registry, Value};
 
 pub static ROOT: OnceLock<PathBuf> = OnceLock::new();
+pub static DEBUG: OnceLock<bool> = OnceLock::new();
 
 pub struct UserPanic(pub String);
 fn user_panic(msg: String) -> ! {

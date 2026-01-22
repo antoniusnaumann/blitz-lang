@@ -103,7 +103,7 @@ struct Switch {
 
 struct SwitchCase {
 	label SwitchLabel
-	body  List(Statement)
+	body  Block
 	span  Span
 }
 

@@ -15,6 +15,7 @@ fn main() {
 	for ast |item| {
 		switch item {
 			Fn {
+				print(item.name.name)
 				for item.body.statements |s| {
 					print(s)
 				}

@@ -1,8 +1,10 @@
 test "Parse empty func" {
     let defs = "fn foo() {}".parse()
+    mut count = 0
     assert defs.len() == 1
     switch defs[0] {
-        Fn { print("FUNCTION") }
+        Fn { count = 1 }
         else { panic("Expected function") }
     }
+    assert count == 1
 }

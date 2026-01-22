@@ -1,6 +1,6 @@
 fn parse_def(mut parser Parser) Option(Definition) {
     let token = parser.peek()
-    switch token.kind {
+    let result = switch token.kind {
     	struct_ { parser.mut.parse_struct() }
     	union_ { parser.mut.parse_union() }
     	actor_ { parser.mut.parse_actor() }
@@ -11,12 +11,16 @@ fn parse_def(mut parser Parser) Option(Definition) {
     	    Pub(item: parser.mut.parse_def.unwrap()) // TODO: generate an error instead of unwrapping
     	}
         else {
+            print(token.kind)
             parser.err("Unexpected token for definition!")
             parser.tok()
 
             none
         }
     }
+    parser.mut.skip_newlines()
+
+    result
 }
 
 fn parse_struct(mut parser Parser) Option(Struct) {

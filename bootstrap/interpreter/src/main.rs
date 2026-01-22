@@ -6,11 +6,18 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::RwLock;
 
+use interpreter::DEBUG;
 use interpreter::{Body, Builtin, ROOT, Registry, run_checked};
 use parser::{Ast, Definition, Parser};
 
 fn main() {
-    let args: Vec<String> = args().collect();
+    let mut args: Vec<String> = args().collect();
+    if args.len() > 2 && args[1] == "debug" {
+        assert!(DEBUG.get_or_init(|| true));
+        args.remove(1);
+    } else {
+        assert!(!DEBUG.get_or_init(|| false));
+    }
 
     let (run_tests, path) = if args.len() > 2 && args[1] == "test" {
         (true, args[2].clone())

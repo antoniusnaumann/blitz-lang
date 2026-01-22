@@ -5,7 +5,10 @@ use std::{
 
 use parser::{BinaryOp, Expression, Operator, Statement};
 
-use crate::registry::{Body, Registry, Value};
+use crate::{
+    DEBUG,
+    registry::{Body, Registry, Value},
+};
 
 pub fn run(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry) -> Value {
     run_internal(st, vars, reg)
@@ -65,10 +68,30 @@ fn run_internal(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry
                 }
 
                 let result = Value::Struct(fields);
-                assert!(result.matches(ty), "{:#?} does not match {:#?}", result, ty);
+                assert!(
+                    result.matches(ty),
+                    "Constructor {}: {:#?} does not match {:#?}",
+                    c.r#type.name,
+                    result,
+                    ty
+                );
                 result
             }
             Expression::Call(call) => {
+                if *DEBUG.get().unwrap() {
+                    println!(
+                        "Calling function: {} with {}",
+                        call.name,
+                        call.args
+                            .iter()
+                            .map(|arg| match arg.init.deref() {
+                                Expression::Ident(ident) => ident.name.clone(),
+                                expr => format!("{:?}", expr),
+                            })
+                            .collect::<Vec<String>>()
+                            .join(", ")
+                    );
+                }
                 let funcs = reg
                     .func(&call.name)
                     .unwrap_or_else(|| panic!("Did not find func {}", call.name));
@@ -196,6 +219,10 @@ fn run_internal(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry
                             }
                         }
                     }
+                }
+
+                if *DEBUG.get().unwrap() {
+                    println!("Leave call {}", call.name);
                 }
 
                 result

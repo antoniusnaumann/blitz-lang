@@ -1,7 +1,6 @@
 fn parse_precedence(mut parser Parser, lhs Expression, min_prec Int) Option(Expression) {
     mut left = lhs
     parser.mut.skip_newlines()
-    print("ENTER PARSE PRECEDENCE")
 
     while true {
         let peek_ = parser.peek()
@@ -19,11 +18,9 @@ fn parse_precedence(mut parser Parser, lhs Expression, min_prec Int) Option(Expr
 
         let op = switch peek_.kind {
             Operator {
-                print("OPERATOR")
                 peek_.kind
             }
             else {
-                print("NO OPERATOR -- BREAKING")
                 break
             }
         }
@@ -51,10 +48,6 @@ fn parse_precedence(mut parser Parser, lhs Expression, min_prec Int) Option(Expr
                         left = parser.mut.parse_member_call(left, member)
                     }
                     else {
-                        print("MEMBER")
-                        print(left)
-                        print(member)
-                        print(span)
                         left = Member(parent: left, member:, span:)
                     }
                 }
@@ -70,16 +63,10 @@ fn parse_precedence(mut parser Parser, lhs Expression, min_prec Int) Option(Expr
 }
 
 fn parse_expression(mut parser Parser) Option(Expression) {
-    print("NEW EXPRESSION")
-    print(parser.peek().kind)
-    let expr = parser.mut.parse_expression_bp(0)
-    print("FINISH EXPRESSION")
-    print(parser.peek().kind)
-    expr
+    parser.mut.parse_expression_bp(0)
 }
 
 fn parse_expression_bp(mut parser Parser, min_prec Int) Option(Expression) {
-    print("ENTER PARSE EXPRESSION BP")
     parser.mut.skip_newlines()
     let token = parser.peek()
 
@@ -141,7 +128,6 @@ fn parse_expression_bp(mut parser Parser, min_prec Int) Option(Expression) {
         }
     }
 
-    print("BEFORE PARSE PREC")
     let expr = parser.mut.parse_precedence(lhs, min_prec)
     switch parser.mut.consume_assignment() {
         some {
@@ -193,9 +179,7 @@ fn consume_assignment(mut parser Parser) Option(Assignment) {
 
 fn parse_for(mut parser Parser) Option(Expression) {
     let token = parser.mut.expect(for_) else return none
-    print("PARSING ITER")
     let iter = parser.mut.parse_expression() else return none
-    print("PARSED ITER")
 
     // TODO: implement implicit argument it
     parser.mut.expect(pipe) else return none
@@ -204,7 +188,6 @@ fn parse_for(mut parser Parser) Option(Expression) {
 
     let body = parser.mut.parse_body() else return none
     
-    print("RETURN FOR")
     For(iter:, elem:, body:, span: parser.span(token))
 }
 
@@ -224,20 +207,17 @@ fn parse_switch(mut parser Parser) Option(Expression) {
 
     mut cases = []
     while !parser.has(rbrace) {
+        let case_start = parser.span()
         let label = parser.mut.parse_switch_label() else return none
         parser.mut.skip_newlines()
-        print("END SWITCH LABEL")
         let body = parser.mut.parse_body() else return none
         parser.mut.skip_newlines()
 
-        cases ++= SwitchCase(label:, body:, span: parser.span(label))
-        print("END SWITCH CASE")
+        cases ++= SwitchCase(label:, body:, span: parser.span(case_start))
     }
     parser.mut.expect(rbrace)
 
-    print("END SWITCH")
-
-    Switch(expr:, cases:, span: parser.span(token))
+    Switch(cond: expr, cases:, span: parser.span(token))
 }
 
 fn parse_switch_label(mut parser Parser) Option(SwitchLabel) {
@@ -245,7 +225,6 @@ fn parse_switch_label(mut parser Parser) Option(SwitchLabel) {
         ident { parser.mut.parse_ident() else return none }
         type { parser.mut.parse_type() else return none }
         else_ {
-            print("DEFAULT CASE")
             parser.mut.tok()
             default
         }
@@ -261,7 +240,6 @@ fn parse_member_call(mut parser Parser, target Expression, method Ident) Option(
 }
 
 fn parse_call(mut parser Parser, name Ident) Option(Expression) {
-    print("BEGIN PARSE CALL")
     let token = parser.mut.expect(lparen)
     mut args = []
 
@@ -285,9 +263,7 @@ fn parse_call(mut parser Parser, name Ident) Option(Expression) {
                 }
             }
             else {
-                print("REGULAR PARAM")
                 let init = parser.mut.parse_expression()
-                print("AFTER PARAM")
                 args ++= CallArg(label: none, init:)
             }
         }
@@ -297,7 +273,6 @@ fn parse_call(mut parser Parser, name Ident) Option(Expression) {
         parser.peek()        
     }
     parser.mut.expect(rparen)
-    print("END PARSE CALL")
     Call(name:, args:, ufcs: false, span: parser.span(token))
 }
 
