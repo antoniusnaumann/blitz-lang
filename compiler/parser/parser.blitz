@@ -100,6 +100,9 @@ fn span(parser Parser, from Span, to Span) Span {
 }
 
 fn expect(mut parser Parser, expected TokenKind) Option(Token) {
+    if expected != newline {
+        parser.mut.skip_newlines()
+    }
     let actual = parser.mut.tok()
     if expected != actual.kind {
         print(actual.kind)
@@ -111,6 +114,7 @@ fn expect(mut parser Parser, expected TokenKind) Option(Token) {
 }
 
 fn accept(mut parser Parser, expected TokenKind) Option(Token) {
+    parser.mut.skip_newlines()
     if parser.has(expected) {
         parser.mut.expect(expected)
     } else {
@@ -119,6 +123,7 @@ fn accept(mut parser Parser, expected TokenKind) Option(Token) {
 }
 
 fn accept(mut parser Parser, expected List(TokenKind)) Option(Token) {
+    parser.mut.skip_newlines()
     mut any = false
     for expected |kind| {
         if parser.has(kind) {

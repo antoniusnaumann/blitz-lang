@@ -98,14 +98,29 @@ fn parse_declaration(mut parser Parser) Option(Declaration) {
 fn parse_ident(mut parser Parser) Option(Ident) {
     let token = parser.mut.expect(ident) else return none
     let name = parser.source.substr(token.span)
+
     Ident(name:, span: token.span)
 }
 
 fn parse_type(mut parser Parser) Option(Type) {
     let token = parser.mut.expect(type) else return none
     let name = parser.source.substr(token.span)
-    if parser.has(lparen) { todo("Parse generic types") }
-    Type(name:, span: token.span)
+    let params = if parser.has(lparen) { parser.mut.parse_type_params() } else { [] }
+
+    Type(name:, span: token.span, params:)
+}
+
+fn parse_type_params(mut parser Parser) List(Type) {
+    let token = parser.mut.expect(lparen) else return []
+
+    mut params = []
+    while !parser.has(rparen) {
+        params ++= parser.mut.parse_type() else return []
+        parser.mut.accept(comma)
+    }
+    parser.mut.expect(rparen)
+
+    params
 }
 
 fn parse_test(mut parser Parser) Option(Test) {

@@ -267,7 +267,6 @@ fn parse_call(mut parser Parser, name Ident) Option(Expression) {
                 args ++= CallArg(label: none, init:)
             }
         }
-        parser.mut.skip_newlines()
         parser.mut.accept(comma)
 
         parser.peek()        
