@@ -178,7 +178,7 @@ fn consume_assignment(mut parser Parser) Option(Assignment) {
 }
 
 fn parse_for(mut parser Parser) Option(Expression) {
-    let token = parser.mut.expect(for_) else return none
+    let kw = parser.mut.expect(for_) else return none
     let iter = parser.mut.parse_expression() else return none
 
     // TODO: implement implicit argument it
@@ -188,11 +188,15 @@ fn parse_for(mut parser Parser) Option(Expression) {
 
     let body = parser.mut.parse_body() else return none
     
-    For(iter:, elem:, body:, span: parser.span(token))
+    For(iter:, elem:, body:, span: parser.span(kw))
 }
 
 fn parse_while(mut parser Parser) Option(Expression) {
-    todo("parse_while")
+    let kw = parser.mut.expect(while_) else return none
+    let cond = parser.mut.parse_expression() else return none
+    let body = parser.mut.parse_body() else return none
+
+    While(cond:, body:, span: parser.span(kw))
 }
 
 fn parse_if(mut parser Parser) Option(Expression) {

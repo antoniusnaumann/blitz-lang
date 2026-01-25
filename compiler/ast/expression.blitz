@@ -81,7 +81,7 @@ struct For {
 
 struct While {
 	cond Box(Expression)
-	body List(Statement)
+	body Block
 	span Span
 }
 
