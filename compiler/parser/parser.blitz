@@ -105,6 +105,9 @@ fn expect(mut parser Parser, expected TokenKind) Option(Token) {
     }
     let actual = parser.mut.tok()
     if expected != actual.kind {
+        print("Expected")
+        print(expected)
+        print("Actual")
         print(actual.kind)
         parser.mut.err("Unexpected token!")
         return none

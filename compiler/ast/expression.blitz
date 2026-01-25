@@ -32,6 +32,7 @@ union Expression {
 	String
 	Rune
 	Float
+	Int
 	continue_
 	break_
 }

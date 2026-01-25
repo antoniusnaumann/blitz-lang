@@ -38,7 +38,8 @@ union TokenKind {
 
 	// Literals
 	str
-	num
+	int
+	float
 	char
 
 	// Arithmetic

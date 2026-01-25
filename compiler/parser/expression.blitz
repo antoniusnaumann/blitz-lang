@@ -119,7 +119,8 @@ fn parse_expression_bp(mut parser Parser, min_prec Int) Option(Expression) {
         lparen { parser.mut.parse_group() }
         str { parser.mut.parse_string_lit() }
         ch { parser.mut.parse_char_lit() }
-        num { parser.mut.parse_num_lit() }
+        int { parser.mut.parse_int_lit() }
+        float { parser.mut.parse_float_lit() }
         true_ { parser.mut.parse_bool_lit(true) }
         false_ { parser.mut.parse_bool_lit(false) }
         else {
@@ -292,7 +293,18 @@ fn parse_args(mut parser Parser) Option(List(CallArg)) {
 }
 
 fn parse_list(mut parser Parser) Option(Expression) {
-    todo("parse_list")
+    let start = parser.mut.expect(lbracket) else return none
+    mut elems = []
+
+    while !parser.has(rbracket) {
+        parser.mut.skip_newlines()
+        elems ++= parser.mut.parse_expression()
+        parser.mut.accept(comma)
+        parser.mut.skip_newlines()
+    }
+    parser.mut.expect(rbracket)
+
+    List_(elems:, span: parser.span(start))
 }
 
 fn parse_group(mut parser Parser) Option(Expression) {
@@ -308,8 +320,36 @@ fn parse_char_lit(mut parser Parser) Option(Rune) {
     todo("parse_char_lit")
 }
 
-fn parse_num_lit(mut parser Parser) Option(Float) {
-    todo("parse_num_lit")
+fn parse_int_lit(mut parser Parser) Option(Int) {
+    let token = parser.mut.expect(int)
+    // PERF: This is wasteful
+    let chars = parser.source.chars()
+    mut index = token.span.range.begin
+    mut number = 0
+
+    while index < token.span.range.until {
+        number *= 10
+        number += switch chars[index] {
+            // TODO: replace with ASCII math
+            '0' { 0 }
+            '1' { 1 }
+            '2' { 2 }
+            '3' { 3 }
+            '4' { 4 }
+            '5' { 5 }
+            '6' { 6 }
+            '7' { 7 }
+            '8' { 8 }
+            '9' { 9 }
+        }
+        index += 1
+    }
+
+    number
+}
+
+fn parse_float_lit(mut parser Parser) Option(Float) {
+    todo("parse float lit")
 }
 
 fn parse_bool_lit(mut parser Parser, value Bool) Option(Expression) {

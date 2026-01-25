@@ -24,10 +24,15 @@ test "Lex assignment operators" {
 
 test "Lex int" {
     let tokens = "123".lex().kinds()
-    assert tokens == [num]
+    assert tokens == [int]
 }
 
 test "Lex float" {
     let tokens = "2137.1238".lex().kinds()
-    assert tokens == [num]
+    assert tokens == [float]
+}
+
+test "Lex int with ufcs" {
+    let tokens = "2137.print()".lex().kinds()
+    assert tokens == [int, ident, lparen, rparen]
 }

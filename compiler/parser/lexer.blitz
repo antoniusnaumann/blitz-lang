@@ -163,7 +163,6 @@ fn next(mut lexer Lexer) Option(Token) {
 					type
 				} else if ch >= '0' and ch <= '9' {
 					lexer.mut.skip_num()
-					num
 				} else { error }
 			}
 		}
@@ -313,15 +312,15 @@ fn skip_ch(mut lexer Lexer) {
 	}
 }
 
-fn skip_num(mut lexer Lexer) {
+fn skip_num(mut lexer Lexer) TokenKind {
 	mut dot = false	
 	while true {
 		let ch = lexer.curr()
-		if !(ch >= '0' and ch <= '9') and ch != '.' { return }
+		if !(ch >= '0' and ch <= '9') and ch != '.' { return if dot { float } else { int } }
 		lexer.mut.advance()
 		if ch == '.' {
-			if dot { return }
-			if !(lexer.curr() >= '0' and lexer.curr() <= '9') { return }
+			if dot { return float }
+			if !(lexer.curr() >= '0' and lexer.curr() <= '9') { return int }
 			dot = true
 			lexer.mut.advance()
 		}
