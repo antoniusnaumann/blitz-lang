@@ -526,12 +526,12 @@ fn run_internal(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry
                         matched = true;
                         // For union types, bind the value to the label name
                         if let Value::Union(label, val) = cond_value.clone() {
-                            let case_label = match &case.label {
+                            let _case_label = match &case.label {
                                 parser::SwitchLabel::Type(ty) => ty.name.clone(),
                                 parser::SwitchLabel::Ident(ident) => ident.name.clone(),
                                 _ => label,
                             };
-                            vars.insert(case_label, *val);
+                            vars.insert("it".into(), *val);
                         }
 
                         result = run(

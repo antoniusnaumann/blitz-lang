@@ -9,7 +9,7 @@ fn new_parser(source String) Parser {
     mut lexer = new_lexer(source)
     let tokens = lexer.mut.lex()
 
-    Parser(tokens: tokens, errors: [], source: source, index: 0)
+    Parser(tokens:, errors: [], source:, index: 0)
 }
 
 fn parse(mut parser Parser) List(Definition) {
@@ -151,6 +151,7 @@ fn has(parser Parser, expected TokenKind) Bool {
 
 fn err(mut parser Parser, msg String) {
     // TODO: for now, we panic, later we should maintain an error list
+    print(parser.source.substr(parser.last().span))
     panic(msg)
     parser.errors ++= Error(span: parser.last().span, msg: msg)
 } 

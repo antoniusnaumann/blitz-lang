@@ -8,7 +8,7 @@ fn parse_precedence(mut parser Parser, lhs Expression, min_prec Int) Option(Expr
         if peek_.kind == lbracket {
             parser.mut.expect(lbracket)
             parser.mut.skip_newlines()
-            let index = parser.mut.parse_expression()
+            let index = parser.mut.parse_expression() else return none
             let end_bracket = parser.mut.expect(rbracket) else return none
             let span = left.span.merge(end_bracket.span)
 
@@ -131,9 +131,8 @@ fn parse_expression_bp(mut parser Parser, min_prec Int) Option(Expression) {
     let expr = parser.mut.parse_precedence(lhs, min_prec)
     switch parser.mut.consume_assignment() {
         some {
-            let assignment = some
-            let right = parser.mut.parse_expression()
-            right
+            let assignment = it
+            let right = parser.mut.parse_expression() else return none
             
             // Desugar compound assignments: a += b becomes a = a + b
             let desugared_right = switch assignment {
@@ -240,30 +239,46 @@ fn parse_member_call(mut parser Parser, target Expression, method Ident) Option(
 }
 
 fn parse_call(mut parser Parser, name Ident) Option(Expression) {
-    let token = parser.mut.expect(lparen)
+    let token = parser.peek()
+    let args = parser.mut.parse_args() 
+    
+    Call(name:, args:, ufcs: false, span: parser.span(token))
+}
+
+fn parse_constructor(mut parser Parser) Option(Expression) {
+    let token = parser.peek()
+    let ty = parser.mut.parse_type_ident() else return none
+    let args = parser.mut.parse_args() else return none
+
+    Constructor(type: ty, args:, ufcs: false, span: parser.span(token))
+}
+
+fn parse_args(mut parser Parser) Option(List(CallArg)) {
+    parser.mut.expect(lparen) else return none
     mut args = []
 
     while !parser.has(rparen) {
         let param = parser.peek()
         switch param.kind {
             ident {
-                switch parser.peek(2) {
+                switch parser.peek(2).kind {
                     colon {
                         let label = parser.mut.parse_ident() else panic("unreachable")
                         parser.mut.expect(colon) else panic("unreachable")
-                        let init = switch parser.peek() {
+                        let init = switch parser.peek().kind {
                             comma { label }
-                            else { parser.mut.parse_expression() }
+                            rparen { label }
+                            else { parser.mut.parse_expression() else return none }
                         }
                         args ++= CallArg(label:, init:)
                     }
                     else {
-                        args ++= CallArg(label: none, init: parser.mut.parse_expression())
+                        args ++= CallArg(label: none, init: parser.mut.parse_expression() else return none)
                     }
                 }
             }
             else {
-                let init = parser.mut.parse_expression()
+                let init = parser.mut.parse_expression() else return none
                 args ++= CallArg(label: none, init:)
             }
         }
@@ -272,11 +287,8 @@ fn parse_call(mut parser Parser, name Ident) Option(Expression) {
         parser.peek()        
     }
     parser.mut.expect(rparen)
-    Call(name:, args:, ufcs: false, span: parser.span(token))
-}
 
-fn parse_constructor(mut parser Parser) Option(Expression) {
-    todo("parse_constructor")
+    args
 }
 
 fn parse_list(mut parser Parser) Option(Expression) {

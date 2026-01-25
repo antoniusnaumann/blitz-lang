@@ -158,6 +158,13 @@ fn parse_type(mut parser Parser) Option(Type) {
     Type(name:, span: token.span, params:)
 }
 
+fn parse_type_ident(mut parser Parser) Option(Type) {
+    let token = parser.mut.expect(type) else return none
+    let name = parser.source.substr(token.span)
+
+    Type(name:, span: token.span, params: [])
+}
+
 fn parse_type_params(mut parser Parser) List(Type) {
     let token = parser.mut.expect(lparen) else return []
 

@@ -49,14 +49,9 @@ struct Member {
 
 struct Constructor {
 	type Type
-	args List(ConstructorArg)
+	args List(CallArg)
 	ufcs Bool
 	span Span
-}
-
-struct ConstructorArg {
-	label Ident
-	init  Box(Expression)
 }
 
 struct Call {

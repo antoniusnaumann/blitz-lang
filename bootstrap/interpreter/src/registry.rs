@@ -74,6 +74,8 @@ impl Value {
             (V::Rune(_), T::Rune) => true,
             // HACK: make our builtin Box type work for now
             (_, T::Struct(members)) if members.is_empty() => true,
+            // HACK: allow values where expecting an optional
+            (_, T::Union(labels)) if labels.contains_key("some") => true,
             (V::Struct(fields), T::Struct(members)) => fields.iter().all(|(name, val)| {
                 members.get(name).is_some_and(|m| {
                     if val.matches(m) {
@@ -206,11 +208,11 @@ impl Registry {
         }
 
         panic!(
-            "No function named matching arguments {},\n\nselection: {}\n{}",
+            "No function matching arguments {},\n\nselection: {}\n{}",
             args.iter()
                 .map(|arg| match arg {
-                    Value::String(s) => s.chars().take(20).collect::<String>(),
-                    _ => format!("{arg:?}").chars().take(20).collect::<String>(),
+                    Value::String(s) => s.chars().take(100).collect::<String>(),
+                    _ => format!("{arg:?}").chars().take(100).collect::<String>(),
                 })
                 .collect::<Vec<String>>()
                 .join(",\n"),
