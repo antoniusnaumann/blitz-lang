@@ -46,7 +46,7 @@ struct Union {
 }
 
 struct Case {
-	label Option(String)
+	label Option(Ident)
 	type  Option(Type)
 }
 

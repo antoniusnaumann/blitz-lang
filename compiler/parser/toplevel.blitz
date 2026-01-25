@@ -49,7 +49,36 @@ fn parse_fields(mut parser Parser) List(Field) {
 
 fn parse_union(mut parser Parser) Option(Union) {
     let kw = parser.mut.expect(union_) else return none
-    todo("Parse union")
+    let ty = parser.mut.parse_type() else return none
+    let cases = parser.mut.parse_cases() else return none
+
+    Union(sig: ty, cases:, span: parser.span(kw))
+}
+
+fn parse_cases(mut parser Parser) List(Case) {
+    parser.mut.expect(lbrace)
+    mut cases = []
+    while !parser.has(rbrace) {
+        let span = parser.span()
+        mut label = none
+        if parser.has(ident) {
+            label = parser.mut.parse_ident()
+            if parser.has(colon) {
+                parser.mut.tok()
+                parser.mut.skip_newlines()
+            } else {
+                cases ++= Case(label:, type: none)
+                continue
+            }
+        }
+        let ty = if parser.has(type) { parser.mut.parse_type() }
+        parser.mut.skip_newlines()
+
+        cases ++= Case(label:, type: ty)
+    }
+    parser.mut.expect(rbrace) // TODO recover
+
+    cases
 }
 
 fn parse_actor(mut parser Parser) Option(Actor) {
