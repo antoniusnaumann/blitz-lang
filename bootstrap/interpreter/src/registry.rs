@@ -62,7 +62,15 @@ pub enum Value {
 }
 
 impl Value {
+    pub fn matches_strict(&self, ty: &Type) -> bool {
+        self.matches_(ty, true)
+    }
+
     pub fn matches(&self, ty: &Type) -> bool {
+        self.matches_(ty, false)
+    }
+
+    fn matches_(&self, ty: &Type, strict: bool) -> bool {
         use Type as T;
         use Value as V;
 
@@ -75,7 +83,7 @@ impl Value {
             // HACK: make our builtin Box type work for now
             (_, T::Struct(members)) if members.is_empty() => true,
             // HACK: allow values where expecting an optional
-            (_, T::Union(labels)) if labels.contains_key("some") => true,
+            (_, T::Union(labels)) if labels.contains_key("some") && !strict => true,
             (V::Struct(fields), T::Struct(members)) => fields.iter().all(|(name, val)| {
                 members.get(name).is_some_and(|m| {
                     if val.matches(m) {
@@ -198,7 +206,7 @@ impl Registry {
                         source,
                         span.clone(),
                     );
-                    if !arg.matches(ty) {
+                    if !arg.matches_strict(ty) {
                         // println!("ARG {arg:?} does not match {ty:?}");
                         continue 'outer;
                     }

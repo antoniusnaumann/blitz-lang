@@ -3,7 +3,7 @@ use std::{
     ops::Deref,
 };
 
-use parser::{BinaryOp, Expression, Operator, Statement};
+use parser::{BinaryOp, Expression, Operator, Statement, SwitchLabel};
 
 use crate::{
     DEBUG,
@@ -468,6 +468,10 @@ fn run_internal(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry
             }
             Expression::Switch(switch) => {
                 let cond_value = run(switch.cond.deref().clone().into(), vars, reg);
+                if let Value::Void = cond_value {
+                    dbg!(switch.cond);
+                    dbg!(&vars);
+                }
 
                 let mut result = Value::Void;
                 let mut matched = false;
@@ -524,14 +528,16 @@ fn run_internal(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry
 
                     if matches {
                         matched = true;
-                        // For union types, bind the value to the label name
-                        if let Value::Union(label, val) = cond_value.clone() {
-                            let _case_label = match &case.label {
-                                parser::SwitchLabel::Type(ty) => ty.name.clone(),
-                                parser::SwitchLabel::Ident(ident) => ident.name.clone(),
-                                _ => label,
-                            };
+                        // For union types, bind the value to the symbolic it variable
+                        if let (Value::Union(label, val), SwitchLabel::Ident(case_label)) =
+                            (cond_value.clone(), case.label.clone())
+                            && label == case_label.name
+                        {
                             vars.insert("it".into(), *val);
+                        } else {
+                            // println!("LABEL: {:?}, TYPE: {:?}", case.label, cond_value);
+                            // HACK: make switch work on unwrapped optionals
+                            vars.insert("it".into(), cond_value.clone());
                         }
 
                         result = run(
