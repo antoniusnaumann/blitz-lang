@@ -123,6 +123,11 @@ fn parse_expression_bp(mut parser Parser, min_prec Int) Option(Expression) {
         float { parser.mut.parse_float_lit() }
         true_ { parser.mut.parse_bool_lit(true) }
         false_ { parser.mut.parse_bool_lit(false) }
+        UnaryOperator {
+            parser.mut.tok()
+            let inner = parser.mut.parse_expression() else return none
+            UnaryOp(op: it, expr: inner, span: parser.span(token))                   
+        }
         else {
             print(token.kind)
             todo("Error handling: Illegal token for expression")

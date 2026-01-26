@@ -130,14 +130,14 @@ struct Group {
 }
 
 struct BinaryOp {
-	op    Operator
+	op    BinaryOperator
 	left  Box(Expression)
 	right Box(Expression)
 	span  Span
 }
 
 struct UnaryOp {
-	op   Operator
+	op   UnaryOperator
 	expr Box(Expression)
 	span Span
 }
