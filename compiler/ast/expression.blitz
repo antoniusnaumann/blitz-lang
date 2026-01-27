@@ -28,6 +28,7 @@ union Expression {
 	Block
 	Return
 	List_
+	Index
 	Group
 	Continue
 	Break
@@ -88,7 +89,7 @@ struct While {
 
 struct If {
 	cond Box(Expression)
-	body List(Statement)
+	body Block
 	span Span
 }
 
@@ -131,6 +132,12 @@ struct Block {
 struct List_ {
 	elems List(Expression)
 	span  Span
+}
+
+struct Index {
+	target Box(Expression)
+	index  Box(Expression)
+	span   Span
 }
 
 struct Group {

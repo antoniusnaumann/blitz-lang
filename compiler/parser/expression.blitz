@@ -94,7 +94,7 @@ fn parse_expression_bp(mut parser Parser, min_prec Int) Option(Expression) {
         }
         continue_ { 
             parser.mut.tok()
-            Continue(span: kw.span())
+            Continue(span: parser.span(token))
         }
         break_ {
             parser.mut.tok()
@@ -188,7 +188,7 @@ fn consume_assignment(mut parser Parser) Option(Assignment) {
     }
 }
 
-fn parse_for(mut parser Parser) Option(Expression) {
+fn parse_for(mut parser Parser) Option(For) {
     let kw = parser.mut.expect(for_) else return none
     let iter = parser.mut.parse_expression() else return none
 
@@ -202,7 +202,7 @@ fn parse_for(mut parser Parser) Option(Expression) {
     For(iter:, elem:, body:, span: parser.span(kw))
 }
 
-fn parse_while(mut parser Parser) Option(Expression) {
+fn parse_while(mut parser Parser) Option(While) {
     let kw = parser.mut.expect(while_) else return none
     let cond = parser.mut.parse_expression() else return none
     let body = parser.mut.parse_body() else return none
@@ -210,11 +210,15 @@ fn parse_while(mut parser Parser) Option(Expression) {
     While(cond:, body:, span: parser.span(kw))
 }
 
-fn parse_if(mut parser Parser) Option(Expression) {
-    todo("parse_if")
+fn parse_if(mut parser Parser) Option(If) {
+    let kw = parser.mut.expect(if_) else return none
+    let cond = parser.mut.parse_expression() else return none
+    let body = parser.mut.parse_body() else return none
+
+    If(cond:, body:, span: parser.span(kw))
 }
 
-fn parse_switch(mut parser Parser) Option(Expression) {
+fn parse_switch(mut parser Parser) Option(Switch) {
     let token = parser.mut.expect(switch_) else return none
     let expr = parser.mut.parse_expression() else return none
     parser.mut.expect(lbrace) else return none
@@ -247,21 +251,21 @@ fn parse_switch_label(mut parser Parser) Option(SwitchLabel) {
     }
 }
 
-fn parse_member_call(mut parser Parser, target Expression, method Ident) Option(Expression) {
+fn parse_member_call(mut parser Parser, target Expression, method Ident) Option(Call) {
     mut call = parser.mut.parse_call(method)
     call.ufcs = true
     call.args = [CallArg(label: none, init: target)] ++ call.args
     call
 }
 
-fn parse_call(mut parser Parser, name Ident) Option(Expression) {
+fn parse_call(mut parser Parser, name Ident) Option(Call) {
     let token = parser.peek()
     let args = parser.mut.parse_args() 
     
     Call(name:, args:, ufcs: false, span: parser.span(token))
 }
 
-fn parse_constructor(mut parser Parser) Option(Expression) {
+fn parse_constructor(mut parser Parser) Option(Constructor) {
     let token = parser.peek()
     let ty = parser.mut.parse_type_ident() else return none
     let args = parser.mut.parse_args() else return none
@@ -307,7 +311,7 @@ fn parse_args(mut parser Parser) Option(List(CallArg)) {
     args
 }
 
-fn parse_list(mut parser Parser) Option(Expression) {
+fn parse_list(mut parser Parser) Option(List_) {
     let start = parser.mut.expect(lbracket) else return none
     mut elems = []
 

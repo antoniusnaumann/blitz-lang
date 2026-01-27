@@ -57,9 +57,10 @@ fn run_internal(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry
         }
         Statement::Expression(expression) => match expression {
             Expression::Constructor(c) => {
-                let ty = reg
-                    .select_type(&c.r#type.name)
-                    .expect("Type for constructor does not exist");
+                let ty = reg.select_type(&c.r#type.name).expect(&format!(
+                    "Type '{}' for constructor does not exist",
+                    c.r#type.name
+                ));
 
                 let mut fields = HashMap::new();
                 for init_arg in c.args {
@@ -68,13 +69,15 @@ fn run_internal(st: Statement, vars: &mut HashMap<String, Value>, reg: &Registry
                 }
 
                 let result = Value::Struct(fields);
-                assert!(
-                    result.matches(ty),
-                    "Constructor {}: {:#?} does not match {:#?}",
-                    c.r#type.name,
-                    result,
-                    ty
-                );
+                if *DEBUG.get().unwrap() {
+                    assert!(
+                        result.matches(ty),
+                        "Constructor {}: {:#?} does not match {:#?}",
+                        c.r#type.name,
+                        result,
+                        ty
+                    );
+                }
                 result
             }
             Expression::Call(call) => {

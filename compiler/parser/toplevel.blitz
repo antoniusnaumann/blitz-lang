@@ -34,6 +34,8 @@ fn parse_struct(mut parser Parser) Option(Struct) {
 fn parse_fields(mut parser Parser) List(Field) {
     parser.mut.expect(lbrace)
     mut fields = []
+
+    parser.mut.skip_newlines()
     while !parser.has(rbrace) {
         let span = parser.span()
         let name = parser.mut.parse_ident() else break
@@ -58,6 +60,7 @@ fn parse_union(mut parser Parser) Option(Union) {
 fn parse_cases(mut parser Parser) List(Case) {
     parser.mut.expect(lbrace)
     mut cases = []
+    parser.mut.skip_newlines()
     while !parser.has(rbrace) {
         let span = parser.span()
         mut label = none
