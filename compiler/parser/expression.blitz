@@ -94,11 +94,11 @@ fn parse_expression_bp(mut parser Parser, min_prec Int) Option(Expression) {
         }
         continue_ { 
             parser.mut.tok()
-            continue_
+            Continue(span: kw.span())
         }
         break_ {
             parser.mut.tok()
-            break_
+            Break(span: parser.span(token))
         }
         assert_ {
             parser.mut.tok()
@@ -121,8 +121,14 @@ fn parse_expression_bp(mut parser Parser, min_prec Int) Option(Expression) {
         ch { parser.mut.parse_char_lit() }
         int { parser.mut.parse_int_lit() }
         float { parser.mut.parse_float_lit() }
-        true_ { parser.mut.parse_bool_lit(true) }
-        false_ { parser.mut.parse_bool_lit(false) }
+        true_ {
+            parser.mut.tok()
+            Lit(value: true, span: parser.span(token))
+        }
+        false_ {
+            parser.mut.tok()
+            Lit(value: true, span: parser.span(token))
+        }
         UnaryOperator {
             parser.mut.tok()
             let inner = parser.mut.parse_expression() else return none
@@ -320,16 +326,18 @@ fn parse_group(mut parser Parser) Option(Expression) {
     todo("parse_group")
 }
 
-fn parse_string_lit(mut parser Parser) Option(String) {
+fn parse_string_lit(mut parser Parser) Option(Lit(String)) {
     let token = parser.mut.expect(str)
-    parser.source.substr(token.span.range.begin + 1, token.span.range.until - 1)
+    let value = parser.source.substr(token.span.range.begin + 1, token.span.range.until - 1)
+
+    Lit(value:, span: parser.span(token))
 }
 
-fn parse_char_lit(mut parser Parser) Option(Rune) {
+fn parse_char_lit(mut parser Parser) Option(Lit(Rune)) {
     todo("parse_char_lit")
 }
 
-fn parse_int_lit(mut parser Parser) Option(Int) {
+fn parse_int_lit(mut parser Parser) Option(Lit(Int)) {
     let token = parser.mut.expect(int)
     // PERF: This is wasteful
     let chars = parser.source.chars()
@@ -354,15 +362,11 @@ fn parse_int_lit(mut parser Parser) Option(Int) {
         index += 1
     }
 
-    number
+    Lit(value: number, span: parser.span(token))
 }
 
-fn parse_float_lit(mut parser Parser) Option(Float) {
+fn parse_float_lit(mut parser Parser) Option(Lit(Float)) {
     todo("parse float lit")
-}
-
-fn parse_bool_lit(mut parser Parser, value Bool) Option(Expression) {
-    todo("parse_bool_lit")
 }
 
 fn parse_body(mut parser Parser) Option(Block) {

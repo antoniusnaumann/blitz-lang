@@ -29,12 +29,13 @@ union Expression {
 	Return
 	List_
 	Group
-	String
-	Rune
-	Float
-	Int
-	continue_
-	break_
+	Continue
+	Break
+	Lit(Bool)
+	Lit(String)
+	Lit(Rune)
+	Lit(Float)
+	Lit(Int)
 }
 
 struct Ident {
@@ -114,6 +115,14 @@ struct Return {
 	span Span
 }
 
+struct Continue {
+	span Span
+}
+
+struct Break {
+	span Span
+}
+
 struct Block {
 	statements List(Statement)
 	span       Span
@@ -152,4 +161,9 @@ struct Mut {
 	expr Box(Expression)
 	span Span
 	ufcs Bool
+}
+
+struct Lit(T) {
+	value T
+	span  Span
 }
