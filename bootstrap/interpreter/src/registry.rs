@@ -1,4 +1,5 @@
 use std::{
+    cell::RefCell,
     collections::{HashMap, HashSet},
     ops::Deref,
 };
@@ -12,6 +13,9 @@ pub struct Registry {
     pub tests: Vec<Test>,
 
     ast_types: HashMap<String, AstType>,
+
+    // Cache for function resolution: (func_name, arg_types_hash) -> func_index
+    func_cache: RefCell<HashMap<(String, u64), usize>>,
 }
 
 #[derive(Clone, Debug)]
@@ -62,6 +66,46 @@ pub enum Value {
 }
 
 impl Value {
+    // Create a simple type discriminant for caching
+    fn type_hash(&self) -> u64 {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        match self {
+            Value::String(_) => 1,
+            Value::Int(_) => 2,
+            Value::Float(_) => 3,
+            Value::Bool(_) => 4,
+            Value::Rune(_) => 5,
+            Value::Struct(fields) => {
+                // Hash struct field names for better discrimination
+                let mut hasher = DefaultHasher::new();
+                6u8.hash(&mut hasher);
+                let mut keys: Vec<_> = fields.keys().collect();
+                keys.sort();
+                for key in keys {
+                    key.hash(&mut hasher);
+                }
+                hasher.finish()
+            }
+            Value::Union(label, inner) => {
+                let mut hasher = DefaultHasher::new();
+                7u8.hash(&mut hasher);
+                label.hash(&mut hasher);
+                hasher.finish()
+            }
+            Value::List(items) => {
+                let mut hasher = DefaultHasher::new();
+                8u8.hash(&mut hasher);
+                if let Some(first) = items.first() {
+                    first.type_hash().hash(&mut hasher);
+                }
+                hasher.finish()
+            }
+            Value::Void => 9,
+        }
+    }
+
     pub fn matches_strict(&self, ty: &Type) -> bool {
         self.matches_(ty, true)
     }
@@ -170,6 +214,19 @@ pub(crate) enum AstType {
 }
 
 impl Registry {
+    // Create a hash from the argument types for caching
+    fn hash_args(args: &[Value]) -> u64 {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let mut hasher = DefaultHasher::new();
+        args.len().hash(&mut hasher);
+        for arg in args {
+            arg.type_hash().hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+
     pub fn func(&self, name: &str) -> Option<&[Func]> {
         self.funcs.get(name).map(|s| s.as_slice())
     }
@@ -184,12 +241,23 @@ impl Registry {
 
     pub fn select_func<'a>(
         &self,
+        func_name: &str,
         funcs: &'a [Func],
         args: &[Value],
         source: Option<&str>,
         span: Option<Span>,
     ) -> &'a Func {
-        'outer: for func in funcs {
+        // Try to use the cache
+        let args_hash = Self::hash_args(args);
+        let cache_key = (func_name.to_string(), args_hash);
+
+        if let Some(&func_idx) = self.func_cache.borrow().get(&cache_key) {
+            return &funcs[func_idx];
+        }
+
+        // Cache miss - do full resolution
+        let mut result_idx = None;
+        'outer: for (idx, func) in funcs.iter().enumerate() {
             if func.params.len() == args.len() {
                 let generics = func
                     .params
@@ -211,30 +279,40 @@ impl Registry {
                         continue 'outer;
                     }
                 }
-                return func;
+                result_idx = Some(idx);
+                break;
             }
         }
 
-        panic!(
-            "No function matching arguments {},\n\nselection: {}\n{}",
-            args.iter()
-                .map(|arg| match arg {
-                    Value::String(s) => s.chars().take(100).collect::<String>(),
-                    _ => format!("{arg:?}").chars().take(100).collect::<String>(),
-                })
-                .collect::<Vec<String>>()
-                .join(",\n"),
-            funcs
-                .iter()
-                .map(|f| format!("{:?}", &f.params))
-                .collect::<Vec<_>>()
-                .join("\n"),
-            if let (Some(span), Some(source)) = (span, source) {
-                span.report(source)
-            } else {
-                "NO SPAN".into()
+        match result_idx {
+            Some(idx) => {
+                // Cache the result
+                self.func_cache.borrow_mut().insert(cache_key, idx);
+                &funcs[idx]
             }
-        )
+            None => {
+                panic!(
+                    "No function matching arguments {},\n\nselection: {}\n{}",
+                    args.iter()
+                        .map(|arg| match arg {
+                            Value::String(s) => s.chars().take(100).collect::<String>(),
+                            _ => format!("{arg:?}").chars().take(100).collect::<String>(),
+                        })
+                        .collect::<Vec<String>>()
+                        .join(",\n"),
+                    funcs
+                        .iter()
+                        .map(|f| format!("{:?}", &f.params))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                    if let (Some(span), Some(source)) = (span, source) {
+                        span.report(source)
+                    } else {
+                        "NO SPAN".into()
+                    }
+                )
+            }
+        }
     }
 
     pub fn select_type(&self, name: &str) -> Option<&Type> {

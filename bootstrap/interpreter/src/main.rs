@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::sync::RwLock;
 
 use interpreter::DEBUG;
-use interpreter::{Body, Builtin, ROOT, Registry, run_checked};
+use interpreter::{run_checked, Body, Builtin, Registry, ROOT};
 use parser::{Ast, Definition, Parser};
 
 fn main() {
@@ -67,7 +67,7 @@ fn main() {
         println!("--- PROGRAM OUTPUT ---\n");
         install_panic_hook();
         for s in statements {
-            run_checked(s.clone(), &mut vars, &reg);
+            run_checked(s, &mut vars, &reg);
         }
     }
 }
@@ -117,7 +117,7 @@ fn run_test_suite(reg: &Registry) {
         // Run the test and catch panics
         let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
             for statement in &test.body {
-                run_checked(statement.clone(), &mut vars, reg);
+                run_checked(statement, &mut vars, reg);
             }
         }));
         // Restore original panic hook
