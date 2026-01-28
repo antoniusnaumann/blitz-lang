@@ -169,10 +169,7 @@ fn run_expr(expression: &Expression, vars: &mut HashMap<String, Value>, reg: &Re
                     } else {
                         // Positional argument - match to the next unfilled positional parameter
                         if positional_idx >= params.len() {
-                            panic!(
-                                "Too many positional arguments for function '{}'",
-                                call.name
-                            );
+                            panic!("Too many positional arguments for function '{}'", call.name);
                         }
                         // Find the next parameter that hasn't been filled by a named argument
                         while positional_idx < params.len()
@@ -236,25 +233,29 @@ fn run_expr(expression: &Expression, vars: &mut HashMap<String, Value>, reg: &Re
 
             result
         }
-        Expression::Member(member) => {
-            match run_expr(member.parent.deref(), vars, reg) {
-                Value::Struct(parent) => parent
-                    .get(&member.member)
-                    .unwrap_or_else(|| {
-                        panic!("No entry for {} on {:?}", member.member, member.parent)
-                    })
-                    .clone(),
-                other => {
-                    panic!("Member operator on non-struct: Queried {member:?} on {other:?}")
-                }
+        Expression::Member(member) => match run_expr(member.parent.deref(), vars, reg) {
+            Value::Struct(parent) => parent
+                .get(&member.member)
+                .unwrap_or_else(|| panic!("No entry for {} on {:?}", member.member, member.parent))
+                .clone(),
+            other => {
+                panic!("Member operator on non-struct: Queried {member:?} on {other:?}")
             }
-        }
+        },
         Expression::Index(index) => {
             let target = run_expr(index.target.deref(), vars, reg);
             let index_val = run_expr(index.index.deref(), vars, reg);
 
             match (target, index_val) {
                 (Value::List(list), Value::Int(idx)) => {
+                    let idx = idx as usize;
+                    if idx < list.len() {
+                        list[idx].clone()
+                    } else {
+                        panic!("Index out of bounds: {} >= {}", idx, list.len())
+                    }
+                }
+                (Value::RcList(list), Value::Int(idx)) => {
                     let idx = idx as usize;
                     if idx < list.len() {
                         list[idx].clone()
@@ -293,8 +294,7 @@ fn run_expr(expression: &Expression, vars: &mut HashMap<String, Value>, reg: &Re
                         vars.get_mut(&ident.name).expect("Variable not found")
                     }
                     Expression::Index(nested_index) => {
-                        let nested_index_val =
-                            run_expr(nested_index.index.deref(), vars, reg);
+                        let nested_index_val = run_expr(nested_index.index.deref(), vars, reg);
                         let target = get_mut_value(&nested_index.target, vars, reg);
 
                         match (target, nested_index_val) {
@@ -577,8 +577,7 @@ fn run_expr(expression: &Expression, vars: &mut HashMap<String, Value>, reg: &Re
                 result = run(s, vars, reg);
                 // Propagate control flow sentinels
                 if let Value::Union(label, _) = &result {
-                    if label == "__return__" || label == "__break__" || label == "__continue__"
-                    {
+                    if label == "__return__" || label == "__break__" || label == "__continue__" {
                         return result;
                     }
                 }

@@ -8,6 +8,11 @@ fn new_lexer(source String) Lexer {
 	Lexer(source: source.chars(), index: 0)
 }
 
+fn new_lexer(source List(Rune)) Lexer {
+	Lexer(source:, index: 0)
+}
+
+
 fn lex(source String) List(Token) {
 	mut lexer = new_lexer(source)
 	lexer.mut.lex()
@@ -213,18 +218,6 @@ fn substr(source List(Rune), range Range) String {
 }
 
 fn substr(source List(Rune), span Span) String {
-	substr(source, span.range)		
-}
-
-fn substr(source String, start Int, until Int) String {
-	substr(source.chars(), start, until)
-}
-
-fn substr(source String, range Range) String {
-	substr(source, range.begin, range.until)		
-}
-
-fn substr(source String, span Span) String {
 	substr(source, span.range)		
 }
 

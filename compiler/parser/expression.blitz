@@ -343,14 +343,12 @@ fn parse_char_lit(mut parser Parser) Option(Lit(Rune)) {
 
 fn parse_int_lit(mut parser Parser) Option(Lit(Int)) {
     let token = parser.mut.expect(int)
-    // PERF: This is wasteful
-    let chars = parser.source.chars()
     mut index = token.span.range.begin
     mut number = 0
 
     while index < token.span.range.until {
         number *= 10
-        number += switch chars[index] {
+        number += switch parser.source[index] {
             // TODO: replace with ASCII math
             '0' { 0 }
             '1' { 1 }

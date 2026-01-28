@@ -2,6 +2,7 @@ use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
     ops::Deref,
+    rc::Rc,
 };
 
 use parser::{Ast, Definition, Fn, Span, Statement, Struct, Test, Union};
@@ -62,6 +63,7 @@ pub enum Value {
     Struct(HashMap<String, Value>),
     Union(String, Box<Value>),
     List(Vec<Value>),
+    RcList(Rc<Vec<Value>>),
     Void,
 }
 
@@ -88,7 +90,7 @@ impl Value {
                 }
                 hasher.finish()
             }
-            Value::Union(label, inner) => {
+            Value::Union(label, _inner) => {
                 let mut hasher = DefaultHasher::new();
                 7u8.hash(&mut hasher);
                 label.hash(&mut hasher);
@@ -102,7 +104,15 @@ impl Value {
                 }
                 hasher.finish()
             }
-            Value::Void => 9,
+            Value::RcList(items) => {
+                let mut hasher = DefaultHasher::new();
+                9u8.hash(&mut hasher);
+                if let Some(first) = items.first() {
+                    first.type_hash().hash(&mut hasher);
+                }
+                hasher.finish()
+            }
+            Value::Void => 10,
         }
     }
 
@@ -128,16 +138,19 @@ impl Value {
             (_, T::Struct(members)) if members.is_empty() => true,
             // HACK: allow values where expecting an optional
             (_, T::Union(labels)) if labels.contains_key("some") && !strict => true,
-            (V::Struct(fields), T::Struct(members)) => fields.iter().all(|(name, val)| {
-                members.get(name).is_some_and(|m| {
-                    if val.matches(m) {
-                        true
-                    } else {
-                        // println!("{val:?} <!> {m:?}");
-                        false
-                    }
-                })
-            }),
+            (V::Struct(fields), T::Struct(members)) => {
+                fields.len() == members.len()
+                    && fields.iter().all(|(name, val)| {
+                        members.get(name).is_some_and(|m| {
+                            if val.matches(m) {
+                                true
+                            } else {
+                                // println!("{val:?} <!> {m:?}");
+                                false
+                            }
+                        })
+                    })
+            }
             (V::Union(label, val), T::Union(cases)) => {
                 // First check if the label exists directly in this union
                 if let Some(case) = cases.get(label) {
@@ -166,6 +179,7 @@ impl Value {
                 false
             }
             (V::List(list), T::List(ty)) => list.iter().all(|v| v.matches(ty)),
+            (V::RcList(list), T::List(ty)) => list.iter().all(|v| v.matches(ty)),
             (V::Void, T::Void) => true,
             // Treat Void as none: Void matches Union types with "none" label
             (V::Void, T::Union(cases)) => {

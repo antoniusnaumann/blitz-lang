@@ -23,4 +23,19 @@ fn main() {
 			else { todo("print other stuff") }
 		}
 	}
+
+	parse_parser_file()	
 }
+
+fn parse_parser_file() {
+	let content = read("parser/parser.blitz").unwrap()
+	print(content) // should print the content of this file
+
+	mut parser = new_parser(content)
+	for parser.tokens |token| {
+		assert token.kind != error
+	}
+
+	let ast = parser.mut.parse()
+}
+

@@ -1,15 +1,16 @@
 struct Parser {
     tokens List(Token)
     errors List(Error)
-    source String
-    index Int
+    index  Int
+    source List(Rune)
 }
 
 fn new_parser(source String) Parser {
-    mut lexer = new_lexer(source)
+    let chars = source.chars()
+    mut lexer = new_lexer(chars)
     let tokens = lexer.mut.lex()
 
-    Parser(tokens:, errors: [], source:, index: 0)
+    Parser(tokens:, errors: [], source: chars, index: 0)
 }
 
 fn parse(mut parser Parser) List(Definition) {

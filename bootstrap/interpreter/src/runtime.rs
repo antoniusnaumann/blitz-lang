@@ -45,7 +45,7 @@ impl Builtin for Registry {
         register_builtin!(self, read, [("path", "String", false)], "String");
         register_builtin!(self, panic, [("msg", "String", false)], "Never");
         register_builtin!(self, todo, [("msg", "String", false)], "Never");
-        register_builtin!(self, chars, [("s", "String", false)], "List(Rune)");
+        register_builtin!(self, chars, [("s", "String", false)], "RcList(Rune)");
         register_builtin!(self, len, [("arr", "List", false)], "Int");
     }
 }
@@ -63,6 +63,17 @@ fn as_str(value: &Value) -> String {
         ),
         Value::Union(label, value) => format!("{label}: {}", as_str(value)),
         Value::List(values) => {
+            let mut result = String::from("[");
+            for (i, val) in values.iter().enumerate() {
+                if i > 0 {
+                    result.push_str(", ");
+                }
+                result.push_str(&as_str(val));
+            }
+            result.push_str("]");
+            result
+        }
+        Value::RcList(values) => {
             let mut result = String::from("[");
             for (i, val) in values.iter().enumerate() {
                 if i > 0 {
@@ -113,7 +124,7 @@ make_builtin!(todo(msg) {
 
 make_builtin!(chars(s) {
     match s {
-        Value::String(s) => Value::List(s.chars().map(|c| Value::Rune(c)).collect()),
+        Value::String(s) => Value::RcList(s.chars().map(|c| Value::Rune(c)).collect::<Vec<_>>().into()),
         _ => panic!("'chars' requires String as args")
     }
 });
@@ -121,6 +132,7 @@ make_builtin!(chars(s) {
 make_builtin!(len(arr) {
     match arr {
         Value::List(list) => Value::Int(list.len().try_into().unwrap()),
+        Value::RcList(list) => Value::Int(list.len().try_into().unwrap()),
         _ => panic!("'len' requires List")
     }
 });
