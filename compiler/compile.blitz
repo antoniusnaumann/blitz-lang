@@ -1,0 +1,21 @@
+fn compile_file(path String) {
+	// TODO: proper error handling
+	let content = read(path).unwrap()
+
+    // CODE -> AST
+	mut parser = new_parser(content)
+	let ast = Ast(items: parser.mut.parse(), origin: "main.blitz")
+
+	// AST -> HIR
+	todo("AST -> HIR")
+
+	// HIR -> TIR
+
+	// TIR -> MIR
+
+    // MIR -> LIR
+}
+
+fn compile(path String) {
+    todo("check if path or dir and then call the appropriate function")
+}

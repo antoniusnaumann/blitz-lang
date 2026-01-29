@@ -1,0 +1,21 @@
+struct HirBody {
+    expressions List(HirExpression)
+}
+
+struct HirExpression {
+    kind HirExpressionKind
+    span Span
+}
+
+struct HirExpressionKind {
+    HirLoop
+    HirIf
+    HirElse
+    HirConstructor
+    HirCall
+    HirReturn
+    HirBreak
+    HirContinue
+    HirSwitch
+    // ...
+}

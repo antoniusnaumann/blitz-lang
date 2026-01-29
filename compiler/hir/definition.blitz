@@ -1,0 +1,118 @@
+struct Registry {
+    mods  List(Module) // indexed by ModId
+    types List(TypeKind) // fully qualified, indexed by TypeRef 
+}
+
+fn new_registry() Registry {
+    let core_module = Module(name: "core", parent: none, childs: [], funcs: [], types: [], func_export: [], type_export: [])
+    // TODO: insert builtin types as part of the "core" module
+
+    Registry(mods: [core_module], types: [])
+}
+
+fn get(reg Registry, id ModId) Module {
+    reg.mods[id]
+}
+
+fn get(reg Registry, ty TypeRef) TypeKind {
+    reg.types[id]
+}
+
+fn push(mut reg Registry, mod Module) {
+    reg.mods ++= mod
+}
+
+fn push(mut reg Registry, ty TypeKind) {
+    reg.types ++= ty
+}
+
+union TypeKind {
+    Nominal
+    GenericId
+}
+
+struct Nominal {
+    def_id  TypeId
+    args    List(TypeRef)
+}
+
+struct TypeParam {
+    local_id Int
+}
+
+
+struct Module {
+   name   String
+   parent Option(ModuleId)
+   childs List(ModuleId) 
+   funcs  List(FuncDef)  // indexed by FuncId
+   types  List(TypeDef)  // indexed by TypeDefId
+
+   func_export List(FuncId)
+   type_export List(TypeId)
+}
+
+struct TypeDef {
+    def_id  DefId
+    name    Ident
+    generic List(TypeParam)
+    kind    TypeDefKind
+    vis     Visibility
+}
+
+struct TypeDefKind {
+    StructDef
+    UnionDef
+}
+
+struct StructDef {
+    fields List(FieldDef)
+}
+
+struct FieldDef {
+    name Ident
+    type TypeRef
+}
+
+struct UnionDef {
+    label Option(Ident)
+    type  TypeRef
+}
+
+struct FuncDef {
+    def_id  DefId
+    name    Ident
+    module  ModuleId            
+    generic List(GenericId)
+    params  List(TypeRef)
+    result  TypeRef
+    body    HirBody              
+    vis     Visibility
+}
+
+struct GenericId {
+    name Rune // take advantage of the fact that type params are always single letter
+}
+
+struct FuncId {
+    module ModuleId
+    id     Int
+}
+
+struct TypeId {
+    module ModuleId
+    id     Int 
+}
+
+struct ModuleId {
+    id Int
+}
+
+struct TypeRef {
+    id Int
+}
+
+union Visibility {
+    public
+    module
+}

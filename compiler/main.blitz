@@ -14,7 +14,7 @@ fn main() {
 	}
 
 	let parse_time = time()
-	let ast = parser.mut.parse()
+	let ast = Ast(items: parser.mut.parse(), origin: "main.blitz")
 	print("Parsing took: (ms)")
 	print(time() - parse_time)
 	print("---- AST")
