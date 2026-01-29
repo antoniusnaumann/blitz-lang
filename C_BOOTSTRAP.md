@@ -374,46 +374,75 @@ That's it. Valid C code that compiles is success.
 ### What Works
 - ✅ Basic infrastructure: c_codegen.rs module created
 - ✅ --transpile-c flag added to interpreter
+- ✅ Multi-file input support (can pass multiple .blitz files)
 - ✅ **Struct transpilation works completely**
   - Simple structs with fields generate correct C code
   - Empty structs handled with dummy char field
-  - gcc compilation succeeds
-- ✅ **Union transpilation partially works**
+  - All fields with proper types
+- ✅ **Union transpilation works for non-generic types**
   - Symbolic-only unions (like `Operator { add, sub, mul }`) generate correct C enums
   - Mixed unions generate tagged unions with enum + union fields
-  - gcc compilation succeeds for unions without generics
+  - Variants without explicit labels use type name
 
-### What Doesn't Work Yet
-- ❌ **Generic types not monomorphized**
-  - `Option(T)` generates `T` in C code instead of being monomorphized
-  - Need to scan all usages first to discover concrete type instantiations
-  - Example: `Option(Int)`, `Option(String)` should generate `Option_Int`, `Option_String`
-- ❌ **Symbolic union variants without labels**
-  - Cases like `Ident` in `union Expression { Ident, number: Int }` don't have labels
-  - These should use the type name as the variant name
+### What Doesn't Work Yet (Current Blockers)
+- ❌ **Generic type monomorphization** (CRITICAL)
+  - Types like `List(Arg)`, `Option(Type)`, `Box(Definition)` generate as-is
+  - These appear as `List_Arg`, `Option_Type`, `Box_Definition` in C but types aren't defined
+  - Need to:
+    1. Scan all type usages to collect instantiations
+    2. Generate monomorphized versions for each concrete type
+    3. Handle List, Option, Box, and other generics
+- ❌ **Forward declarations missing**
+  - Recursive types (Box(Definition)) need forward decls
+  - Currently types must be defined in dependency order
+- ❌ **Some core types undefined**
+  - `Ident`, `Block` types not generated yet (where are they defined?)
 - ❌ **Function codegen not implemented**
 - ❌ **Expression codegen not implemented**
 - ❌ **Statement codegen not implemented**
 
 ### Test Results
 ```bash
-# Structs - PASS
-$ cargo run --bin interpreter -- --transpile-c bootstrap/c-output test_simple.blitz
-$ gcc -fsyntax-only bootstrap/c-output/blitz.h  # SUCCESS
+# Full AST directory transpilation
+$ cd bootstrap/interpreter
+$ cargo run --release --bin interpreter -- --transpile-c \
+    "$(pwd)/../../bootstrap/c-output" ../../compiler/ast/*.blitz
 
-# Simple unions - PASS
-$ cargo run --bin interpreter -- --transpile-c bootstrap/c-output test_union.blitz
-# Generates: Operator enum (GOOD)
-# Generates: Option with T (BAD - not monomorphized)
-# Generates: Expression without Ident case handled (BAD - missing case)
+Output: 4473 bytes of C code generated
+
+# Compilation test
+$ gcc -fsyntax-only -I ../../bootstrap/c-output ../../bootstrap/c-output/blitz.h
+Errors:
+  - unknown type name 'Box_Definition'
+  - unknown type name 'List_Arg'
+  - unknown type name 'Option_Type'
+  - unknown type name 'Ident'
+  - unknown type name 'Block'
+  - unknown type name 'Span' (forward decl issue)
 ```
 
-### Next Steps
-1. Fix generic type handling - scan for all generic instantiations first
-2. Fix symbolic union variants without explicit labels
-3. Test with actual compiler AST types (definition.blitz, operator.blitz)
-4. Implement function signatures (without bodies first)
-5. Implement basic expressions
+### Files Successfully Processed
+- ✅ compiler/ast/operator.blitz - 3 unions, all symbolic (compiles standalone)
+- ✅ compiler/ast/definition.blitz - 11 structs, 1 union  
+- ✅ compiler/ast/expression.blitz - many structs
+- ✅ compiler/ast/span.blitz - structs
+- ✅ compiler/ast/error.blitz - structs
+
+### Next Steps (Priority Order)
+1. **Find where Ident and Block are defined** - search compiler/ for these
+2. **Implement generic type collection pass**
+   - Scan all struct fields for List(T), Option(T), Box(T) usages
+   - Build set of concrete instantiations needed
+3. **Generate monomorphized generic types**
+   - List(T) → struct with T* data, size_t len, size_t cap
+   - Option(T) → tagged union with tag + T value
+   - Box(T) → typedef T* Box_T
+4. **Add forward declarations**
+   - Generate `typedef struct Foo Foo;` for all structs first
+   - Then generate actual struct definitions
+5. **Test that AST types compile**
 
 ### Commit History
 - `0a05183` - Add C bootstrap: basic infrastructure and struct codegen (WORKING)
+- `6f2c2b1` - Add union codegen for non-generic unions (WORKING)
+- `[latest]` - Fix multi-file transpilation, test with AST files (generates code, doesn't compile yet)
