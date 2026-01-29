@@ -446,6 +446,9 @@ impl CCodegen {
     }
 
     fn generate_function(&mut self, func: &parser::Fn) -> Result<(), String> {
+        // Store the return type for context-sensitive code generation
+        self.current_return_type = func.r#type.clone();
+
         // Map return type
         let mut return_type = if let Some(ref ret_ty) = func.r#type {
             self.map_type(ret_ty)
@@ -657,7 +660,7 @@ impl CCodegen {
                             let mut switch_code = self.generate_switch_as_statement(
                                 switch_expr,
                                 is_main,
-                                "int64_t",  // Default type
+                                "int64_t", // Default type
                                 temp_var,
                             );
                             switch_code.push_str(&format!("\n    return {};", temp_var));
@@ -987,7 +990,7 @@ impl CCodegen {
                             code.push_str(&format!("        _tmp[{}] = {};\n", i, elem_code));
                         }
                         code.push_str(&format!(
-                            "        (List_Int){{.data = _tmp, .len = {}, .cap = {}}}\n",
+                            "        (List_Int){{.data = _tmp, .len = {}, .cap = {}}};\n",
                             len, len
                         ));
                     } else {
