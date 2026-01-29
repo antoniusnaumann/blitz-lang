@@ -19,10 +19,62 @@ pub fn transpile_to_c(asts: &[Ast], output_dir: &Path) -> Result<(), String> {
         }
     }
 
-    // Second pass: generate code
+    // Second pass: analyze types to find generic instantiations needed
     for ast in asts {
         for def in &ast.defs {
-            codegen.generate_definition(def)?;
+            codegen.analyze_definition(def)?;
+        }
+    }
+
+    // Third pass: generate code
+    for ast in asts {
+        for def in &ast.defs {
+            // First generate all enums (simple unions)
+            if let Definition::Union(u) = def {
+                let is_simple_enum = !u
+                    .cases
+                    .iter()
+                    .any(|c| c.label.is_some() && c.r#type.is_some());
+                if is_simple_enum {
+                    codegen.generate_definition(def)?;
+                }
+            } else if let Definition::Pub(p) = def {
+                if let Definition::Union(u) = &*p.item {
+                    let is_simple_enum = !u
+                        .cases
+                        .iter()
+                        .any(|c| c.label.is_some() && c.r#type.is_some());
+                    if is_simple_enum {
+                        codegen.generate_definition(def)?;
+                    }
+                }
+            }
+        }
+    }
+
+    // Then generate all other definitions
+    for ast in asts {
+        for def in &ast.defs {
+            // Skip enums we already generated
+            let skip = if let Definition::Union(u) = def {
+                !u.cases
+                    .iter()
+                    .any(|c| c.label.is_some() && c.r#type.is_some())
+            } else if let Definition::Pub(p) = def {
+                if let Definition::Union(u) = &*p.item {
+                    !u.cases
+                        .iter()
+                        .any(|c| c.label.is_some() && c.r#type.is_some())
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+
+            if !skip {
+                codegen.generate_definition(def)?;
+            }
         }
     }
 
@@ -34,23 +86,35 @@ pub fn transpile_to_c(asts: &[Ast], output_dir: &Path) -> Result<(), String> {
 
 struct CCodegen {
     output_dir: std::path::PathBuf,
-    /// Header content (type declarations and forward declarations)
+    /// Forward declarations
+    forward_decls: String,
+    /// Enum definitions (simple unions)
+    enum_defs: String,
+    /// Header content (struct declarations)
     header: String,
     /// Implementation content (function definitions)
     impl_code: String,
     /// Track seen types to avoid duplicates
     seen_types: HashSet<String>,
-    /// Track generic instantiations (e.g., "Option_Type", "List_Token")
-    generic_instances: HashMap<String, Vec<String>>,
+    /// Track which types are enums (not structs)
+    enum_types: HashSet<String>,
+    /// Track which types have been generated
+    generated_types: HashSet<String>,
+    /// Track generic instantiations needed (e.g., "List_Arg" -> ["List", "Arg"])
+    generic_instances: HashMap<String, (String, Vec<String>)>,
 }
 
 impl CCodegen {
     fn new(output_dir: &Path) -> Self {
         Self {
             output_dir: output_dir.to_path_buf(),
+            forward_decls: String::new(),
+            enum_defs: String::new(),
             header: String::new(),
             impl_code: String::new(),
             seen_types: HashSet::new(),
+            enum_types: HashSet::new(),
+            generated_types: HashSet::new(),
             generic_instances: HashMap::new(),
         }
     }
@@ -63,6 +127,14 @@ impl CCodegen {
             }
             Definition::Union(u) => {
                 self.seen_types.insert(u.sig.name.clone());
+                // Check if this is a symbolic-only union (simple enum)
+                let has_typed_variants = u
+                    .cases
+                    .iter()
+                    .any(|c| c.label.is_some() && c.r#type.is_some());
+                if !has_typed_variants {
+                    self.enum_types.insert(u.sig.name.clone());
+                }
             }
             Definition::Pub(p) => {
                 self.collect_definition(&p.item)?;
@@ -75,13 +147,112 @@ impl CCodegen {
         Ok(())
     }
 
-    /// Second pass: generate code
+    /// Second pass: analyze types to find generic instantiations
+    fn analyze_definition(&mut self, def: &Definition) -> Result<(), String> {
+        match def {
+            Definition::Struct(s) => {
+                for field in &s.fields {
+                    self.analyze_type(&field.r#type);
+                }
+            }
+            Definition::Union(u) => {
+                for case in &u.cases {
+                    if let Some(ty) = &case.r#type {
+                        self.analyze_type(ty);
+                    }
+                }
+            }
+            Definition::Pub(p) => {
+                self.analyze_definition(&p.item)?;
+            }
+            Definition::Test(_) => {
+                // Skip tests
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Analyze a type to track generic instantiations
+    fn analyze_type(&mut self, ty: &Type) {
+        // Check if this is a generic instantiation
+        if !ty.params.is_empty() {
+            let instance_name = format!(
+                "{}_{}",
+                ty.name,
+                ty.params
+                    .iter()
+                    .map(|p| self.type_name_for_instance(p))
+                    .collect::<Vec<_>>()
+                    .join("_")
+            );
+
+            let param_names: Vec<String> = ty
+                .params
+                .iter()
+                .map(|p| self.type_name_for_instance(p))
+                .collect();
+
+            self.generic_instances
+                .entry(instance_name)
+                .or_insert((ty.name.clone(), param_names));
+
+            // Recursively analyze parameters
+            for param in &ty.params {
+                self.analyze_type(param);
+            }
+        } else {
+            // For parameterless types, recursively analyze if it's a composite type
+            // (This handles nested types in the Type struct itself, e.g., Type.params)
+        }
+    }
+
+    /// Get a simple type name for use in instance names
+    fn type_name_for_instance(&self, ty: &Type) -> String {
+        if ty.params.is_empty() {
+            ty.name.clone()
+        } else {
+            format!(
+                "{}_{}",
+                ty.name,
+                ty.params
+                    .iter()
+                    .map(|p| self.type_name_for_instance(p))
+                    .collect::<Vec<_>>()
+                    .join("_")
+            )
+        }
+    }
+
+    /// Third pass: generate code
     fn generate_definition(&mut self, def: &Definition) -> Result<(), String> {
         match def {
             Definition::Struct(s) => {
+                let struct_name = &s.sig.name;
+                // Generate forward declaration if not already done
+                if !self.generated_types.contains(struct_name) {
+                    self.forward_decls.push_str(&format!(
+                        "typedef struct {} {};\n",
+                        struct_name, struct_name
+                    ));
+                    self.generated_types.insert(struct_name.clone());
+                }
                 self.generate_struct(&s.sig, &s.fields)?;
             }
             Definition::Union(u) => {
+                let union_name = &u.sig.name;
+                // Check if this needs a forward declaration (tagged unions do, simple enums don't)
+                let has_typed_variants = u
+                    .cases
+                    .iter()
+                    .any(|c| c.label.is_some() && c.r#type.is_some());
+
+                if has_typed_variants && !self.generated_types.contains(union_name) {
+                    self.forward_decls
+                        .push_str(&format!("typedef struct {} {};\n", union_name, union_name));
+                    self.generated_types.insert(union_name.clone());
+                }
+                // Note: simple enum unions don't need forward declarations
                 self.generate_union(&u.sig, &u.cases)?;
             }
             Definition::Fn(f) => {
@@ -117,15 +288,14 @@ impl CCodegen {
 
         // Handle empty structs
         if fields.is_empty() {
-            self.header.push_str(&format!(
-                "typedef struct {{ char _dummy; }} {};\n\n",
-                struct_name
-            ));
+            self.header
+                .push_str(&format!("struct {} {{ char _dummy; }};\n\n", struct_name));
             return Ok(());
         }
 
-        // Generate struct typedef
-        self.header.push_str(&format!("typedef struct {{\n"));
+        // Generate struct definition
+        self.header
+            .push_str(&format!("struct {} {{\n", struct_name));
 
         for field in fields {
             let field_type = self.map_type(&field.r#type);
@@ -133,7 +303,7 @@ impl CCodegen {
                 .push_str(&format!("    {} {};\n", field_type, field.name));
         }
 
-        self.header.push_str(&format!("}} {};\n\n", struct_name));
+        self.header.push_str(&format!("}};\n\n"));
 
         Ok(())
     }
@@ -157,13 +327,26 @@ impl CCodegen {
 
         if !has_typed_variants {
             // Generate simple enum for symbolic-only unions
-            self.header.push_str(&format!("typedef enum {{\n"));
+            self.enum_defs.push_str(&format!("typedef enum {{\n"));
             for (i, case) in cases.iter().enumerate() {
                 // For symbolic variants: label is the name, type might be present but is same as label
                 let variant_name = if let Some(label) = &case.label {
                     label.clone()
                 } else if let Some(ty) = &case.r#type {
-                    ty.name.clone()
+                    // Handle parameterized cases like Lit(Bool)
+                    if !ty.params.is_empty() {
+                        format!(
+                            "{}_{}",
+                            ty.name,
+                            ty.params
+                                .iter()
+                                .map(|p| p.name.as_str())
+                                .collect::<Vec<_>>()
+                                .join("_")
+                        )
+                    } else {
+                        ty.name.clone()
+                    }
                 } else {
                     return Err(format!(
                         "Union {} has case {} without label or type",
@@ -171,14 +354,14 @@ impl CCodegen {
                     ));
                 };
 
-                self.header
+                self.enum_defs
                     .push_str(&format!("    {}_{}", union_name, variant_name));
                 if i < cases.len() - 1 {
-                    self.header.push_str(",");
+                    self.enum_defs.push_str(",");
                 }
-                self.header.push_str("\n");
+                self.enum_defs.push_str("\n");
             }
-            self.header.push_str(&format!("}} {};\n\n", union_name));
+            self.enum_defs.push_str(&format!("}} {};\n\n", union_name));
         } else {
             // Generate tagged union for mixed/typed unions
             // First generate the tag enum
@@ -205,7 +388,7 @@ impl CCodegen {
             self.header.push_str(&format!("}} {}_Tag;\n\n", union_name));
 
             // Then generate the tagged union struct
-            self.header.push_str(&format!("typedef struct {{\n"));
+            self.header.push_str(&format!("struct {} {{\n", union_name));
             self.header
                 .push_str(&format!("    {}_Tag tag;\n", union_name));
 
@@ -226,7 +409,7 @@ impl CCodegen {
                 self.header.push_str("    } data;\n");
             }
 
-            self.header.push_str(&format!("}} {};\n\n", union_name));
+            self.header.push_str(&format!("}};\n\n"));
         }
 
         Ok(())
@@ -247,10 +430,23 @@ impl CCodegen {
             "String" => "char*".to_string(),
             "Rune" => "uint32_t".to_string(),
             "Void" => "void".to_string(),
+            "Box" => {
+                // Box(T) becomes T*
+                if ty.params.len() == 1 {
+                    format!("{}*", self.map_type(&ty.params[0]))
+                } else {
+                    "void*".to_string() // Fallback
+                }
+            }
             _ => {
                 // Generic or user-defined type
                 if ty.params.is_empty() {
-                    ty.name.clone()
+                    // Check if this is a known struct type (not enum) - if so, use pointer for forward-declaration safety
+                    if self.seen_types.contains(&ty.name) && !self.enum_types.contains(&ty.name) {
+                        format!("{}*", ty.name)
+                    } else {
+                        ty.name.clone()
+                    }
                 } else {
                     // Monomorphize: Option(Type) -> Option_Type
                     format!(
@@ -258,7 +454,7 @@ impl CCodegen {
                         ty.name,
                         ty.params
                             .iter()
-                            .map(|p| self.map_type(p))
+                            .map(|p| self.type_name_for_instance(p))
                             .collect::<Vec<_>>()
                             .join("_")
                     )
@@ -268,8 +464,16 @@ impl CCodegen {
     }
 
     fn write_files(&self) -> Result<(), String> {
+        eprintln!(
+            "DEBUG: forward_decls length = {} bytes",
+            self.forward_decls.len()
+        );
         eprintln!("DEBUG: header length = {} bytes", self.header.len());
         eprintln!("DEBUG: impl_code length = {} bytes", self.impl_code.len());
+        eprintln!(
+            "DEBUG: generic_instances count = {}",
+            self.generic_instances.len()
+        );
 
         // Create output directory if it doesn't exist
         fs::create_dir_all(&self.output_dir)
@@ -291,6 +495,12 @@ typedef double Float;
 typedef uint32_t Rune;
 typedef char* String;
 
+// Built-in Range type (TODO: verify structure)
+typedef struct {
+    int64_t begin;
+    int64_t end;
+} Range;
+
 #endif // BLITZ_TYPES_H
 "#;
 
@@ -298,12 +508,111 @@ typedef char* String;
         fs::write(&types_path, types_h)
             .map_err(|e| format!("Failed to write {}: {}", types_path.display(), e))?;
 
-        // Write main header file
+        // Write main header file with forward declarations first
         let header_path = self.output_dir.join("blitz.h");
         let mut full_header = String::new();
         full_header.push_str("#ifndef BLITZ_H\n");
         full_header.push_str("#define BLITZ_H\n\n");
         full_header.push_str("#include \"blitz_types.h\"\n\n");
+
+        // Add forward declarations section
+        if !self.forward_decls.is_empty() {
+            full_header.push_str("// Forward declarations\n");
+            full_header.push_str(&self.forward_decls);
+            full_header.push_str("\n");
+        }
+
+        // Add enum definitions (these must come before generic instantiations)
+        if !self.enum_defs.is_empty() {
+            full_header.push_str("// Enum definitions\n");
+            full_header.push_str(&self.enum_defs);
+            full_header.push_str("\n");
+        }
+
+        // Add generic type instantiations
+        if !self.generic_instances.is_empty() {
+            full_header.push_str("// Generic type instantiations\n");
+            let mut instances: Vec<_> = self.generic_instances.iter().collect();
+            instances.sort_by_key(|(name, _)| *name);
+
+            for (instance_name, (base_type, params)) in instances {
+                if base_type == "Box" && params.len() == 1 {
+                    // Box(T) -> typedef T* Box_T;
+                    let param_type = &params[0];
+                    // Box is just a pointer to the type
+                    full_header.push_str(&format!("typedef {}* {};\n", param_type, instance_name));
+                } else if base_type == "List" && params.len() == 1 {
+                    // List(T) -> struct with data, len, cap
+                    let param_type = &params[0];
+                    // Determine the C type for the list elements
+                    let c_type = if param_type == "Arg"
+                        || param_type == "Field"
+                        || param_type == "Case"
+                        || param_type == "CallArg"
+                        || param_type == "SwitchCase"
+                        || param_type == "Statement"
+                        || param_type == "Expression"
+                    {
+                        // These are struct types, use pointer
+                        format!("{}*", param_type)
+                    } else if param_type == "Type" {
+                        // Type is also a struct
+                        "Type*".to_string()
+                    } else {
+                        // Fallback
+                        param_type.clone()
+                    };
+                    full_header.push_str(&format!(
+                        "typedef struct {{\n    {}* data;\n    size_t len;\n    size_t cap;\n}} {};\n\n",
+                        c_type, instance_name
+                    ));
+                } else if base_type == "Option" && params.len() == 1 {
+                    // Option(T) -> tagged union
+                    let param_type = &params[0];
+                    // Determine the C type for the option value
+                    let c_type = if param_type == "Type" {
+                        "Type*".to_string()
+                    } else if param_type == "Ident" {
+                        "Ident*".to_string()
+                    } else {
+                        param_type.clone()
+                    };
+
+                    full_header.push_str(&format!(
+                        "typedef enum {{\n    {}_tag_none,\n    {}_tag_some\n}} {}_Tag;\n\n",
+                        instance_name, instance_name, instance_name
+                    ));
+                    full_header.push_str(&format!(
+                        "typedef struct {{\n    {}_Tag tag;\n    {} value;\n}} {};\n\n",
+                        instance_name, c_type, instance_name
+                    ));
+                } else if base_type == "Lit" && params.len() == 1 {
+                    // Lit(T) -> struct with value and span
+                    let param_type = &params[0];
+                    let c_type = match param_type.as_str() {
+                        "Bool" => "bool",
+                        "Int" => "int64_t",
+                        "Float" => "double",
+                        "String" => "char*",
+                        "Rune" => "uint32_t",
+                        _ => param_type.as_str(),
+                    };
+                    full_header.push_str(&format!(
+                        "typedef struct {{\n    {} value;\n    Span* span;\n}} {};\n\n",
+                        c_type, instance_name
+                    ));
+                } else {
+                    // Unknown generic type - keep as void* stub
+                    full_header.push_str(&format!(
+                        "typedef void* {}; // TODO: implement generic {}\n",
+                        instance_name, instance_name
+                    ));
+                }
+            }
+            full_header.push_str("\n");
+        }
+
+        // Add type definitions
         full_header.push_str(&self.header);
         full_header.push_str("\n#endif // BLITZ_H\n");
 
