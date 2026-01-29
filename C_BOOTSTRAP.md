@@ -90,6 +90,8 @@ Based on actual compiler source:
 
 **Strategy**: Extend existing interpreter infrastructure to generate C code instead of executing
 
+**Output Directory**: C code is always generated in `c-out/` directory relative to the current working directory
+
 ## Implementation Steps
 
 ### Step 1: Create C Codegen Module in Rust
@@ -104,7 +106,7 @@ pub fn transpile_to_c(ast: &Ast, output_dir: &Path) -> Result<(), String>
 ```
 
 Modify `bootstrap/interpreter/src/main.rs`:
-- Add `--transpile-c <output-dir>` flag
+- Add `--transpile-c` flag (output always goes to `c-out/` directory)
 - Call `transpile_to_c()` instead of interpreter when flag is present
 
 Modify `bootstrap/interpreter/src/lib.rs`:
@@ -220,7 +222,7 @@ Generate C code for statements:
 - **Return**: `return x` → `return x;`
 
 ### Step 6: Handle Built-in Types
-Create `bootstrap/c-output/blitz_types.h` with:
+Create `c-out/blitz_types.h` with:
 
 ```c
 #include <stdint.h>
@@ -246,15 +248,15 @@ typedef char* String;
    struct Point { x Int, y Int }
    ```
    ```bash
-   cargo run --bin interpreter -- --transpile-c bootstrap/c-output test_types.blitz
-   gcc -fsyntax-only -I bootstrap/c-output bootstrap/c-output/test_types.h
+   cargo run --bin interpreter -- --transpile-c test_types.blitz
+   gcc -fsyntax-only -I c-out c-out/test_types.h
    git add -A && git commit -m "Add basic struct transpilation"
    ```
 
 2. **AST types**: Transpile AST definitions
    ```bash
-   cargo run --bin interpreter -- --transpile-c bootstrap/c-output compiler/ast
-   gcc -fsyntax-only -I bootstrap/c-output bootstrap/c-output/*.h
+   cargo run --bin interpreter -- --transpile-c compiler/ast
+   gcc -fsyntax-only -I c-out c-out/*.h
    git add -A && git commit -m "Add AST type definitions transpilation"
    ```
 
@@ -263,29 +265,29 @@ typedef char* String;
    fn add(a Int, b Int) Int { a + b }
    ```
    ```bash
-   cargo run --bin interpreter -- --transpile-c bootstrap/c-output test_fn.blitz
-   gcc -c -I bootstrap/c-output bootstrap/c-output/test_fn.c
+   cargo run --bin interpreter -- --transpile-c test_fn.blitz
+   gcc -c -I c-out c-out/test_fn.c
    git add -A && git commit -m "Add basic function transpilation"
    ```
 
 4. **Standard library**: Transpile std helpers
    ```bash
-   cargo run --bin interpreter -- --transpile-c bootstrap/c-output compiler/std
-   gcc -c -I bootstrap/c-output bootstrap/c-output/std_*.c
+   cargo run --bin interpreter -- --transpile-c compiler/std
+   gcc -c -I c-out c-out/std_*.c
    git add -A && git commit -m "Add std library transpilation"
    ```
 
 5. **Parser implementation**: Transpile parser files
    ```bash
-   cargo run --bin interpreter -- --transpile-c bootstrap/c-output compiler/parser
-   gcc -c -I bootstrap/c-output bootstrap/c-output/parser_*.c
+   cargo run --bin interpreter -- --transpile-c compiler/parser
+   gcc -c -I c-out c-out/parser_*.c
    git add -A && git commit -m "Add parser transpilation"
    ```
 
 6. **Full compiler**: Transpile everything
    ```bash
-   cargo run --bin interpreter -- --transpile-c bootstrap/c-output compiler
-   gcc -c -I bootstrap/c-output bootstrap/c-output/*.c
+   cargo run --bin interpreter -- --transpile-c compiler
+   gcc -c -I c-out c-out/*.c
    git add -A && git commit -m "Complete compiler transpilation"
    ```
 
@@ -310,7 +312,7 @@ bootstrap/
 │       ├── instruction.rs    # existing
 │       ├── registry.rs       # existing  
 │       └── runtime.rs        # existing
-└── c-output/                 # NEW: generated C files
+c-out/                        # NEW: generated C files (always used)
     ├── blitz_types.h         # Generated: Built-in type definitions
     ├── tokens.h              # Generated from tokens.blitz
     ├── definition.h          # Generated from ast/definition.blitz
@@ -336,8 +338,8 @@ bootstrap/
 
 All files in `compiler/` transpile to valid C code that compiles:
 ```bash
-cargo run --bin interpreter -- --transpile-c bootstrap/c-output compiler
-gcc -c -I bootstrap/c-output bootstrap/c-output/*.c
+cargo run --bin interpreter -- --transpile-c compiler
+gcc -c -I c-out c-out/*.c
 ```
 
 That's it. Valid C code that compiles is success.
@@ -405,13 +407,12 @@ That's it. Valid C code that compiles is success.
 ```bash
 # Full AST directory transpilation
 $ cd bootstrap/interpreter
-$ cargo run --release --bin interpreter -- --transpile-c \
-    "$(pwd)/../../bootstrap/c-output" ../../compiler/ast/*.blitz
+$ cargo run --release --bin interpreter -- --transpile-c ../../compiler/ast/*.blitz
 
-Output: 4473 bytes of C code generated
+Output: 4473 bytes of C code generated in c-out/
 
 # Compilation test
-$ gcc -fsyntax-only -I ../../bootstrap/c-output ../../bootstrap/c-output/blitz.h
+$ gcc -fsyntax-only -I c-out c-out/blitz.h
 Errors:
   - unknown type name 'Box_Definition'
   - unknown type name 'List_Arg'

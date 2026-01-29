@@ -20,19 +20,14 @@ fn main() {
     }
 
     // Check for --transpile-c flag
-    let (transpile_c, output_dir) = if args.len() > 3 && args[1] == "--transpile-c" {
-        (true, args[2].clone())
-    } else {
-        (false, String::new())
-    };
+    let transpile_c = args.len() > 2 && args[1] == "--transpile-c";
 
     if transpile_c {
         args.remove(1); // remove --transpile-c
-        args.remove(1); // remove output_dir
 
         // For transpilation, collect all remaining args as input paths
         if args.len() < 2 {
-            eprintln!("Usage: interpreter --transpile-c <output-dir> <file-or-directory> [...]");
+            eprintln!("Usage: interpreter --transpile-c <file-or-directory> [...]");
             std::process::exit(1);
         }
 
@@ -44,10 +39,10 @@ fn main() {
             all_asts.extend(asts);
         }
 
-        let output_path = Path::new(&output_dir);
+        let output_path = Path::new("c-out");
         match interpreter::c_codegen::transpile_to_c(&all_asts, output_path) {
             Ok(()) => {
-                println!("Successfully transpiled to C");
+                println!("Successfully transpiled to C in c-out/");
                 std::process::exit(0);
             }
             Err(e) => {
@@ -62,7 +57,7 @@ fn main() {
     } else if args.len() > 1 {
         (false, args[1].clone())
     } else {
-        eprintln!("Usage: interpreter [--transpile-c <output-dir>] [test] <file-or-directory>");
+        eprintln!("Usage: interpreter [--transpile-c] [test] <file-or-directory>");
         std::process::exit(1);
     };
 
