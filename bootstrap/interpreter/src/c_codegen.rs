@@ -196,12 +196,11 @@ impl CCodegen {
                     .map(|arg| self.type_signature(&arg.r#type))
                     .collect();
 
-                let mangled_name = self.mangle_function_name(&f.name, &param_types);
-
+                // Store the parameter types - we'll determine mangling later
                 self.function_signatures
                     .entry(f.name.clone())
                     .or_insert_with(Vec::new)
-                    .push((param_types, mangled_name));
+                    .push((param_types, f.name.clone())); // Initially store unmangled name
             }
             Definition::Pub(p) => {
                 self.collect_definition(&p.item)?;
@@ -745,6 +744,47 @@ impl CCodegen {
             .unwrap_or_else(|| name.to_string())
     }
 
+    /// Guess the type of an argument expression (simple heuristic-based approach)
+    /// This is not a full type inference system, just enough to disambiguate common overloads
+    /// Returns type names without pointer notation (e.g., "Range" not "Range*")
+    fn guess_arg_type(&self, expr: &parser::Expression) -> String {
+        match expr {
+            // Member access like first.range or second.range suggests the member's type
+            parser::Expression::Member(member) => {
+                // If accessing .range member, the type is likely Range
+                if member.member == "range" {
+                    return "Range".to_string();
+                }
+                // If accessing .span member, the type is likely Span
+                if member.member == "span" {
+                    return "Span".to_string();
+                }
+                // Default: try to guess from parent
+                self.guess_arg_type(&member.parent)
+            }
+            // Identifier - try to look up in variable mappings
+            parser::Expression::Ident(ident) => {
+                // For common identifiers, make educated guesses
+                if ident.name.contains("parser") {
+                    return "Parser".to_string();
+                }
+                if ident.name.contains("lexer") {
+                    return "Lexer".to_string();
+                }
+                "void*".to_string()
+            }
+            // Constructor gives us the type directly
+            parser::Expression::Constructor(ctor) => ctor.r#type.name.clone(),
+            // For function calls, we can't easily determine the return type without full type tracking
+            parser::Expression::Call(_call) => "void*".to_string(),
+            // Literals
+            parser::Expression::Number(_) => "Int".to_string(),
+            parser::Expression::String(_) => "String".to_string(),
+            parser::Expression::BoolLit(_) => "Bool".to_string(),
+            _ => "void*".to_string(),
+        }
+    }
+
     /// Get the mangled name for a function call based on argument types
     fn resolve_function_call(&self, func_name: &str, arg_types: &[String]) -> String {
         // Special case: main function is never mangled
@@ -754,22 +794,37 @@ impl CCodegen {
 
         // Check if this function has overloads
         if let Some(signatures) = self.function_signatures.get(func_name) {
-            // If there's only one signature and it has no parameters, use original name
-            if signatures.len() == 1 && signatures[0].0.is_empty() {
+            // If there's only one signature, no mangling needed
+            if signatures.len() == 1 {
                 return func_name.to_string();
             }
 
-            // If there are multiple signatures or a single signature with parameters,
-            // we need to mangle
-            for (param_types, mangled_name) in signatures {
+            // Multiple signatures - try to match by argument types
+            for (param_types, _) in signatures {
                 if param_types == arg_types {
-                    return mangled_name.clone();
+                    // Found exact match - return mangled name
+                    return self.mangle_function_name(func_name, param_types);
                 }
             }
 
-            // If we have signatures but no match, fall back to mangling with provided arg_types
-            // This handles cases where we're calling before all functions are collected
-            return self.mangle_function_name(func_name, arg_types);
+            // No exact match - try to find a signature with matching argument count
+            for (param_types, _) in signatures {
+                if param_types.len() == arg_types.len() {
+                    eprintln!(
+                        "DEBUG: Matched function '{}' by arg count {} (param types: {:?}, arg types: {:?})",
+                        func_name, arg_types.len(), param_types, arg_types
+                    );
+                    return self.mangle_function_name(func_name, param_types);
+                }
+            }
+
+            // If we have signatures but no match, use the first one as a fallback
+            eprintln!(
+                "DEBUG: No match for function '{}', using first signature",
+                func_name
+            );
+            let (param_types, _) = &signatures[0];
+            return self.mangle_function_name(func_name, param_types);
         }
 
         // No overloads found, use original name
@@ -1212,23 +1267,7 @@ impl CCodegen {
                 // If type is empty or "_", try to infer from initialization expression
                 if c_type.is_empty() || c_type == "_" {
                     if let Some(init_expr) = &decl.init {
-                        c_type = match init_expr {
-                            parser::Expression::Number(n) => {
-                                if n.fract() == 0.0 {
-                                    "int64_t".to_string()
-                                } else {
-                                    "double".to_string()
-                                }
-                            }
-                            parser::Expression::BoolLit(_) => "bool".to_string(),
-                            parser::Expression::String(_) => "char*".to_string(),
-                            parser::Expression::Rune(_) => "uint32_t".to_string(),
-                            _ => {
-                                // For complex expressions, default to int64_t as a fallback
-                                // In a real compiler, we'd do proper type inference
-                                "int64_t".to_string()
-                            }
-                        };
+                        c_type = self.infer_expr_type(init_expr);
                     } else {
                         // No type and no init - error, but use int64_t as fallback
                         c_type = "int64_t".to_string();
@@ -1261,6 +1300,13 @@ impl CCodegen {
 
     /// Check if an identifier might be an enum variant and qualify it
     fn qualify_identifier(&self, ident_name: &str) -> String {
+        // First, check if this identifier is a known variable (parameter or local)
+        // If it is, it should NOT be qualified as an enum variant
+        if self.variable_name_mappings.contains_key(ident_name) {
+            // This is a variable in scope, not an enum variant
+            return ident_name.to_string();
+        }
+
         // Check all enum types to see if this identifier is a variant
         for (enum_name, variants) in &self.enum_variants {
             if variants.contains(ident_name) {
@@ -1269,6 +1315,70 @@ impl CCodegen {
         }
         // Not an enum variant, return as-is
         ident_name.to_string()
+    }
+
+    /// Infer the C type of an expression
+    fn infer_expr_type(&self, expr: &parser::Expression) -> String {
+        match expr {
+            parser::Expression::Number(n) => {
+                if n.fract() == 0.0 {
+                    "int64_t".to_string()
+                } else {
+                    "double".to_string()
+                }
+            }
+            parser::Expression::BoolLit(_) => "bool".to_string(),
+            parser::Expression::String(_) => "char*".to_string(),
+            parser::Expression::Rune(_) => "uint32_t".to_string(),
+            parser::Expression::Constructor(ctor) => {
+                // Constructor returns pointer to the constructed type
+                format!("{}*", ctor.r#type.name)
+            }
+            parser::Expression::Call(call) => {
+                // Try to infer return type from known functions
+                match call.name.as_str() {
+                    "read" => return "char*".to_string(),
+                    "chars" => return "List_Rune".to_string(),
+                    "len" => return "int64_t".to_string(),
+                    "substring" => return "char*".to_string(),
+                    "parse_int" => return "int64_t".to_string(),
+                    "new_parser" => return "Parser*".to_string(),
+                    "parse_Parser" => return "List_Definition".to_string(),
+                    "unwrap" => {
+                        // Special case: unwrap(read(...)) returns String
+                        if !call.args.is_empty() {
+                            if let parser::Expression::Call(inner_call) = &*call.args[0].init {
+                                if inner_call.name == "read" {
+                                    return "char*".to_string();
+                                }
+                            }
+                        }
+                        return "void*".to_string(); // Generic fallback
+                    }
+                    _ => {}
+                }
+                // Default for unknown function calls
+                "int64_t".to_string()
+            }
+            parser::Expression::BinaryOp(binop) => {
+                // Comparison operators return bool
+                match binop.op {
+                    parser::Operator::Eq
+                    | parser::Operator::Ne
+                    | parser::Operator::Lt
+                    | parser::Operator::Le
+                    | parser::Operator::Gt
+                    | parser::Operator::Ge => "bool".to_string(),
+                    _ => self.infer_expr_type(&binop.left), // Arithmetic ops return operand type
+                }
+            }
+            parser::Expression::UnaryOp(unop) => match unop.op {
+                parser::Operator::Not => "bool".to_string(),
+                _ => self.infer_expr_type(&unop.expr),
+            },
+            parser::Expression::Group(group) => self.infer_expr_type(&group.expr),
+            _ => "int64_t".to_string(), // Fallback for complex expressions
+        }
     }
 
     fn generate_expression(&mut self, expr: &parser::Expression, is_main: bool) -> String {
@@ -1471,13 +1581,32 @@ impl CCodegen {
                         }
                         _ => {
                             // For other UFCS calls, the receiver is the first argument
+                            // Try to guess argument types for overload resolution
+                            let arg_types: Vec<String> = call
+                                .args
+                                .iter()
+                                .map(|arg| self.guess_arg_type(&arg.init))
+                                .collect();
+
+                            // Resolve to mangled name if needed
+                            let resolved_name = self.resolve_function_call(func_name, &arg_types);
+
                             // Format as: func_name(receiver, arg1, arg2, ...)
-                            format!("{}({})", func_name, args.join(", "))
+                            format!("{}({})", resolved_name, args.join(", "))
                         }
                     }
                 } else {
-                    // Regular function call
-                    format!("{}({})", func_name, args.join(", "))
+                    // Regular function call - try to guess argument types for overload resolution
+                    let arg_types: Vec<String> = call
+                        .args
+                        .iter()
+                        .map(|arg| self.guess_arg_type(&arg.init))
+                        .collect();
+
+                    // Resolve to mangled name if needed
+                    let resolved_name = self.resolve_function_call(func_name, &arg_types);
+
+                    format!("{}({})", resolved_name, args.join(", "))
                 }
             }
             parser::Expression::Constructor(ctor) => {
@@ -1661,18 +1790,12 @@ impl CCodegen {
                 }
 
                 // Fallback: generate a TODO comment for non-Range iterations
+                // DO NOT emit the loop body since the iterator variable is not declared
                 let iter_code = self.generate_expression(&for_loop.iter, is_main);
-                let mut body_code = String::new();
-                for stmt in &for_loop.body {
-                    let stmt_code = self.generate_statement(stmt, is_main);
-                    body_code.push_str("        ");
-                    body_code.push_str(&stmt_code);
-                    body_code.push_str("\n");
-                }
 
                 format!(
-                    "// TODO: For loop over non-Range: for {} in {}\n    {{\n{}    }}",
-                    elem_name, iter_code, body_code
+                    "// TODO: For loop over non-Range/non-List: for {} in {} {{ ... }}",
+                    elem_name, iter_code
                 )
             }
             parser::Expression::While(while_loop) => {
@@ -2445,8 +2568,13 @@ DECLARE_UNWRAP(String)
 DECLARE_UNWRAP(Float)
 
 // Generic unwrap macro - for use with Option types
-// Example: unwrap_Option_Int(some_option)
-#define unwrap(opt) _unwrap_##opt
+// Handles both simple identifiers and function call expressions
+// Uses GNU C statement expression extension (supported by GCC and Clang)
+#define unwrap(opt) ({ \
+    __typeof__(opt) _tmp = (opt); \
+    if (_tmp == NULL) panic("Unwrap called on None"); \
+    _tmp; \
+})
 
 // Read functions for basic I/O
 // These are placeholders for file/stdin reading operations
