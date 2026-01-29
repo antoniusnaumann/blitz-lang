@@ -1,0 +1,40 @@
+fn test_switch_with_arg(x Int) Int {
+  let result = switch x {
+    1 { 10 }
+    2 { 20 }
+    3 { 30 }
+    else { 99 }
+  }
+  result
+}
+
+fn test_switch_in_return(x Int) Int {
+  switch x {
+    1 { 100 }
+    2 { 200 }
+    else { 300 }
+  }
+}
+
+fn test_nested_switch(x Int, y Int) Int {
+  let outer = switch x {
+    1 { 
+      let inner = switch y {
+        10 { 111 }
+        20 { 222 }
+        else { 333 }
+      }
+      inner
+    }
+    2 { 444 }
+    else { 555 }
+  }
+  outer
+}
+
+fn main() {
+  let a = test_switch_with_arg(2)
+  let b = test_switch_in_return(1)
+  let c = test_nested_switch(1, 20)
+  a
+}

@@ -1,0 +1,13 @@
+fn test_switch(x Int) Int {
+  let result = switch x {
+    1 { 10 }
+    2 { 20 }
+    else { 30 }
+  }
+  result
+}
+
+fn main() {
+  let val = test_switch(2)
+  val
+}
