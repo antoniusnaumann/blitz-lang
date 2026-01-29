@@ -416,10 +416,135 @@ impl CCodegen {
     }
 
     fn generate_function(&mut self, func: &parser::Fn) -> Result<(), String> {
-        // TODO: implement
-        self.impl_code
-            .push_str(&format!("// fn {} - NOT IMPLEMENTED\n", func.name));
+        // Map return type
+        let mut return_type = if let Some(ref ret_ty) = func.r#type {
+            self.map_type(ret_ty)
+        } else {
+            "void".to_string()
+        };
+
+        // Special case: main function must return int in C
+        let is_main = func.name == "main";
+        if is_main && return_type == "void" {
+            return_type = "int".to_string();
+        }
+
+        // Generate parameter list
+        let mut params = Vec::new();
+        for arg in &func.args {
+            let param_type = self.map_type(&arg.r#type);
+            // Note: mutability is handled in Blitz semantics, not at C level
+            // In C, all parameters are passed by value (or pointer for structs)
+            params.push(format!("{} {}", param_type, arg.name));
+        }
+        let params_str = if params.is_empty() {
+            "void".to_string()
+        } else {
+            params.join(", ")
+        };
+
+        // Generate function signature
+        self.impl_code.push_str(&format!(
+            "{} {}({}) {{\n",
+            return_type, func.name, params_str
+        ));
+
+        // Generate function body from statements
+        for stmt in &func.body {
+            let stmt_code = self.generate_statement(stmt, is_main);
+            self.impl_code.push_str("    ");
+            self.impl_code.push_str(&stmt_code);
+            self.impl_code.push_str("\n");
+        }
+
+        self.impl_code.push_str("}\n\n");
+
         Ok(())
+    }
+
+    fn generate_statement(&mut self, stmt: &parser::Statement, is_main: bool) -> String {
+        match stmt {
+            parser::Statement::Expression(expr) => {
+                let expr_code = self.generate_expression(expr, is_main);
+                // If this is a return expression, don't add semicolon (it's included)
+                if matches!(expr, parser::Expression::Return(_)) {
+                    expr_code
+                } else {
+                    format!("{};", expr_code)
+                }
+            }
+            parser::Statement::Declaration(_) => "/* TODO: declaration */".to_string(),
+        }
+    }
+
+    fn generate_expression(&self, expr: &parser::Expression, is_main: bool) -> String {
+        match expr {
+            parser::Expression::Number(n) => {
+                // Check if this is an integer or float
+                if n.fract() == 0.0 {
+                    format!("{}", *n as i64)
+                } else {
+                    format!("{}", n)
+                }
+            }
+            parser::Expression::BoolLit(b) => {
+                if b.value {
+                    "true".to_string()
+                } else {
+                    "false".to_string()
+                }
+            }
+            parser::Expression::String(s) => {
+                // Escape the string properly for C
+                format!("\"{}\"", s.replace("\\", "\\\\").replace("\"", "\\\""))
+            }
+            parser::Expression::Rune(r) => {
+                // Escape the character properly for C
+                let escaped = match *r {
+                    '\'' => "\\'".to_string(),
+                    '\\' => "\\\\".to_string(),
+                    '\n' => "\\n".to_string(),
+                    '\r' => "\\r".to_string(),
+                    '\t' => "\\t".to_string(),
+                    c => c.to_string(),
+                };
+                format!("'{}'", escaped)
+            }
+            parser::Expression::Return(ret_expr) => {
+                // Check if this is a void return (returns a block or empty expression)
+                match &**ret_expr {
+                    parser::Expression::Block(stmts) if stmts.is_empty() => {
+                        // For main function with void return, return 0
+                        if is_main {
+                            "return 0;".to_string()
+                        } else {
+                            "return;".to_string()
+                        }
+                    }
+                    _ => {
+                        let expr_code = self.generate_expression(ret_expr, is_main);
+                        format!("return {};", expr_code)
+                    }
+                }
+            }
+            parser::Expression::Ident(ident) => ident.name.clone(),
+            parser::Expression::BinaryOp(_) => "/* TODO: binary_op */".to_string(),
+            parser::Expression::UnaryOp(_) => "/* TODO: unary_op */".to_string(),
+            parser::Expression::Call(_) => "/* TODO: call */".to_string(),
+            parser::Expression::Constructor(_) => "/* TODO: constructor */".to_string(),
+            parser::Expression::Member(_) => "/* TODO: member */".to_string(),
+            parser::Expression::Index(_) => "/* TODO: index */".to_string(),
+            parser::Expression::Assignment(_) => "/* TODO: assignment */".to_string(),
+            parser::Expression::For(_) => "/* TODO: for */".to_string(),
+            parser::Expression::While(_) => "/* TODO: while */".to_string(),
+            parser::Expression::If(_) => "/* TODO: if */".to_string(),
+            parser::Expression::Switch(_) => "/* TODO: switch */".to_string(),
+            parser::Expression::List(_) => "/* TODO: list */".to_string(),
+            parser::Expression::Group(_) => "/* TODO: group */".to_string(),
+            parser::Expression::Block(_) => "/* TODO: block */".to_string(),
+            parser::Expression::Continue => "continue".to_string(),
+            parser::Expression::Break => "break".to_string(),
+        }
     }
 
     fn map_type(&self, ty: &Type) -> String {
