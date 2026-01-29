@@ -104,6 +104,8 @@ struct CCodegen {
     generic_instances: HashMap<String, (String, Vec<String>)>,
     /// Current function return type (for context-sensitive code generation)
     current_return_type: Option<Type>,
+    /// Track function signatures for overload resolution: name -> list of (param_types, mangled_name)
+    function_signatures: HashMap<String, Vec<(Vec<String>, String)>>,
 }
 
 impl CCodegen {
@@ -119,6 +121,7 @@ impl CCodegen {
             generated_types: HashSet::new(),
             generic_instances: HashMap::new(),
             current_return_type: None,
+            function_signatures: HashMap::new(),
         }
     }
 
@@ -138,6 +141,21 @@ impl CCodegen {
                 if !has_typed_variants {
                     self.enum_types.insert(u.sig.name.clone());
                 }
+            }
+            Definition::Fn(f) => {
+                // Collect function signatures for overload detection
+                let param_types: Vec<String> = f
+                    .args
+                    .iter()
+                    .map(|arg| self.type_signature(&arg.r#type))
+                    .collect();
+
+                let mangled_name = self.mangle_function_name(&f.name, &param_types);
+
+                self.function_signatures
+                    .entry(f.name.clone())
+                    .or_insert_with(Vec::new)
+                    .push((param_types, mangled_name));
             }
             Definition::Pub(p) => {
                 self.collect_definition(&p.item)?;
@@ -252,6 +270,87 @@ impl CCodegen {
                     .join("_")
             )
         }
+    }
+
+    /// Generate a type signature string for overload resolution
+    /// This creates a canonical representation of the type for matching
+    fn type_signature(&self, ty: &Type) -> String {
+        if ty.params.is_empty() {
+            ty.name.clone()
+        } else {
+            format!(
+                "{}_{}",
+                ty.name,
+                ty.params
+                    .iter()
+                    .map(|p| self.type_signature(p))
+                    .collect::<Vec<_>>()
+                    .join("_")
+            )
+        }
+    }
+
+    /// Mangle function name based on parameter types
+    /// Returns the original name if no mangling needed, or mangled name if there are overloads
+    fn mangle_function_name(&self, func_name: &str, param_types: &[String]) -> String {
+        // Special functions that should never be mangled
+        if func_name == "main" {
+            return func_name.to_string();
+        }
+
+        // If there are no parameters, use the original name
+        if param_types.is_empty() {
+            return func_name.to_string();
+        }
+
+        // Create mangled name: funcname_Type1_Type2_...
+        // Replace pointer indicators and generic brackets for C identifiers
+        let mangled_params = param_types
+            .iter()
+            .map(|t| {
+                t.replace("*", "Ptr")
+                    .replace("(", "_")
+                    .replace(")", "")
+                    .replace(",", "_")
+                    .replace(" ", "")
+                    .replace("<", "_")
+                    .replace(">", "")
+            })
+            .collect::<Vec<_>>()
+            .join("_");
+
+        format!("{}_{}", func_name, mangled_params)
+    }
+
+    /// Get the mangled name for a function call based on argument types
+    fn resolve_function_call(&self, func_name: &str, arg_types: &[String]) -> String {
+        // Special case: main function is never mangled
+        if func_name == "main" {
+            return func_name.to_string();
+        }
+
+        // Check if this function has overloads
+        if let Some(signatures) = self.function_signatures.get(func_name) {
+            // If there's only one signature and it has no parameters, use original name
+            if signatures.len() == 1 && signatures[0].0.is_empty() {
+                return func_name.to_string();
+            }
+
+            // If there are multiple signatures or a single signature with parameters,
+            // we need to mangle
+            for (param_types, mangled_name) in signatures {
+                if param_types == arg_types {
+                    return mangled_name.clone();
+                }
+            }
+
+            // If we have signatures but no match, fall back to mangling with provided arg_types
+            // This handles cases where we're calling before all functions are collected
+            return self.mangle_function_name(func_name, arg_types);
+        }
+
+        // No overloads found, use original name
+        func_name.to_string()
     }
 
     /// Third pass: generate code
@@ -463,10 +562,13 @@ impl CCodegen {
             return_type = "int".to_string();
         }
 
-        // Generate parameter list
+        // Generate parameter list and collect parameter types for mangling
         let mut params = Vec::new();
+        let mut param_types = Vec::new();
         for arg in &func.args {
             let param_type = self.map_type(&arg.r#type);
+            let param_type_sig = self.type_signature(&arg.r#type);
+            param_types.push(param_type_sig);
             // Note: mutability is handled in Blitz semantics, not at C level
             // In C, all parameters are passed by value (or pointer for structs)
             params.push(format!("{} {}", param_type, arg.name));
@@ -477,10 +579,29 @@ impl CCodegen {
             params.join(", ")
         };
 
+        // Get the mangled function name
+        let c_func_name = if is_main {
+            func.name.clone()
+        } else {
+            // Check if we need to mangle this function name
+            if let Some(signatures) = self.function_signatures.get(&func.name) {
+                if signatures.len() > 1 {
+                    // Multiple overloads, use mangled name
+                    self.mangle_function_name(&func.name, &param_types)
+                } else {
+                    // Only one signature, use original name
+                    func.name.clone()
+                }
+            } else {
+                // Not found in signatures (shouldn't happen), use original name
+                func.name.clone()
+            }
+        };
+
         // Generate function signature
         self.impl_code.push_str(&format!(
             "{} {}({}) {{\n",
-            return_type, func.name, params_str
+            return_type, c_func_name, params_str
         ));
 
         // Generate function body from statements
@@ -779,9 +900,29 @@ impl CCodegen {
                 // UFCS method calls: obj.method(args) becomes method(obj, args)
                 // For UFCS calls, the first argument is the receiver object
                 if call.ufcs {
-                    // For UFCS, the receiver is the first argument
-                    // Format as: func_name(receiver, arg1, arg2, ...)
-                    format!("{}({})", func_name, args.join(", "))
+                    // Special handling for built-in string/list methods
+                    match func_name.as_str() {
+                        "chars" if args.len() == 1 => {
+                            // String.chars() -> blitz_string_chars(str)
+                            return format!("blitz_string_chars({})", args[0]);
+                        }
+                        "len" if args.len() == 1 => {
+                            // List.len() -> list.len (access the len field)
+                            return format!("({}).len", args[0]);
+                        }
+                        "substring" if args.len() == 3 => {
+                            // List(Rune).substring(start, until) -> blitz_substring(list, start, until)
+                            return format!(
+                                "blitz_substring({}, {}, {})",
+                                args[0], args[1], args[2]
+                            );
+                        }
+                        _ => {
+                            // For other UFCS calls, the receiver is the first argument
+                            // Format as: func_name(receiver, arg1, arg2, ...)
+                            format!("{}({})", func_name, args.join(", "))
+                        }
+                    }
                 } else {
                     // Regular function call
                     format!("{}({})", func_name, args.join(", "))
