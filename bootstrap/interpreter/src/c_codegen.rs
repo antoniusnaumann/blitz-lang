@@ -1722,6 +1722,7 @@ impl CCodegen {
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 typedef int64_t Int;
 typedef bool Bool;
@@ -1734,6 +1735,67 @@ typedef struct {
     int64_t begin;
     int64_t end;
 } Range;
+
+// List type definition for Rune
+typedef struct List_Rune {
+    uint32_t* data;
+    size_t len;
+    size_t cap;
+} List_Rune;
+
+// Built-in string method implementations
+
+// String.chars() - converts a C string to a List(Rune)
+static inline List_Rune blitz_string_chars(const char* str) {
+    if (!str) {
+        return (List_Rune){.data = NULL, .len = 0, .cap = 0};
+    }
+    
+    size_t byte_len = strlen(str);
+    size_t cap = byte_len + 1; // Initial capacity estimate
+    uint32_t* data = (uint32_t*)malloc(sizeof(uint32_t) * cap);
+    size_t len = 0;
+    
+    // Simple ASCII handling for now - full UTF-8 would be more complex
+    for (size_t i = 0; i < byte_len; i++) {
+        if (len >= cap) {
+            cap *= 2;
+            data = (uint32_t*)realloc(data, sizeof(uint32_t) * cap);
+        }
+        // For now, just treat each byte as a character
+        // TODO: proper UTF-8 decoding
+        data[len++] = (uint32_t)(unsigned char)str[i];
+    }
+    
+    return (List_Rune){.data = data, .len = len, .cap = cap};
+}
+
+// List(Rune).substring(start, until) - extracts substring from rune list
+static inline String blitz_substring(List_Rune list, int64_t start, int64_t until) {
+    if (start < 0) start = 0;
+    if (until > (int64_t)list.len) until = list.len;
+    if (start >= until) return strdup("");
+    
+    size_t len = until - start;
+    char* result = (char*)malloc(len + 1);
+    
+    // Simple ASCII conversion - each rune becomes one byte
+    // TODO: proper UTF-8 encoding for non-ASCII runes
+    for (size_t i = 0; i < len; i++) {
+        uint32_t rune = list.data[start + i];
+        result[i] = (char)(rune & 0xFF); // Take low byte
+    }
+    result[len] = '\0';
+    
+    return result;
+}
+
+// Runtime function declarations (stubs - need implementation)
+// Note: C doesn't support overloading, so we'd need different names
+// For now, these are just placeholders - actual implementation would use _Generic or separate functions
+void print_str(const char* str);
+void print_int(int64_t val);
+void print_list(List_Rune list);
 
 #endif // BLITZ_TYPES_H
 "#;
@@ -1792,6 +1854,9 @@ typedef struct {
                     } else if param_type == "Type" {
                         // Type is also a struct
                         "Type*".to_string()
+                    } else if param_type == "Rune" {
+                        // Rune is uint32_t
+                        "uint32_t".to_string()
                     } else {
                         // Fallback
                         param_type.clone()
