@@ -366,3 +366,54 @@ That's it. Valid C code that compiles is success.
 4. **Admit errors**: If something doesn't compile, report the actual error message
 5. **Ask before big changes**: If you need to restructure, ask first
 6. **Commit often**: After each working feature, commit immediately
+
+---
+
+## PROGRESS LOG (Updated: Jan 29, 2026)
+
+### What Works
+- ✅ Basic infrastructure: c_codegen.rs module created
+- ✅ --transpile-c flag added to interpreter
+- ✅ **Struct transpilation works completely**
+  - Simple structs with fields generate correct C code
+  - Empty structs handled with dummy char field
+  - gcc compilation succeeds
+- ✅ **Union transpilation partially works**
+  - Symbolic-only unions (like `Operator { add, sub, mul }`) generate correct C enums
+  - Mixed unions generate tagged unions with enum + union fields
+  - gcc compilation succeeds for unions without generics
+
+### What Doesn't Work Yet
+- ❌ **Generic types not monomorphized**
+  - `Option(T)` generates `T` in C code instead of being monomorphized
+  - Need to scan all usages first to discover concrete type instantiations
+  - Example: `Option(Int)`, `Option(String)` should generate `Option_Int`, `Option_String`
+- ❌ **Symbolic union variants without labels**
+  - Cases like `Ident` in `union Expression { Ident, number: Int }` don't have labels
+  - These should use the type name as the variant name
+- ❌ **Function codegen not implemented**
+- ❌ **Expression codegen not implemented**
+- ❌ **Statement codegen not implemented**
+
+### Test Results
+```bash
+# Structs - PASS
+$ cargo run --bin interpreter -- --transpile-c bootstrap/c-output test_simple.blitz
+$ gcc -fsyntax-only bootstrap/c-output/blitz.h  # SUCCESS
+
+# Simple unions - PASS
+$ cargo run --bin interpreter -- --transpile-c bootstrap/c-output test_union.blitz
+# Generates: Operator enum (GOOD)
+# Generates: Option with T (BAD - not monomorphized)
+# Generates: Expression without Ident case handled (BAD - missing case)
+```
+
+### Next Steps
+1. Fix generic type handling - scan for all generic instantiations first
+2. Fix symbolic union variants without explicit labels
+3. Test with actual compiler AST types (definition.blitz, operator.blitz)
+4. Implement function signatures (without bodies first)
+5. Implement basic expressions
+
+### Commit History
+- `0a05183` - Add C bootstrap: basic infrastructure and struct codegen (WORKING)

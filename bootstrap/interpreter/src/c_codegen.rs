@@ -122,9 +122,96 @@ impl CCodegen {
     }
 
     fn generate_union(&mut self, sig: &Type, cases: &[parser::Case]) -> Result<(), String> {
-        // TODO: implement
-        self.header
-            .push_str(&format!("// union {} - NOT IMPLEMENTED\n", sig.name));
+        let union_name = &sig.name;
+
+        // Skip generic unions for now
+        if !sig.params.is_empty() {
+            self.header.push_str(&format!(
+                "// TODO: Generic union {} - NOT IMPLEMENTED YET\n\n",
+                union_name
+            ));
+            return Ok(());
+        }
+
+        // Check if this is a purely symbolic union (no typed variants with labels)
+        let has_typed_variants = cases
+            .iter()
+            .any(|c| c.label.is_some() && c.r#type.is_some());
+
+        if !has_typed_variants {
+            // Generate simple enum for symbolic-only unions
+            self.header.push_str(&format!("typedef enum {{\n"));
+            for (i, case) in cases.iter().enumerate() {
+                // For symbolic variants: label is the name, type might be present but is same as label
+                let variant_name = if let Some(label) = &case.label {
+                    label.clone()
+                } else if let Some(ty) = &case.r#type {
+                    ty.name.clone()
+                } else {
+                    return Err(format!(
+                        "Union {} has case {} without label or type",
+                        union_name, i
+                    ));
+                };
+
+                self.header
+                    .push_str(&format!("    {}_{}", union_name, variant_name));
+                if i < cases.len() - 1 {
+                    self.header.push_str(",");
+                }
+                self.header.push_str("\n");
+            }
+            self.header.push_str(&format!("}} {};\n\n", union_name));
+        } else {
+            // Generate tagged union for mixed/typed unions
+            // First generate the tag enum
+            self.header.push_str(&format!("typedef enum {{\n"));
+            for (i, case) in cases.iter().enumerate() {
+                let variant_name = if let Some(label) = &case.label {
+                    label.clone()
+                } else if let Some(ty) = &case.r#type {
+                    ty.name.clone()
+                } else {
+                    return Err(format!(
+                        "Union {} has case {} without label or type",
+                        union_name, i
+                    ));
+                };
+
+                self.header
+                    .push_str(&format!("    {}_tag_{}", union_name, variant_name));
+                if i < cases.len() - 1 {
+                    self.header.push_str(",");
+                }
+                self.header.push_str("\n");
+            }
+            self.header.push_str(&format!("}} {}_Tag;\n\n", union_name));
+
+            // Then generate the tagged union struct
+            self.header.push_str(&format!("typedef struct {{\n"));
+            self.header
+                .push_str(&format!("    {}_Tag tag;\n", union_name));
+
+            // Only add union if there are typed variants
+            let typed_cases: Vec<&parser::Case> = cases
+                .iter()
+                .filter(|c| c.label.is_some() && c.r#type.is_some())
+                .collect();
+            if !typed_cases.is_empty() {
+                self.header.push_str("    union {\n");
+                for case in typed_cases {
+                    let variant_name = case.label.as_ref().unwrap();
+                    let variant_type = case.r#type.as_ref().unwrap();
+                    let c_type = self.map_type(variant_type);
+                    self.header
+                        .push_str(&format!("        {} as_{};\n", c_type, variant_name));
+                }
+                self.header.push_str("    } data;\n");
+            }
+
+            self.header.push_str(&format!("}} {};\n\n", union_name));
+        }
+
         Ok(())
     }
 

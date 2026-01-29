@@ -1,0 +1,20 @@
+// Test symbolic union (enum-like)
+union Operator {
+    add
+    sub
+    mul
+    div
+}
+
+// Test typed union (with associated data)
+union Option(T) {
+    some: T
+    none
+}
+
+// Test mixed union
+union Expression {
+    Ident
+    number: Int
+    text: String
+}
