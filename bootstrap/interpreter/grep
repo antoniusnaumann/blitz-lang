@@ -1,0 +1,526 @@
+--- PROGRAM OUTPUT ---
+
+fn main() {
+	// unwrapping here since we know the file exists
+	let content = read("main.blitz").unwrap()
+	print(content) // should print the content of this file
+
+	let time = time()
+	mut parser = new_parser(content)
+	print("Lexing took: (ms)")
+	print(time() - time)
+	
+	for parser.tokens |token| {
+		print(token.kind)
+		assert token.kind != error
+	}
+
+	let parse_time = time()
+	let ast = parser.mut.parse()
+	print("Parsing took: (ms)")
+	print(time() - parse_time)
+	print("---- AST")
+	ast.print()
+	for ast |item| {
+		switch item {
+			Fn {
+				print(item.name.name)
+				for item.body.statements |s| {
+					print(s)
+				}
+			}
+			else { todo("print other stuff") }
+		}
+	}
+
+	parse_parser_file()	
+}
+
+fn parse_parser_file() {
+	let content = read("parser/parser.blitz").unwrap()
+	print(content) // should print the content of this file
+
+	let time = time()
+	mut parser = new_parser(content)
+	print("Lexing took: (ms)")
+	print(time() - time)
+	for parser.tokens |token| {
+		assert token.kind != error
+	}
+
+	let ast = parser.mut.parse()
+}
+
+
+Lexing took: (ms)
+43
+fn_: Void
+ident: Void
+lparen: Void
+rparen: Void
+lbrace: Void
+newline: Void
+comment: Void
+newline: Void
+let_: Void
+ident: Void
+assign: Void
+ident: Void
+lparen: Void
+str: Void
+rparen: Void
+dot: Void
+ident: Void
+lparen: Void
+rparen: Void
+newline: Void
+ident: Void
+lparen: Void
+ident: Void
+rparen: Void
+comment: Void
+newline: Void
+newline: Void
+let_: Void
+ident: Void
+assign: Void
+ident: Void
+lparen: Void
+rparen: Void
+newline: Void
+mut_: Void
+ident: Void
+assign: Void
+ident: Void
+lparen: Void
+ident: Void
+rparen: Void
+newline: Void
+ident: Void
+lparen: Void
+str: Void
+rparen: Void
+newline: Void
+ident: Void
+lparen: Void
+ident: Void
+lparen: Void
+rparen: Void
+sub: Void
+ident: Void
+rparen: Void
+newline: Void
+newline: Void
+for_: Void
+ident: Void
+dot: Void
+ident: Void
+pipe: Void
+ident: Void
+pipe: Void
+lbrace: Void
+newline: Void
+ident: Void
+lparen: Void
+ident: Void
+dot: Void
+ident: Void
+rparen: Void
+newline: Void
+assert_: Void
+ident: Void
+dot: Void
+ident: Void
+ne: Void
+ident: Void
+newline: Void
+rbrace: Void
+newline: Void
+newline: Void
+let_: Void
+ident: Void
+assign: Void
+ident: Void
+lparen: Void
+rparen: Void
+newline: Void
+let_: Void
+ident: Void
+assign: Void
+ident: Void
+dot: Void
+mut_: Void
+dot: Void
+ident: Void
+lparen: Void
+rparen: Void
+newline: Void
+ident: Void
+lparen: Void
+str: Void
+rparen: Void
+newline: Void
+ident: Void
+lparen: Void
+ident: Void
+lparen: Void
+rparen: Void
+sub: Void
+ident: Void
+rparen: Void
+newline: Void
+ident: Void
+lparen: Void
+str: Void
+rparen: Void
+newline: Void
+ident: Void
+dot: Void
+ident: Void
+lparen: Void
+rparen: Void
+newline: Void
+for_: Void
+ident: Void
+pipe: Void
+ident: Void
+pipe: Void
+lbrace: Void
+newline: Void
+switch_: Void
+ident: Void
+lbrace: Void
+newline: Void
+type: Void
+lbrace: Void
+newline: Void
+ident: Void
+lparen: Void
+ident: Void
+dot: Void
+ident: Void
+dot: Void
+ident: Void
+rparen: Void
+newline: Void
+for_: Void
+ident: Void
+dot: Void
+ident: Void
+dot: Void
+ident: Void
+pipe: Void
+ident: Void
+pipe: Void
+lbrace: Void
+newline: Void
+ident: Void
+lparen: Void
+ident: Void
+rparen: Void
+newline: Void
+rbrace: Void
+newline: Void
+rbrace: Void
+newline: Void
+else_: Void
+lbrace: Void
+ident: Void
+lparen: Void
+str: Void
+rparen: Void
+rbrace: Void
+newline: Void
+rbrace: Void
+newline: Void
+rbrace: Void
+newline: Void
+newline: Void
+ident: Void
+lparen: Void
+rparen: Void
+newline: Void
+rbrace: Void
+newline: Void
+newline: Void
+fn_: Void
+ident: Void
+lparen: Void
+rparen: Void
+lbrace: Void
+newline: Void
+let_: Void
+ident: Void
+assign: Void
+ident: Void
+lparen: Void
+str: Void
+rparen: Void
+dot: Void
+ident: Void
+lparen: Void
+rparen: Void
+newline: Void
+ident: Void
+lparen: Void
+ident: Void
+rparen: Void
+comment: Void
+newline: Void
+newline: Void
+let_: Void
+ident: Void
+assign: Void
+ident: Void
+lparen: Void
+rparen: Void
+newline: Void
+mut_: Void
+ident: Void
+assign: Void
+ident: Void
+lparen: Void
+ident: Void
+rparen: Void
+newline: Void
+ident: Void
+lparen: Void
+str: Void
+rparen: Void
+newline: Void
+ident: Void
+lparen: Void
+ident: Void
+lparen: Void
+rparen: Void
+sub: Void
+ident: Void
+rparen: Void
+newline: Void
+for_: Void
+ident: Void
+dot: Void
+ident: Void
+pipe: Void
+ident: Void
+pipe: Void
+lbrace: Void
+newline: Void
+assert_: Void
+ident: Void
+dot: Void
+ident: Void
+ne: Void
+ident: Void
+newline: Void
+rbrace: Void
+newline: Void
+newline: Void
+let_: Void
+ident: Void
+assign: Void
+ident: Void
+dot: Void
+mut_: Void
+dot: Void
+ident: Void
+lparen: Void
+rparen: Void
+newline: Void
+rbrace: Void
+newline: Void
+newline: Void
+Parsing took: (ms)
+2138
+---- AST
+[{type, name, body, args, span}, {args, type, name, body, span}]
+main
+{name, type, init, is_mut, span}
+{name, span, args, ufcs}
+{init, is_mut, type, name, span}
+{type, name, init, is_mut, span}
+{ufcs, name, args, span}
+{span, args, ufcs, name}
+{body, iter, elem, span}
+{span, init, name, is_mut, type}
+{init, type, span, name, is_mut}
+{name, span, ufcs, args}
+{ufcs, args, name, span}
+{span, name, args, ufcs}
+{ufcs, span, name, args}
+{body, span, iter, elem}
+{ufcs, name, args, span}
+parse_parser_file
+{span, name, type, is_mut, init}
+{args, name, span, ufcs}
+{span, name, type, init, is_mut}
+{type, name, init, is_mut, span}
+{span, args, ufcs, name}
+{name, ufcs, span, args}
+{span, iter, elem, body}
+{name, type, is_mut, span, init}
+struct Parser {
+    tokens List(Token)
+    errors List(Error)
+    index  Int
+    source List(Rune)
+}
+
+fn new_parser(source String) Parser {
+    let chars = source.chars()
+    mut lexer = new_lexer(chars)
+    let tokens = lexer.mut.lex()
+
+    Parser(tokens:, errors: [], source: chars, index: 0)
+}
+
+fn parse(mut parser Parser) List(Definition) {
+    mut result = []
+    mut def = parser.mut.next()
+
+    while def != none {
+        result ++= def
+        def = parser.mut.next()
+    }
+
+    result
+}
+
+fn parse(source String) List(Definition) {
+    mut parser = new_parser(source)
+    parser.mut.parse()
+}
+
+fn next(mut parser Parser) Option(Definition) {
+    mut def = none
+
+    parser.mut.skip_newlines()
+    while def == none and !parser.eof() {
+        def = parser.mut.parse_def()
+    }
+
+    def
+}
+
+fn tok(mut parser Parser) Token {
+    if !parser.eof() {
+        let token = parser.tokens[parser.index]
+    	parser.index = parser.index + 1
+    	token
+	} else {
+	    Token(kind: eof, span: parser.last().span)
+	}
+}
+
+fn peek(parser Parser) Token {
+    if !parser.eof() {
+        parser.tokens[parser.index]
+	} else {
+	    Token(kind: eof, span: parser.last().span)
+	}
+}
+
+fn peek(parser Parser, n Int) Token {
+    let index = parser.index + n - 1    
+    if index < parser.tokens.len() and index >= 0 {
+        parser.tokens[index]
+	} else {
+	    Token(kind: eof, span: parser.last().span)
+	}
+}
+
+fn last(parser Parser) Token {
+    if parser.index == 0 {
+        panic("Called 'last' before consuming a token!")
+    }
+
+    parser.tokens[parser.index - 1]
+}
+
+fn eof(parser Parser) Bool {
+    parser.index >= parser.tokens.len()
+}
+
+fn span(parser Parser) Span {
+    parser.peek().span
+}
+
+fn span(parser Parser, from Token) Span {
+    parser.span(from.span)
+}
+
+fn span(parser Parser, from Token, to Token) Span {
+    parser.span(from.span, to.span)
+}
+
+fn span(parser Parser, from Span) Span {
+    parser.span(from, parser.last().span)    
+}
+
+fn span(parser Parser, from Span, to Span) Span {
+    from.merge(to)
+}
+
+fn expect(mut parser Parser, expected TokenKind) Option(Token) {
+    if expected != newline {
+        parser.mut.skip_newlines()
+    }
+    let actual = parser.mut.tok()
+    if expected != actual.kind {
+        print("Expected")
+        print(expected)
+        print("Actual")
+        print(actual.kind)
+        parser.mut.err("Unexpected token!")
+        return none
+    }
+
+    actual
+}
+
+fn accept(mut parser Parser, expected TokenKind) Option(Token) {
+    parser.mut.skip_newlines()
+    if parser.has(expected) {
+        parser.mut.expect(expected)
+    } else {
+        none
+    }
+}
+
+fn accept(mut parser Parser, expected List(TokenKind)) Option(Token) {
+    parser.mut.skip_newlines()
+    mut any = false
+    for expected |kind| {
+        if parser.has(kind) {
+            any = true
+            break
+        } 
+    }
+
+    if any {
+        parser.mut.tok()
+    } else {
+        none
+    }
+}
+
+fn skip_newlines(mut parser Parser) {
+    while parser.has(newline) or parser.has(comment) {
+        parser.mut.tok()
+    } 
+}
+
+fn has(parser Parser, expected TokenKind) Bool {
+    parser.peek().kind == expected
+}
+
+fn err(mut parser Parser, msg String) {
+    // TODO: for now, we panic, later we should maintain an error list
+    print(parser.source.substr(parser.last().span))
+    panic(msg)
+    parser.errors ++= Error(span: parser.last().span, msg: msg)
+} 
+
+
+Lexing took: (ms)
+227

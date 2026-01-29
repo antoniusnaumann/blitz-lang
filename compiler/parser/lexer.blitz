@@ -203,14 +203,15 @@ fn peekch(lexer Lexer, n Int) Rune {
 }
 
 fn substr(source List(Rune), start Int, until Int) String {
-	let str = ""
-	mut index = start
-	while index < until {
-		str ++= source[index]
-		index = index + 1
-	}
+	source.substring(start, until)
+	// let str = ""
+	// mut index = start
+	// while index < until {
+	// 	str ++= source[index]
+	// 	index = index + 1
+	// }
 
-	str
+	// str
 }
 
 fn substr(source List(Rune), range Range) String {

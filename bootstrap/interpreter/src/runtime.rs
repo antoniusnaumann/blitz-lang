@@ -1,4 +1,9 @@
-use std::{collections::HashMap, path::PathBuf, sync::OnceLock};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    sync::OnceLock,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use crate::{Body, Func, Param, Registry, Value};
 
@@ -45,8 +50,19 @@ impl Builtin for Registry {
         register_builtin!(self, read, [("path", "String", false)], "String");
         register_builtin!(self, panic, [("msg", "String", false)], "Never");
         register_builtin!(self, todo, [("msg", "String", false)], "Never");
-        register_builtin!(self, chars, [("s", "String", false)], "RcList(Rune)");
+        register_builtin!(self, chars, [("s", "String", false)], "List(Rune)");
         register_builtin!(self, len, [("arr", "List", false)], "Int");
+        register_builtin!(
+            self,
+            substring,
+            [
+                ("source", "List", false),
+                ("start", "Int", false),
+                ("until", "Int", false)
+            ],
+            "String"
+        );
+        register_builtin!(self, time, [], "Int");
     }
 }
 
@@ -135,4 +151,20 @@ make_builtin!(len(arr) {
         Value::RcList(list) => Value::Int(list.len().try_into().unwrap()),
         _ => panic!("'len' requires List")
     }
+});
+
+make_builtin!(substring(source, start, until) {
+    match (source, start, until) {
+        (Value::RcList(list), Value::Int(start), Value::Int(until)) => {
+            let start = *start as usize;
+            let until = *until as usize;
+            let string: String = list[start..until].iter().map(|v| match v { Value::Rune(ch) =>  ch, _ => panic!("Needs char")}).collect();
+            Value::String(string)
+        },
+        _ => panic!("Wrong args for substring")
+    }
+});
+
+make_builtin!(time() {
+    Value::Int(SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as isize)
 });
