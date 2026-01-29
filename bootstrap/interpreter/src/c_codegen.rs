@@ -123,6 +123,12 @@ struct CCodegen {
     type_dependencies: HashMap<String, HashSet<String>>,
     /// Store type definitions for ordered generation
     type_definitions: HashMap<String, Definition>,
+    /// Track variable name mappings to handle C stdlib collisions (original_name -> mangled_name)
+    variable_name_mappings: HashMap<String, String>,
+    /// Track all function names for forward declarations (c_func_name, signature)
+    all_functions: Vec<(String, String)>,
+    /// Track enum variants: enum_name -> set of variant names
+    enum_variants: HashMap<String, HashSet<String>>,
 }
 
 impl CCodegen {
@@ -142,6 +148,9 @@ impl CCodegen {
             type_name_registry: TypeNameRegistry::new(),
             type_dependencies: HashMap::new(),
             type_definitions: HashMap::new(),
+            variable_name_mappings: HashMap::new(),
+            all_functions: Vec::new(),
+            enum_variants: HashMap::new(),
         }
     }
 
@@ -249,10 +258,13 @@ impl CCodegen {
     fn build_type_dependencies(&mut self, def: &Definition) -> Result<(), String> {
         match def {
             Definition::Struct(s) => {
-                let type_name = s.sig.name.clone();
+                let blitz_name = s.sig.name.clone();
+                let c_name = self
+                    .type_name_registry
+                    .register_type(&blitz_name, TypeKind::Struct);
 
-                // Store the definition for later generation
-                self.type_definitions.insert(type_name.clone(), def.clone());
+                // Store the definition using C name as key
+                self.type_definitions.insert(c_name.clone(), def.clone());
 
                 // Extract dependencies from struct fields
                 let mut deps = HashSet::new();
@@ -260,18 +272,28 @@ impl CCodegen {
                     self.extract_type_dependencies(&field.r#type, &mut deps);
                 }
 
-                self.type_dependencies.insert(type_name.clone(), deps);
+                self.type_dependencies.insert(c_name.clone(), deps);
                 eprintln!(
                     "DEBUG: Type '{}' depends on: {:?}",
-                    type_name,
-                    self.type_dependencies.get(&type_name).unwrap()
+                    c_name,
+                    self.type_dependencies.get(&c_name).unwrap()
                 );
             }
             Definition::Union(u) => {
-                let type_name = u.sig.name.clone();
+                let blitz_name = u.sig.name.clone();
+                let has_typed_variants = u
+                    .cases
+                    .iter()
+                    .any(|c| c.label.is_some() && c.r#type.is_some());
+                let kind = if has_typed_variants {
+                    TypeKind::TaggedUnion
+                } else {
+                    TypeKind::Enum
+                };
+                let c_name = self.type_name_registry.register_type(&blitz_name, kind);
 
-                // Store the definition for later generation
-                self.type_definitions.insert(type_name.clone(), def.clone());
+                // Store the definition using C name as key
+                self.type_definitions.insert(c_name.clone(), def.clone());
 
                 // Extract dependencies from union cases
                 let mut deps = HashSet::new();
@@ -281,11 +303,11 @@ impl CCodegen {
                     }
                 }
 
-                self.type_dependencies.insert(type_name.clone(), deps);
+                self.type_dependencies.insert(c_name.clone(), deps);
                 eprintln!(
                     "DEBUG: Type '{}' depends on: {:?}",
-                    type_name,
-                    self.type_dependencies.get(&type_name).unwrap()
+                    c_name,
+                    self.type_dependencies.get(&c_name).unwrap()
                 );
             }
             Definition::Pub(p) => {
@@ -576,6 +598,153 @@ impl CCodegen {
         )
     }
 
+    /// Check if a type is a built-in type defined in blitz_types.h
+    fn is_builtin_type(&self, type_name: &str) -> bool {
+        matches!(type_name, "Range" | "List_Rune")
+    }
+
+    /// Check if a variable name collides with C standard library names
+    /// Returns true if the name is a reserved C keyword or stdlib function
+    fn is_reserved_c_name(name: &str) -> bool {
+        // Common C standard library functions that shouldn't be shadowed
+        const C_STDLIB_NAMES: &[&str] = &[
+            // Time functions
+            "time",
+            "clock",
+            "difftime",
+            "mktime",
+            "strftime",
+            "gmtime",
+            "localtime",
+            // I/O functions
+            "read",
+            "write",
+            "open",
+            "close",
+            "printf",
+            "scanf",
+            "fprintf",
+            "fscanf",
+            "fopen",
+            "fclose",
+            "fread",
+            "fwrite",
+            "puts",
+            "gets",
+            "getchar",
+            "putchar",
+            // Memory functions
+            "malloc",
+            "calloc",
+            "realloc",
+            "free",
+            "memcpy",
+            "memset",
+            "memmove",
+            // String functions
+            "strlen",
+            "strcmp",
+            "strcpy",
+            "strcat",
+            "strchr",
+            "strstr",
+            "strtok",
+            // Math functions
+            "abs",
+            "sqrt",
+            "pow",
+            "exp",
+            "log",
+            "sin",
+            "cos",
+            "tan",
+            "floor",
+            "ceil",
+            // Other common functions
+            "exit",
+            "abort",
+            "assert",
+            "signal",
+            "raise",
+            "setjmp",
+            "longjmp",
+            // C keywords (though the Blitz parser should catch most of these)
+            "auto",
+            "break",
+            "case",
+            "char",
+            "const",
+            "continue",
+            "default",
+            "do",
+            "double",
+            "else",
+            "enum",
+            "extern",
+            "float",
+            "for",
+            "goto",
+            "if",
+            "inline",
+            "int",
+            "long",
+            "register",
+            "restrict",
+            "return",
+            "short",
+            "signed",
+            "sizeof",
+            "static",
+            "struct",
+            "switch",
+            "typedef",
+            "union",
+            "unsigned",
+            "void",
+            "volatile",
+            "while",
+            "_Bool",
+            "_Complex",
+            "_Imaginary",
+        ];
+
+        C_STDLIB_NAMES.contains(&name)
+    }
+
+    /// Mangle a variable name if it collides with C standard library names
+    /// Returns the mangled name (e.g., "time" -> "blitz_time")
+    fn mangle_variable_name(&mut self, name: &str) -> String {
+        // Check if we've already mangled this name
+        if let Some(mangled) = self.variable_name_mappings.get(name) {
+            return mangled.clone();
+        }
+
+        // Check if the name collides
+        if Self::is_reserved_c_name(name) {
+            let mangled = format!("blitz_{}", name);
+            eprintln!(
+                "DEBUG: Mangling variable '{}' -> '{}' (C stdlib collision)",
+                name, mangled
+            );
+            self.variable_name_mappings
+                .insert(name.to_string(), mangled.clone());
+            mangled
+        } else {
+            // No collision, use original name
+            self.variable_name_mappings
+                .insert(name.to_string(), name.to_string());
+            name.to_string()
+        }
+    }
+
+    /// Get the C name for a variable, returning the mangled version if it was previously mangled
+    fn get_variable_name(&self, name: &str) -> String {
+        self.variable_name_mappings
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| name.to_string())
+    }
+
     /// Get the mangled name for a function call based on argument types
     fn resolve_function_call(&self, func_name: &str, arg_types: &[String]) -> String {
         // Special case: main function is never mangled
@@ -617,12 +786,20 @@ impl CCodegen {
                     .type_name_registry
                     .register_type(struct_name, TypeKind::Struct);
 
-                // Generate forward declaration if not already done
-                if !self.generated_types.contains(&c_name) {
+                // Skip if already generated
+                if self.generated_types.contains(&c_name) {
+                    return Ok(());
+                }
+
+                // Mark as generated to prevent infinite loops
+                self.generated_types.insert(c_name.clone());
+
+                // Generate forward declaration (unless it's a built-in type)
+                if !self.is_builtin_type(&c_name) {
                     self.forward_decls
                         .push_str(&format!("typedef struct {} {};\n", c_name, c_name));
-                    self.generated_types.insert(c_name.clone());
                 }
+
                 self.generate_struct(&s.sig, &s.fields)?;
             }
             Definition::Union(u) => {
@@ -642,12 +819,19 @@ impl CCodegen {
                 // Get the C name with potential collision suffix
                 let c_name = self.type_name_registry.register_type(union_name, kind);
 
-                if has_typed_variants && !self.generated_types.contains(&c_name) {
+                // Skip if already generated
+                if self.generated_types.contains(&c_name) {
+                    return Ok(());
+                }
+
+                // Mark as generated to prevent infinite loops
+                self.generated_types.insert(c_name.clone());
+
+                if has_typed_variants && !self.is_builtin_type(&c_name) {
                     self.forward_decls
                         .push_str(&format!("typedef struct {} {};\n", c_name, c_name));
-                    self.generated_types.insert(c_name.clone());
                 }
-                // Note: simple enum unions don't need forward declarations
+
                 self.generate_union(&u.sig, &u.cases)?;
             }
             Definition::Fn(f) => {
@@ -673,6 +857,11 @@ impl CCodegen {
         let c_name = self
             .type_name_registry
             .register_type(struct_name, TypeKind::Struct);
+
+        // Skip if it's a built-in type
+        if self.is_builtin_type(&c_name) {
+            return Ok(());
+        }
 
         // Skip generic structs for now
         if !sig.params.is_empty() {
@@ -735,6 +924,10 @@ impl CCodegen {
         if !has_typed_variants {
             // Generate simple enum for symbolic-only unions
             eprintln!("Generating enum {} as {}", union_name, c_name);
+
+            // Track enum variants for identifier resolution
+            let mut variants = HashSet::new();
+
             self.enum_defs.push_str(&format!("typedef enum {{\n"));
             for (i, case) in cases.iter().enumerate() {
                 // For symbolic variants: label is the name, type might be present but is same as label
@@ -762,6 +955,9 @@ impl CCodegen {
                     ));
                 };
 
+                // Track this variant
+                variants.insert(variant_name.clone());
+
                 self.enum_defs
                     .push_str(&format!("    {}_{}", c_name, variant_name));
                 if i < cases.len() - 1 {
@@ -770,6 +966,14 @@ impl CCodegen {
                 self.enum_defs.push_str("\n");
             }
             self.enum_defs.push_str(&format!("}} {};\n\n", c_name));
+
+            // Store enum variants for later lookup
+            eprintln!(
+                "DEBUG: Storing enum '{}' with {} variants",
+                &c_name,
+                variants.len()
+            );
+            self.enum_variants.insert(c_name.clone(), variants);
         } else {
             // Generate tagged union for mixed/typed unions
             eprintln!("Generating tagged union {} as {}", union_name, c_name);
@@ -824,6 +1028,27 @@ impl CCodegen {
     }
 
     fn generate_function(&mut self, func: &parser::Fn) -> Result<(), String> {
+        // Clear variable name mappings for new function scope
+        self.variable_name_mappings.clear();
+
+        // Track function for forward declaration
+        let param_types: Vec<String> = func
+            .args
+            .iter()
+            .map(|arg| self.type_signature(&arg.r#type))
+            .collect();
+        let c_func_name = if func.name == "main" {
+            func.name.clone()
+        } else if let Some(signatures) = self.function_signatures.get(&func.name) {
+            if signatures.len() > 1 {
+                self.mangle_function_name(&func.name, &param_types)
+            } else {
+                func.name.clone()
+            }
+        } else {
+            func.name.clone()
+        };
+
         // Store the return type for context-sensitive code generation
         self.current_return_type = func.r#type.clone();
 
@@ -848,9 +1073,11 @@ impl CCodegen {
             let param_type = self.map_type(&arg.r#type);
             let param_type_sig = self.type_signature(&arg.r#type);
             param_types.push(param_type_sig);
+            // Mangle parameter name if it collides with C stdlib
+            let param_name = self.mangle_variable_name(&arg.name);
             // Note: mutability is handled in Blitz semantics, not at C level
             // In C, all parameters are passed by value (or pointer for structs)
-            params.push(format!("{} {}", param_type, arg.name));
+            params.push(format!("{} {}", param_type, param_name));
         }
         let params_str = if params.is_empty() {
             "void".to_string()
@@ -877,9 +1104,34 @@ impl CCodegen {
             }
         };
 
+        // Check if this function has generic type parameters
+        // If so, skip generating it entirely (generic functions need monomorphization)
+        let has_generic_params = func
+            .args
+            .iter()
+            .any(|arg| !self.is_concrete_type(&arg.r#type))
+            || func
+                .r#type
+                .as_ref()
+                .map_or(false, |ty| !self.is_concrete_type(ty));
+
+        if has_generic_params {
+            // Skip generic functions - they need to be monomorphized first
+            eprintln!(
+                "Skipping generic function {} (has type parameters)",
+                func.name
+            );
+            return Ok(());
+        }
+
         // Generate function signature
+        let func_signature = format!("{} {}({});", return_type, c_func_name, params_str);
+        self.all_functions
+            .push((c_func_name.clone(), func_signature));
+
         self.impl_code.push_str(&format!(
-            "{} {}({}) {{\n",
+            "{} {}({}) {{
+",
             return_type, c_func_name, params_str
         ));
 
@@ -954,7 +1206,8 @@ impl CCodegen {
             parser::Statement::Declaration(decl) => {
                 // Generate variable declaration: <type> <name> = <init_expr>;
                 let mut c_type = self.map_type(&decl.r#type);
-                let var_name = &decl.name;
+                // Mangle variable name if it collides with C stdlib
+                let var_name = self.mangle_variable_name(&decl.name);
 
                 // If type is empty or "_", try to infer from initialization expression
                 if c_type.is_empty() || c_type == "_" {
@@ -991,7 +1244,7 @@ impl CCodegen {
                             switch_expr,
                             is_main,
                             &c_type,
-                            var_name,
+                            &var_name,
                         );
                     }
 
@@ -1004,6 +1257,18 @@ impl CCodegen {
                 // Note: is_mut is semantic only in Blitz, not represented in C
             }
         }
+    }
+
+    /// Check if an identifier might be an enum variant and qualify it
+    fn qualify_identifier(&self, ident_name: &str) -> String {
+        // Check all enum types to see if this identifier is a variant
+        for (enum_name, variants) in &self.enum_variants {
+            if variants.contains(ident_name) {
+                return format!("{}_{}", enum_name, ident_name);
+            }
+        }
+        // Not an enum variant, return as-is
+        ident_name.to_string()
     }
 
     fn generate_expression(&mut self, expr: &parser::Expression, is_main: bool) -> String {
@@ -1085,7 +1350,15 @@ impl CCodegen {
                         }
                     }
                 }
-                ident.name.clone()
+                // Check if this is an enum variant that needs qualification
+                let var_name = self.get_variable_name(&ident.name);
+                // If the variable doesn't exist in our mappings, it might be an enum variant
+                if var_name == ident.name {
+                    // Try to qualify as enum variant
+                    self.qualify_identifier(&ident.name)
+                } else {
+                    var_name
+                }
             }
             parser::Expression::BinaryOp(binop) => {
                 // Map Blitz operators to C operators
@@ -1224,8 +1497,23 @@ impl CCodegen {
                     field_inits.push(format!(".{} = {}", field_name, field_value));
                 }
 
+                // Check if we need to return a pointer to this struct
+                // This happens when the struct type is known and not an enum
+                let needs_pointer =
+                    self.seen_types.contains(type_name) && !self.enum_types.contains(type_name);
+
                 // Format as compound literal: (TypeName){.field1 = val1, .field2 = val2}
-                format!("({}){{{}}}", type_name, field_inits.join(", "))
+                let compound_literal = format!("({}){{{}}}", type_name, field_inits.join(", "));
+
+                if needs_pointer {
+                    // Heap-allocate and return pointer: memcpy(malloc(sizeof(T)), &(T){...}, sizeof(T))
+                    format!(
+                        "memcpy(malloc(sizeof({})), &{}, sizeof({}))",
+                        type_name, compound_literal, type_name
+                    )
+                } else {
+                    compound_literal
+                }
             }
             parser::Expression::Member(member) => {
                 // Generate member access: obj.field or obj->field
@@ -1300,7 +1588,7 @@ impl CCodegen {
             parser::Expression::Assignment(assign) => {
                 // Generate assignment: lval = rhs
                 let lval_code = match &assign.left {
-                    parser::Lval::Ident(ident) => ident.name.clone(),
+                    parser::Lval::Ident(ident) => self.get_variable_name(&ident.name),
                     parser::Lval::Member(member) => {
                         // Use the same logic as Expression::Member for consistency
                         let parent_code = self.generate_expression(&member.parent, is_main);
@@ -1327,15 +1615,53 @@ impl CCodegen {
                 format!("{} = {}", lval_code, rhs)
             }
             parser::Expression::For(for_loop) => {
-                // For loops iterate over ranges: for i in 0..10 { body }
-                // We need to convert this to a C for loop
-                // The iter expression should be a Range or a list
-                // For simplicity, we'll handle Range cases and convert to C for loop
+                // For loops iterate over ranges or lists
+                // For Range iteration: for Range(begin: 0, until: 10) |i| { body }
+                // Generate C for-loop: for (int64_t i = 0; i < 10; i++) { body }
 
+                // Mangle the loop variable name if it collides with C stdlib
+                let elem_name = self.mangle_variable_name(&for_loop.elem);
+
+                // Check if the iter expression is a Range constructor
+                if let parser::Expression::Constructor(ctor) = &*for_loop.iter {
+                    if ctor.r#type.name == "Range" {
+                        // Extract begin and until values from Range constructor
+                        let mut begin_expr = None;
+                        let mut until_expr = None;
+
+                        for arg in &ctor.args {
+                            match arg.label.name.as_str() {
+                                "begin" => {
+                                    begin_expr = Some(self.generate_expression(&arg.init, is_main));
+                                }
+                                "until" => {
+                                    until_expr = Some(self.generate_expression(&arg.init, is_main));
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        if let (Some(begin), Some(until)) = (begin_expr, until_expr) {
+                            // Generate body statements
+                            let mut body_code = String::new();
+                            for stmt in &for_loop.body {
+                                let stmt_code = self.generate_statement(stmt, is_main);
+                                body_code.push_str("        ");
+                                body_code.push_str(&stmt_code);
+                                body_code.push_str("\n");
+                            }
+
+                            // Generate C for-loop with proper iterator variable declaration
+                            return format!(
+                                "for (int64_t {} = {}; {} < {}; {}++) {{\n{}    }}",
+                                elem_name, begin, elem_name, until, elem_name, body_code
+                            );
+                        }
+                    }
+                }
+
+                // Fallback: generate a TODO comment for non-Range iterations
                 let iter_code = self.generate_expression(&for_loop.iter, is_main);
-                let elem_name = &for_loop.elem;
-
-                // Generate body statements
                 let mut body_code = String::new();
                 for stmt in &for_loop.body {
                     let stmt_code = self.generate_statement(stmt, is_main);
@@ -1344,12 +1670,8 @@ impl CCodegen {
                     body_code.push_str("\n");
                 }
 
-                // For now, assume iter is a Range-like expression (begin..end)
-                // In the AST, ranges are typically BinaryOp with Range operator
-                // We'll generate a C for loop: for (int i = begin; i < end; i++)
-                // This is a simplification - full implementation would need range analysis
                 format!(
-                    "// For loop: for {} in {}\n    {{\n        /* TODO: proper range iteration */\n{}    }}",
+                    "// TODO: For loop over non-Range: for {} in {}\n    {{\n{}    }}",
                     elem_name, iter_code, body_code
                 )
             }
@@ -2080,12 +2402,63 @@ static inline String blitz_substring(List_Rune list, int64_t start, int64_t unti
     return result;
 }
 
-// Runtime function declarations (stubs - need implementation)
-// Note: C doesn't support overloading, so we'd need different names
-// For now, these are just placeholders - actual implementation would use _Generic or separate functions
+// ============================================================================
+// Runtime function declarations
+// ============================================================================
+// These functions are required by the Blitz runtime but are not yet implemented.
+// They provide core functionality for I/O, error handling, and type operations.
+
+// Print functions - overloaded in Blitz, mapped to _Generic macro in C
+// Usage: print(x) expands to the appropriate function based on type
+#define print(x) _Generic((x), \
+    char*: print_str, \
+    const char*: print_str, \
+    int64_t: print_int, \
+    int: print_int, \
+    bool: print_bool, \
+    double: print_float, \
+    List_Rune: print_list_rune, \
+    default: print_unknown \
+)(x)
+
 void print_str(const char* str);
 void print_int(int64_t val);
-void print_list(List_Rune list);
+void print_bool(bool val);
+void print_float(double val);
+void print_list_rune(List_Rune list);
+void print_unknown(void* ptr);
+
+// Panic function - terminates the program with an error message
+// Used for unrecoverable errors
+void panic(const char* message) __attribute__((noreturn));
+
+// Unwrap functions for Option types
+// These extract the value from Some(x) or panic if None
+// Each Option(T) type needs its own unwrap function
+#define DECLARE_UNWRAP(T) \
+    T unwrap_##T(void* option_ptr);
+
+// Common unwrap declarations
+DECLARE_UNWRAP(Int)
+DECLARE_UNWRAP(Bool)
+DECLARE_UNWRAP(String)
+DECLARE_UNWRAP(Float)
+
+// Generic unwrap macro - for use with Option types
+// Example: unwrap_Option_Int(some_option)
+#define unwrap(opt) _unwrap_##opt
+
+// Read functions for basic I/O
+// These are placeholders for file/stdin reading operations
+typedef struct {
+    char* data;
+    size_t len;
+    bool ok;
+} ReadResult;
+
+ReadResult read_line(void);
+ReadResult read_file(const char* path);
+char* read_to_string(const char* path);
 
 #endif // BLITZ_TYPES_H
 "#;
@@ -2115,13 +2488,18 @@ void print_list(List_Rune list);
             full_header.push_str("\n");
         }
 
-        // Add generic type instantiations
+        // Add generic type instantiations (must come before function forward declarations)
         if !self.generic_instances.is_empty() {
             full_header.push_str("// Generic type instantiations\n");
             let mut instances: Vec<_> = self.generic_instances.iter().collect();
             instances.sort_by_key(|(name, _)| *name);
 
             for (instance_name, (base_type, params)) in instances {
+                // Skip built-in types
+                if self.is_builtin_type(instance_name) {
+                    continue;
+                }
+
                 if base_type == "Box" && params.len() == 1 {
                     // Box(T) -> typedef T* Box_T;
                     let param_type = &params[0];
@@ -2223,6 +2601,25 @@ void print_list(List_Rune list);
                 }
             }
             full_header.push_str("\n");
+        }
+
+        // Add function forward declarations (after generic type instantiations)
+        if !self.all_functions.is_empty() {
+            full_header.push_str(
+                "// Function forward declarations
+",
+            );
+            for (_, signature) in &self.all_functions {
+                full_header.push_str(signature);
+                full_header.push_str(
+                    "
+",
+                );
+            }
+            full_header.push_str(
+                "
+",
+            );
         }
 
         // Add type definitions
