@@ -19,12 +19,24 @@ fn main() {
         assert!(!DEBUG.get_or_init(|| false));
     }
 
+    // Check for --transpile-c flag
+    let (transpile_c, output_dir) = if args.len() > 3 && args[1] == "--transpile-c" {
+        (true, args[2].clone())
+    } else {
+        (false, String::new())
+    };
+
+    if transpile_c {
+        args.remove(1); // remove --transpile-c
+        args.remove(1); // remove output_dir
+    }
+
     let (run_tests, path) = if args.len() > 2 && args[1] == "test" {
         (true, args[2].clone())
     } else if args.len() > 1 {
         (false, args[1].clone())
     } else {
-        eprintln!("Usage: interpreter [test] <file-or-directory>");
+        eprintln!("Usage: interpreter [--transpile-c <output-dir>] [test] <file-or-directory>");
         std::process::exit(1);
     };
 
@@ -32,6 +44,21 @@ fn main() {
     assert_eq!(path, ROOT.get_or_init(|| path.into()));
 
     let asts = collect_definitions(path);
+
+    // If transpiling to C, do that and exit
+    if transpile_c {
+        let output_path = Path::new(&output_dir);
+        match interpreter::c_codegen::transpile_to_c(&asts, output_path) {
+            Ok(()) => {
+                println!("Successfully transpiled to C");
+                std::process::exit(0);
+            }
+            Err(e) => {
+                eprintln!("Transpilation failed: {}", e);
+                std::process::exit(1);
+            }
+        }
+    }
 
     for ast in &asts {
         // println!("DEBUG: Collected {} definitions", ast.defs.len());

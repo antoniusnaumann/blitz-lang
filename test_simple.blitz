@@ -1,0 +1,9 @@
+struct Point {
+    x Int
+    y Int
+}
+
+struct Span {
+    start Int
+    end Int
+}
