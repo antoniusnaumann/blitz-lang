@@ -29,6 +29,32 @@ fn main() {
     if transpile_c {
         args.remove(1); // remove --transpile-c
         args.remove(1); // remove output_dir
+
+        // For transpilation, collect all remaining args as input paths
+        if args.len() < 2 {
+            eprintln!("Usage: interpreter --transpile-c <output-dir> <file-or-directory> [...]");
+            std::process::exit(1);
+        }
+
+        let input_paths: Vec<PathBuf> = args[1..].iter().map(|s| PathBuf::from(s)).collect();
+        let mut all_asts = Vec::new();
+
+        for input_path in input_paths {
+            let asts = collect_definitions(&input_path);
+            all_asts.extend(asts);
+        }
+
+        let output_path = Path::new(&output_dir);
+        match interpreter::c_codegen::transpile_to_c(&all_asts, output_path) {
+            Ok(()) => {
+                println!("Successfully transpiled to C");
+                std::process::exit(0);
+            }
+            Err(e) => {
+                eprintln!("Transpilation failed: {}", e);
+                std::process::exit(1);
+            }
+        }
     }
 
     let (run_tests, path) = if args.len() > 2 && args[1] == "test" {
@@ -45,20 +71,7 @@ fn main() {
 
     let asts = collect_definitions(path);
 
-    // If transpiling to C, do that and exit
-    if transpile_c {
-        let output_path = Path::new(&output_dir);
-        match interpreter::c_codegen::transpile_to_c(&asts, output_path) {
-            Ok(()) => {
-                println!("Successfully transpiled to C");
-                std::process::exit(0);
-            }
-            Err(e) => {
-                eprintln!("Transpilation failed: {}", e);
-                std::process::exit(1);
-            }
-        }
-    }
+    // If transpiling to C, do that and exit (handled above)
 
     for ast in &asts {
         // println!("DEBUG: Collected {} definitions", ast.defs.len());

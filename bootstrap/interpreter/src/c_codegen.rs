@@ -5,6 +5,11 @@ use std::path::Path;
 
 /// Main entry point for C transpilation
 pub fn transpile_to_c(asts: &[Ast], output_dir: &Path) -> Result<(), String> {
+    eprintln!("DEBUG: transpiling {} ASTs", asts.len());
+    for (i, ast) in asts.iter().enumerate() {
+        eprintln!("  AST {}: {} definitions", i, ast.defs.len());
+    }
+
     let mut codegen = CCodegen::new(output_dir);
 
     // First pass: collect all type definitions
@@ -97,6 +102,18 @@ impl CCodegen {
 
     fn generate_struct(&mut self, sig: &Type, fields: &[parser::Field]) -> Result<(), String> {
         let struct_name = &sig.name;
+
+        // Skip generic structs for now
+        if !sig.params.is_empty() {
+            eprintln!("Skipping generic struct {}", struct_name);
+            self.header.push_str(&format!(
+                "// TODO: Generic struct {} - NOT IMPLEMENTED YET\n\n",
+                struct_name
+            ));
+            return Ok(());
+        }
+
+        eprintln!("Generating struct {}", struct_name);
 
         // Handle empty structs
         if fields.is_empty() {
@@ -251,6 +268,9 @@ impl CCodegen {
     }
 
     fn write_files(&self) -> Result<(), String> {
+        eprintln!("DEBUG: header length = {} bytes", self.header.len());
+        eprintln!("DEBUG: impl_code length = {} bytes", self.impl_code.len());
+
         // Create output directory if it doesn't exist
         fs::create_dir_all(&self.output_dir)
             .map_err(|e| format!("Failed to create output directory: {}", e))?;
@@ -286,6 +306,12 @@ typedef char* String;
         full_header.push_str("#include \"blitz_types.h\"\n\n");
         full_header.push_str(&self.header);
         full_header.push_str("\n#endif // BLITZ_H\n");
+
+        eprintln!(
+            "DEBUG: about to write {} bytes to {}",
+            full_header.len(),
+            header_path.display()
+        );
 
         fs::write(&header_path, full_header)
             .map_err(|e| format!("Failed to write {}: {}", header_path.display(), e))?;
