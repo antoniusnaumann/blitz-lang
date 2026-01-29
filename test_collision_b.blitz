@@ -1,0 +1,16 @@
+// File B defines Assignment as an enum (collision with struct in file A!)
+union Assignment {
+    Add
+    Sub
+    Mul
+    Plain
+}
+
+union Expression {
+    Assignment
+    Other
+}
+
+fn process_b(e Expression) {
+    print("Expression with Assignment")
+}

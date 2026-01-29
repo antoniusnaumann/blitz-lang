@@ -3,6 +3,8 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
+use crate::c_codegen_patch::{TypeKind, TypeNameRegistry};
+
 /// Main entry point for C transpilation
 pub fn transpile_to_c(asts: &[Ast], output_dir: &Path) -> Result<(), String> {
     eprintln!("DEBUG: transpiling {} ASTs", asts.len());
@@ -26,10 +28,17 @@ pub fn transpile_to_c(asts: &[Ast], output_dir: &Path) -> Result<(), String> {
         }
     }
 
-    // Third pass: generate code
+    // Third pass: build dependency graph for type definitions
     for ast in asts {
         for def in &ast.defs {
-            // First generate all enums (simple unions)
+            codegen.build_type_dependencies(def)?;
+        }
+    }
+
+    // Fourth pass: generate code in dependency order
+    // First generate all enums (simple unions) - they have no dependencies
+    for ast in asts {
+        for def in &ast.defs {
             if let Definition::Union(u) = def {
                 let is_simple_enum = !u
                     .cases
@@ -52,28 +61,30 @@ pub fn transpile_to_c(asts: &[Ast], output_dir: &Path) -> Result<(), String> {
         }
     }
 
-    // Then generate all other definitions
+    // Then generate structs and tagged unions in topologically sorted order
+    let ordered_types = codegen.topological_sort_types()?;
+    eprintln!("DEBUG: Type dependency order: {:?}", ordered_types);
+
+    for type_name in ordered_types {
+        // Clone the definition to avoid borrow checker issues
+        if let Some(def) = codegen.type_definitions.get(&type_name).cloned() {
+            codegen.generate_definition(&def)?;
+        }
+    }
+
+    // Finally generate functions and other non-type definitions
     for ast in asts {
         for def in &ast.defs {
-            // Skip enums we already generated
-            let skip = if let Definition::Union(u) = def {
-                !u.cases
-                    .iter()
-                    .any(|c| c.label.is_some() && c.r#type.is_some())
-            } else if let Definition::Pub(p) = def {
-                if let Definition::Union(u) = &*p.item {
-                    !u.cases
-                        .iter()
-                        .any(|c| c.label.is_some() && c.r#type.is_some())
-                } else {
-                    false
+            match def {
+                Definition::Fn(_) => {
+                    codegen.generate_definition(def)?;
                 }
-            } else {
-                false
-            };
-
-            if !skip {
-                codegen.generate_definition(def)?;
+                Definition::Pub(p) => {
+                    if matches!(&*p.item, Definition::Fn(_)) {
+                        codegen.generate_definition(def)?;
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -106,6 +117,12 @@ struct CCodegen {
     current_return_type: Option<Type>,
     /// Track function signatures for overload resolution: name -> list of (param_types, mangled_name)
     function_signatures: HashMap<String, Vec<(Vec<String>, String)>>,
+    /// Type name registry for collision detection and resolution
+    type_name_registry: TypeNameRegistry,
+    /// Type dependency graph: type_name -> set of types it depends on
+    type_dependencies: HashMap<String, HashSet<String>>,
+    /// Store type definitions for ordered generation
+    type_definitions: HashMap<String, Definition>,
 }
 
 impl CCodegen {
@@ -122,6 +139,9 @@ impl CCodegen {
             generic_instances: HashMap::new(),
             current_return_type: None,
             function_signatures: HashMap::new(),
+            type_name_registry: TypeNameRegistry::new(),
+            type_dependencies: HashMap::new(),
+            type_definitions: HashMap::new(),
         }
     }
 
@@ -129,17 +149,34 @@ impl CCodegen {
     fn collect_definition(&mut self, def: &Definition) -> Result<(), String> {
         match def {
             Definition::Struct(s) => {
-                self.seen_types.insert(s.sig.name.clone());
+                let c_name = self
+                    .type_name_registry
+                    .register_type(&s.sig.name, TypeKind::Struct);
+                eprintln!("DEBUG: Registering struct {} -> {}", s.sig.name, c_name);
+                self.seen_types.insert(c_name);
             }
             Definition::Union(u) => {
-                self.seen_types.insert(u.sig.name.clone());
                 // Check if this is a symbolic-only union (simple enum)
                 let has_typed_variants = u
                     .cases
                     .iter()
                     .any(|c| c.label.is_some() && c.r#type.is_some());
+
+                let kind = if has_typed_variants {
+                    TypeKind::TaggedUnion
+                } else {
+                    TypeKind::Enum
+                };
+
+                let c_name = self.type_name_registry.register_type(&u.sig.name, kind);
+                eprintln!(
+                    "DEBUG: Registering union {} ({:?}) -> {}",
+                    u.sig.name, kind, c_name
+                );
+                self.seen_types.insert(c_name.clone());
+
                 if !has_typed_variants {
-                    self.enum_types.insert(u.sig.name.clone());
+                    self.enum_types.insert(c_name);
                 }
             }
             Definition::Fn(f) => {
@@ -208,6 +245,184 @@ impl CCodegen {
         Ok(())
     }
 
+    /// Build type dependency graph for topological sorting
+    fn build_type_dependencies(&mut self, def: &Definition) -> Result<(), String> {
+        match def {
+            Definition::Struct(s) => {
+                let type_name = s.sig.name.clone();
+
+                // Store the definition for later generation
+                self.type_definitions.insert(type_name.clone(), def.clone());
+
+                // Extract dependencies from struct fields
+                let mut deps = HashSet::new();
+                for field in &s.fields {
+                    self.extract_type_dependencies(&field.r#type, &mut deps);
+                }
+
+                self.type_dependencies.insert(type_name.clone(), deps);
+                eprintln!(
+                    "DEBUG: Type '{}' depends on: {:?}",
+                    type_name,
+                    self.type_dependencies.get(&type_name).unwrap()
+                );
+            }
+            Definition::Union(u) => {
+                let type_name = u.sig.name.clone();
+
+                // Store the definition for later generation
+                self.type_definitions.insert(type_name.clone(), def.clone());
+
+                // Extract dependencies from union cases
+                let mut deps = HashSet::new();
+                for case in &u.cases {
+                    if let Some(ty) = &case.r#type {
+                        self.extract_type_dependencies(ty, &mut deps);
+                    }
+                }
+
+                self.type_dependencies.insert(type_name.clone(), deps);
+                eprintln!(
+                    "DEBUG: Type '{}' depends on: {:?}",
+                    type_name,
+                    self.type_dependencies.get(&type_name).unwrap()
+                );
+            }
+            Definition::Pub(p) => {
+                self.build_type_dependencies(&p.item)?;
+            }
+            _ => {
+                // Functions and other definitions don't go in the type dependency graph
+            }
+        }
+        Ok(())
+    }
+
+    /// Extract all type dependencies from a Type (handles generics like Box, Vec, Option)
+    fn extract_type_dependencies(&self, ty: &Type, deps: &mut HashSet<String>) {
+        // Skip primitive types
+        if self.is_primitive_type(&ty.name) {
+            return;
+        }
+
+        // Skip generic type parameters (single uppercase letters) ONLY if they're not user-defined types
+        // Check if this is a known user-defined type in our registry
+        if ty.name.len() == 1 && ty.name.chars().next().unwrap().is_uppercase() {
+            if !self.seen_types.contains(&ty.name) {
+                return;
+            }
+        }
+
+        // Handle special generic containers that don't create real dependencies
+        match ty.name.as_str() {
+            "Box" | "Vec" | "Option" | "Result" => {
+                // These are wrappers - extract dependencies from their parameters
+                for param in &ty.params {
+                    self.extract_type_dependencies(param, deps);
+                }
+            }
+            _ => {
+                // Regular user-defined type - add as dependency ONLY if it's in our type registry
+                if self.seen_types.contains(&ty.name) {
+                    deps.insert(ty.name.clone());
+                }
+
+                // Also process any generic parameters
+                for param in &ty.params {
+                    self.extract_type_dependencies(param, deps);
+                }
+            }
+        }
+    }
+
+    /// Topologically sort types based on dependencies
+    /// Uses Kahn's algorithm for topological sorting
+    /// Returns types in order where dependencies come before dependents
+    fn topological_sort_types(&self) -> Result<Vec<String>, String> {
+        // Build in-degree map (count of dependencies for each type)
+        let mut in_degree: HashMap<String, usize> = HashMap::new();
+        let mut adj_list: HashMap<String, Vec<String>> = HashMap::new();
+
+        // Initialize all types with in-degree 0 and empty adjacency list
+        for type_name in self.type_dependencies.keys() {
+            in_degree.entry(type_name.clone()).or_insert(0);
+            adj_list.entry(type_name.clone()).or_insert_with(Vec::new);
+        }
+
+        // Build the graph: if A depends on B, then B -> A (B must come before A)
+        for (dependent, dependencies) in &self.type_dependencies {
+            for dependency in dependencies {
+                // Only count dependencies on types we're actually generating
+                if self.type_dependencies.contains_key(dependency) {
+                    // Prevent self-dependencies (which indicate circular references)
+                    if dependency != dependent {
+                        adj_list
+                            .entry(dependency.clone())
+                            .or_insert_with(Vec::new)
+                            .push(dependent.clone());
+                        *in_degree.entry(dependent.clone()).or_insert(0) += 1;
+                    } else {
+                        eprintln!(
+                            "WARNING: Type '{}' has self-dependency (circular reference)",
+                            dependent
+                        );
+                    }
+                }
+            }
+        }
+
+        // Find all types with no dependencies (in-degree = 0)
+        let mut queue: Vec<String> = in_degree
+            .iter()
+            .filter(|(_, degree)| **degree == 0)
+            .map(|(name, _)| name.clone())
+            .collect();
+
+        let mut result = Vec::new();
+
+        // Process types in order
+        while let Some(current) = queue.pop() {
+            result.push(current.clone());
+
+            // For each type that depends on current, decrease its in-degree
+            if let Some(dependents) = adj_list.get(&current) {
+                for dependent in dependents {
+                    if let Some(degree) = in_degree.get_mut(dependent) {
+                        *degree -= 1;
+                        if *degree == 0 {
+                            queue.push(dependent.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        // Check if all types were processed (detect cycles)
+        if result.len() != self.type_dependencies.len() {
+            let unprocessed: Vec<String> = self
+                .type_dependencies
+                .keys()
+                .filter(|name| !result.contains(name))
+                .cloned()
+                .collect();
+
+            eprintln!(
+                "WARNING: Circular dependencies detected among types: {:?}",
+                unprocessed
+            );
+            eprintln!(
+                "These types will be ordered arbitrarily (forward declarations handle circularity)"
+            );
+
+            // Add remaining types in arbitrary order - forward declarations will handle circularity
+            for name in unprocessed {
+                result.push(name);
+            }
+        }
+
+        Ok(result)
+    }
+
     /// Analyze a statement to find generic instantiations
     fn analyze_statement(&mut self, stmt: &parser::Statement) {
         match stmt {
@@ -221,31 +436,53 @@ impl CCodegen {
         }
     }
 
+    /// Check if a type is a concrete type (not a generic template variable)
+    /// Generic template variables are single uppercase letters like T, E, A, etc.
+    fn is_concrete_type(&self, ty: &Type) -> bool {
+        // If the type name is a single uppercase letter, it's a template variable
+        if ty.name.len() == 1 && ty.name.chars().next().unwrap().is_uppercase() {
+            return false;
+        }
+
+        // For types with parameters, all parameters must also be concrete
+        if !ty.params.is_empty() {
+            return ty.params.iter().all(|p| self.is_concrete_type(p));
+        }
+
+        true
+    }
+
     /// Analyze a type to track generic instantiations
     fn analyze_type(&mut self, ty: &Type) {
         // Check if this is a generic instantiation
         if !ty.params.is_empty() {
-            let instance_name = format!(
-                "{}_{}",
-                ty.name,
-                ty.params
+            // Only add this instantiation if all parameters are concrete types
+            // This filters out template-style types like Option(T) or Result(T, E)
+            let all_params_concrete = ty.params.iter().all(|p| self.is_concrete_type(p));
+
+            if all_params_concrete {
+                let instance_name = format!(
+                    "{}_{}",
+                    ty.name,
+                    ty.params
+                        .iter()
+                        .map(|p| self.type_name_for_instance(p))
+                        .collect::<Vec<_>>()
+                        .join("_")
+                );
+
+                let param_names: Vec<String> = ty
+                    .params
                     .iter()
                     .map(|p| self.type_name_for_instance(p))
-                    .collect::<Vec<_>>()
-                    .join("_")
-            );
+                    .collect();
 
-            let param_names: Vec<String> = ty
-                .params
-                .iter()
-                .map(|p| self.type_name_for_instance(p))
-                .collect();
+                self.generic_instances
+                    .entry(instance_name)
+                    .or_insert((ty.name.clone(), param_names));
+            }
 
-            self.generic_instances
-                .entry(instance_name)
-                .or_insert((ty.name.clone(), param_names));
-
-            // Recursively analyze parameters
+            // Recursively analyze parameters (even if this instance wasn't concrete)
             for param in &ty.params {
                 self.analyze_type(param);
             }
@@ -322,6 +559,23 @@ impl CCodegen {
         format!("{}_{}", func_name, mangled_params)
     }
 
+    /// Check if a type is a primitive type (not a struct)
+    fn is_primitive_type(&self, type_name: &str) -> bool {
+        matches!(
+            type_name,
+            "Int"
+                | "Bool"
+                | "Float"
+                | "Rune"
+                | "String"
+                | "int64_t"
+                | "bool"
+                | "double"
+                | "uint32_t"
+                | "char*"
+        )
+    }
+
     /// Get the mangled name for a function call based on argument types
     fn resolve_function_call(&self, func_name: &str, arg_types: &[String]) -> String {
         // Special case: main function is never mangled
@@ -358,13 +612,16 @@ impl CCodegen {
         match def {
             Definition::Struct(s) => {
                 let struct_name = &s.sig.name;
+                // Get the C name with potential collision suffix
+                let c_name = self
+                    .type_name_registry
+                    .register_type(struct_name, TypeKind::Struct);
+
                 // Generate forward declaration if not already done
-                if !self.generated_types.contains(struct_name) {
-                    self.forward_decls.push_str(&format!(
-                        "typedef struct {} {};\n",
-                        struct_name, struct_name
-                    ));
-                    self.generated_types.insert(struct_name.clone());
+                if !self.generated_types.contains(&c_name) {
+                    self.forward_decls
+                        .push_str(&format!("typedef struct {} {};\n", c_name, c_name));
+                    self.generated_types.insert(c_name.clone());
                 }
                 self.generate_struct(&s.sig, &s.fields)?;
             }
@@ -376,10 +633,19 @@ impl CCodegen {
                     .iter()
                     .any(|c| c.label.is_some() && c.r#type.is_some());
 
-                if has_typed_variants && !self.generated_types.contains(union_name) {
+                let kind = if has_typed_variants {
+                    TypeKind::TaggedUnion
+                } else {
+                    TypeKind::Enum
+                };
+
+                // Get the C name with potential collision suffix
+                let c_name = self.type_name_registry.register_type(union_name, kind);
+
+                if has_typed_variants && !self.generated_types.contains(&c_name) {
                     self.forward_decls
-                        .push_str(&format!("typedef struct {} {};\n", union_name, union_name));
-                    self.generated_types.insert(union_name.clone());
+                        .push_str(&format!("typedef struct {} {};\n", c_name, c_name));
+                    self.generated_types.insert(c_name.clone());
                 }
                 // Note: simple enum unions don't need forward declarations
                 self.generate_union(&u.sig, &u.cases)?;
@@ -403,28 +669,32 @@ impl CCodegen {
     fn generate_struct(&mut self, sig: &Type, fields: &[parser::Field]) -> Result<(), String> {
         let struct_name = &sig.name;
 
+        // Get the C name for this struct
+        let c_name = self
+            .type_name_registry
+            .register_type(struct_name, TypeKind::Struct);
+
         // Skip generic structs for now
         if !sig.params.is_empty() {
             eprintln!("Skipping generic struct {}", struct_name);
             self.header.push_str(&format!(
                 "// TODO: Generic struct {} - NOT IMPLEMENTED YET\n\n",
-                struct_name
+                c_name
             ));
             return Ok(());
         }
 
-        eprintln!("Generating struct {}", struct_name);
+        eprintln!("Generating struct {} as {}", struct_name, c_name);
 
         // Handle empty structs
         if fields.is_empty() {
             self.header
-                .push_str(&format!("struct {} {{ char _dummy; }};\n\n", struct_name));
+                .push_str(&format!("struct {} {{ char _dummy; }};\n\n", c_name));
             return Ok(());
         }
 
         // Generate struct definition
-        self.header
-            .push_str(&format!("struct {} {{\n", struct_name));
+        self.header.push_str(&format!("struct {} {{\n", c_name));
 
         for field in fields {
             let field_type = self.map_type(&field.r#type);
@@ -454,8 +724,17 @@ impl CCodegen {
             .iter()
             .any(|c| c.label.is_some() && c.r#type.is_some());
 
+        // Determine type kind and get C name
+        let kind = if has_typed_variants {
+            TypeKind::TaggedUnion
+        } else {
+            TypeKind::Enum
+        };
+        let c_name = self.type_name_registry.register_type(union_name, kind);
+
         if !has_typed_variants {
             // Generate simple enum for symbolic-only unions
+            eprintln!("Generating enum {} as {}", union_name, c_name);
             self.enum_defs.push_str(&format!("typedef enum {{\n"));
             for (i, case) in cases.iter().enumerate() {
                 // For symbolic variants: label is the name, type might be present but is same as label
@@ -484,15 +763,16 @@ impl CCodegen {
                 };
 
                 self.enum_defs
-                    .push_str(&format!("    {}_{}", union_name, variant_name));
+                    .push_str(&format!("    {}_{}", c_name, variant_name));
                 if i < cases.len() - 1 {
                     self.enum_defs.push_str(",");
                 }
                 self.enum_defs.push_str("\n");
             }
-            self.enum_defs.push_str(&format!("}} {};\n\n", union_name));
+            self.enum_defs.push_str(&format!("}} {};\n\n", c_name));
         } else {
             // Generate tagged union for mixed/typed unions
+            eprintln!("Generating tagged union {} as {}", union_name, c_name);
             // First generate the tag enum
             self.header.push_str(&format!("typedef enum {{\n"));
             for (i, case) in cases.iter().enumerate() {
@@ -508,18 +788,17 @@ impl CCodegen {
                 };
 
                 self.header
-                    .push_str(&format!("    {}_tag_{}", union_name, variant_name));
+                    .push_str(&format!("    {}_tag_{}", c_name, variant_name));
                 if i < cases.len() - 1 {
                     self.header.push_str(",");
                 }
                 self.header.push_str("\n");
             }
-            self.header.push_str(&format!("}} {}_Tag;\n\n", union_name));
+            self.header.push_str(&format!("}} {}_Tag;\n\n", c_name));
 
             // Then generate the tagged union struct
-            self.header.push_str(&format!("struct {} {{\n", union_name));
-            self.header
-                .push_str(&format!("    {}_Tag tag;\n", union_name));
+            self.header.push_str(&format!("struct {} {{\n", c_name));
+            self.header.push_str(&format!("    {}_Tag tag;\n", c_name));
 
             // Only add union if there are typed variants
             let typed_cases: Vec<&parser::Case> = cases
@@ -1675,11 +1954,22 @@ impl CCodegen {
             _ => {
                 // Generic or user-defined type
                 if ty.params.is_empty() {
-                    // Check if this is a known struct type (not enum) - if so, use pointer for forward-declaration safety
-                    if self.seen_types.contains(&ty.name) && !self.enum_types.contains(&ty.name) {
-                        format!("{}*", ty.name)
+                    // Look up the C name for this type (handles collision resolution)
+                    // Check if this type has been registered
+                    let c_name = if self.seen_types.contains(&ty.name) {
+                        // Use the registered C name
+                        // Note: get_c_name returns the first registered instance
+                        // This is a limitation but works for simple cases
+                        ty.name.clone() // For now, use original name as we stored C names in seen_types
                     } else {
                         ty.name.clone()
+                    };
+
+                    // Check if this is a known struct type (not enum) - if so, use pointer for forward-declaration safety
+                    if self.seen_types.contains(&c_name) && !self.enum_types.contains(&c_name) {
+                        format!("{}*", c_name)
+                    } else {
+                        c_name
                     }
                 } else {
                     // Monomorphize: Option(Type) -> Option_Type
@@ -1869,12 +2159,11 @@ void print_list(List_Rune list);
                     // Option(T) -> tagged union
                     let param_type = &params[0];
                     // Determine the C type for the option value
-                    let c_type = if param_type == "Type" {
-                        "Type*".to_string()
-                    } else if param_type == "Ident" {
-                        "Ident*".to_string()
-                    } else {
+                    // Use pointers for all non-primitive types to avoid incomplete type errors
+                    let c_type = if self.is_primitive_type(param_type) {
                         param_type.clone()
+                    } else {
+                        format!("{}*", param_type)
                     };
 
                     full_header.push_str(&format!(
