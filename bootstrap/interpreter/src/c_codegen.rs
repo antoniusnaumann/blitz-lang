@@ -743,19 +743,16 @@ impl CCodegen {
 
                 // Special handling for Option/Result constructors
                 // some(x) -> (Option_T){.tag = Option_T_tag_some, .value = x}
-                // ok(x) -> (Result_T_E){.tag = Result_T_E_tag_ok, .value = x}
-                // err(e) -> (Result_T_E){.tag = Result_T_E_tag_err, .value = e}
+                // ok(x) -> (Result_T_E){.tag = Result_T_E_tag_ok, .value.ok = x}
+                // err(e) -> (Result_T_E){.tag = Result_T_E_tag_err, .value.err = e}
                 if (func_name == "some" || func_name == "ok" || func_name == "err")
                     && args.len() == 1
                 {
                     if let Some(ref return_type) = self.current_return_type {
                         // Check if this is an Option or Result type
-                        if (return_type.name == "Option"
+                        if return_type.name == "Option"
                             && func_name == "some"
-                            && return_type.params.len() == 1)
-                            || (return_type.name == "Result"
-                                && (func_name == "ok" || func_name == "err")
-                                && return_type.params.len() == 2)
+                            && return_type.params.len() == 1
                         {
                             // Generate the monomorphized type name
                             let type_name = self.type_name_for_instance(return_type);
@@ -763,6 +760,17 @@ impl CCodegen {
                             return format!(
                                 "({}){{.tag = {}_tag_{}, .value = {}}}",
                                 type_name, type_name, func_name, args[0]
+                            );
+                        } else if return_type.name == "Result"
+                            && (func_name == "ok" || func_name == "err")
+                            && return_type.params.len() == 2
+                        {
+                            // Generate the monomorphized type name
+                            let type_name = self.type_name_for_instance(return_type);
+                            // Generate: (Result_Int_String){.tag = Result_Int_String_tag_ok, .value.ok = arg}
+                            return format!(
+                                "({}){{.tag = {}_tag_{}, .value.{} = {}}}",
+                                type_name, type_name, func_name, func_name, args[0]
                             );
                         }
                     }
@@ -1670,6 +1678,31 @@ typedef struct {
                     full_header.push_str(&format!(
                         "typedef struct {{\n    {}_Tag tag;\n    {} value;\n}} {};\n\n",
                         instance_name, c_type, instance_name
+                    ));
+                } else if base_type == "Result" && params.len() == 2 {
+                    // Result(T, E) -> tagged union with ok/err
+                    let ok_type = &params[0];
+                    let err_type = &params[1];
+                    // Determine the C types
+                    let ok_c_type = if ok_type == "Type" || ok_type == "Ident" {
+                        format!("{}*", ok_type)
+                    } else {
+                        ok_type.clone()
+                    };
+                    let err_c_type = if err_type == "Type" || err_type == "Ident" {
+                        format!("{}*", err_type)
+                    } else {
+                        err_type.clone()
+                    };
+
+                    full_header.push_str(&format!(
+                        "typedef enum {{\n    {}_tag_ok,\n    {}_tag_err\n}} {}_Tag;\n\n",
+                        instance_name, instance_name, instance_name
+                    ));
+                    // For Result, we need a union to hold either ok or err value
+                    full_header.push_str(&format!(
+                        "typedef struct {{\n    {}_Tag tag;\n    union {{\n        {} ok;\n        {} err;\n    }} value;\n}} {};\n\n",
+                        instance_name, ok_c_type, err_c_type, instance_name
                     ));
                 } else if base_type == "Lit" && params.len() == 1 {
                     // Lit(T) -> struct with value and span
