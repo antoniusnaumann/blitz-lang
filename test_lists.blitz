@@ -1,8 +1,0 @@
-fn test_lists() Void {
-  let empty: List(Int) = []
-  let nums: List(Int) = [1, 2, 3]
-}
-
-fn main() Void {
-  test_lists()
-}

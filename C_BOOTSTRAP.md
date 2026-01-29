@@ -470,65 +470,109 @@ Generated C files in c-out
 ✅ Transpilation succeeds - all 18 ASTs processed
 ```
 
+**New Features Implemented (Jan 29, 2026 - Session 2):**
+- ✅ **List literals** - `[]`, `[1, 2, 3]` now work (with type annotations)
+- ✅ **Unary operations** - `!`, `-` fully implemented
+- ✅ **String methods** - chars(), len(), substring() implemented with C helpers
+- ✅ **Option/Result handling** - none, some(), ok(), err() constructors work
+- ✅ **Function overloading** - Name mangling by parameter types (9 overloads handled)
+- ✅ **Switch as expression** - Transforms to statement with temp variable
+
 ### What Doesn't Work Yet ❌
 
-**Critical Missing Features:**
-- ❌ **List literals** - `[]`, `[1, 2, 3]` not implemented
+**Critical Blockers Preventing C Compilation:**
+
+1. **Type Name Collisions** (CRITICAL)
+   - `Assignment` used as both enum AND struct
+   - C has single global namespace, causes redefinition errors
+   - Root cause: No namespace/module handling
+   - **Impact**: Blocks ALL C compilation
+
+2. **Option(T) Type Issues**
+   - Option types hold structs by VALUE before definition
+   - Example: `Option_Actor` has `Actor value;` but Actor only forward-declared
+   - C requires complete type to hold by value
+   - **Solution needed**: Use pointers for non-primitive Option values
+   - **Impact**: 16 compilation errors
+
+3. **Type Ordering**
+   - No topological sort of type definitions
+   - Types used before they're fully defined
+   - **Solution needed**: Dependency analysis and proper ordering
+
+4. **Generic Type Instantiation Bug**
+   - Some `Option_T` with literal generic `T` emitted instead of concrete types
+   - Should only emit concrete instantiations like `Option_Int`
+
+**Other Missing Features:**
 - ❌ **For loops** - Basic structure present but needs Range type support
-- ❌ **Unary operations** - !, -, not implemented
-- ❌ **String methods** - chars(), len(), etc. (built-in methods)
-- ❌ **Option/Result handling** - none, some() constructors
-- ❌ **Function overloading** - C doesn't support, causes name conflicts
 - ❌ **Generic functions** - Not monomorphized yet
 - ❌ **Operator overloading** - ++= and other compound operators
-- ❌ **Missing return statements** - Constructors don't return values
-- ❌ **Switch as expression** - Generates invalid C when used in assignments
+- ❌ **Implicit returns** - Some functions missing return statements
 
 ### Honest Assessment of Current State
 
+**Full Compiler Transpilation Test Results:**
+```bash
+$ cargo run --release --bin interpreter -- --transpile-c compiler/**/*.blitz
+✅ Transpilation succeeds - 18 files, 173 definitions, ~61KB C code generated
+
+$ gcc -std=c11 -I c-out -c c-out/blitz.h
+❌ FAILS with 20 compilation errors
+```
+
+**Compilation Success Rate: 0%** (no C files compile due to type collisions)
+
 **What actually works in practice:**
-- ✅ Type definitions compile perfectly (structs, unions, generics)
-- ✅ Control flow (if/while/switch) generates valid C
-- ✅ Member access and UFCS method calls work correctly
+- ✅ Type definitions generate (structs, unions, generics with some issues)
+- ✅ All expression types implemented (literals, binary/unary ops, calls, etc.)
+- ✅ All statement types work (let, assignments, returns, control flow)
+- ✅ List literals with malloc and initialization
+- ✅ Option/Result constructors with proper tagged union initialization
+- ✅ Function overloading via name mangling (9 overloads resolved)
+- ✅ Switch expressions transform to statements
+- ✅ String built-in methods (chars, len, substring)
+- ✅ UFCS method calls work correctly
 - ✅ Constructors use proper C99 compound literals
-- ✅ Parser lexer with triple-nested switches transpiles successfully
-- ✅ Header files (blitz.h) compile without errors
 
-**What prevents full compiler transpilation:**
-1. **List literals** - `[]` and `[1, 2, 3]` syntax not implemented
-2. **String built-in methods** - chars(), len() not available in C
-3. **Option type constructors** - none, some() not generated
-4. **Function overloading** - Multiple functions with same name
-5. **Missing returns** - Constructors and some functions don't return values
-6. **Switch expressions** - Used as expression but C switch is statement
+**What prevents compilation:**
+1. **Type name collision** - `Assignment` as enum AND struct (blocking everything)
+2. **Option<T> pointer semantics** - Holding incomplete types by value (16 errors)
+3. **Type definition ordering** - No dependency sorting
+4. **Generic instantiation bug** - Emitting template instead of concrete type
 
-**Compilation results:**
-- Headers compile: ✅ (all type definitions work)
-- Implementation (.c): ❌ (missing runtime functions, list literals, etc.)
+**Estimated work remaining to get ANY C file compiling:**
+- Type namespace/collision fix: 2-4 hours (prefix with module names)
+- Option<T> pointer fix: 2-3 hours (detect non-primitive types, use pointers)
+- Type ordering: 4-6 hours (topological sort implementation)
+- Generic instantiation fix: 1-2 hours (filter out non-concrete types)
 
-**Estimated work remaining:**
-- List literal support: 2-3 hours
-- Option/Result constructors: 2-3 hours
-- String method stubs: 1-2 hours
-- Function overloading resolution: 3-4 hours (needs name mangling)
-- Missing return statements: 1-2 hours
-- Switch expression context detection: 2-3 hours
+**Total to first compiling C file:** 10-15 hours of focused work
 
-**Total to working compiler:** 12-18 hours of focused work
+**Estimated work to full working compiler:** 20-30 hours total
 
 ### Next Steps (Honest Priority)
-1. **List literals** - Implement `[]` and `[expr1, expr2]` syntax
-2. **Option/Result constructors** - Generate none, some(), ok(), err() as constants/macros
-3. **String method stubs** - Provide C implementations for chars(), len()
-4. **Fix missing returns** - Ensure constructors and functions return values
-5. **Function overloading** - Implement name mangling or skip duplicate definitions
-6. **Switch expression context** - Detect and transform to statement+assignment
 
-### Commit History
-- `0a05183` - Add C bootstrap: basic infrastructure and struct codegen
-- `6f2c2b1` - Add union codegen for non-generic unions
-- `da1215b` - Add complete generic type monomorphization with proper type definitions
-- `026515b` - Implement function bodies with literal expressions and return statements
-- `e2c0ea1` - Implement binary operations, identifiers, declarations, and function calls
-- `35d4fa2` - Add control flow, member access, UFCS, constructors, index ops, and assignments
+**Critical path to compilation:**
+1. **Type namespacing** - Prefix types with module/file names to resolve `Assignment` collision
+2. **Option<T> pointers** - Change Option to use pointers for struct types
+3. **Type ordering** - Implement topological sort for type definitions
+4. **Generic filtering** - Only emit concrete generic instantiations
+
+**After compilation works:**
+5. **For loops** - Implement Range iteration
+6. **Missing returns** - Add implicit returns where needed
+7. **Runtime functions** - Implement print(), I/O, etc.
+
+### Commit History (Recent)
+- `3b57845` - Implement string built-in methods for C codegen
+- `259246e` - Implement function overloading support via name mangling
+- `2a4ddb1` - Implement Option and Result type constructors
+- `079dfe5` - Transform switch expressions to statements
+- `31892e6` - Implement unary operation support
+- `739b354` - Fix list literals with semicolon
 - `ef6849f` - Add switch expression codegen with C switch and if-else chain strategies
+- `35d4fa2` - Add control flow, member access, UFCS, constructors, index ops, and assignments
+- `e2c0ea1` - Implement binary operations, identifiers, declarations, and function calls
+- `026515b` - Implement function bodies with literal expressions and return statements
+- `da1215b` - Add complete generic type monomorphization with proper type definitions
