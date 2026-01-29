@@ -467,8 +467,15 @@ impl CCodegen {
         match stmt {
             parser::Statement::Expression(expr) => {
                 let expr_code = self.generate_expression(expr, is_main);
-                // If this is a return expression, don't add semicolon (it's included)
-                if matches!(expr, parser::Expression::Return(_)) {
+                // Control flow statements and return don't need semicolons
+                if matches!(
+                    expr,
+                    parser::Expression::Return(_)
+                        | parser::Expression::If(_)
+                        | parser::Expression::While(_)
+                        | parser::Expression::For(_)
+                        | parser::Expression::Switch(_)
+                ) {
                     expr_code
                 } else {
                     format!("{};", expr_code)
@@ -518,7 +525,7 @@ impl CCodegen {
         }
     }
 
-    fn generate_expression(&self, expr: &parser::Expression, is_main: bool) -> String {
+    fn generate_expression(&mut self, expr: &parser::Expression, is_main: bool) -> String {
         match expr {
             parser::Expression::Number(n) => {
                 // Check if this is an integer or float
@@ -597,11 +604,6 @@ impl CCodegen {
             }
             parser::Expression::UnaryOp(_) => "/* TODO: unary_op */".to_string(),
             parser::Expression::Call(call) => {
-                // Skip UFCS method calls for now (too complex)
-                if call.ufcs {
-                    return "/* TODO: UFCS method call */".to_string();
-                }
-
                 // Generate function name
                 let func_name = &call.name;
 
@@ -615,20 +617,214 @@ impl CCodegen {
                     })
                     .collect();
 
-                // Format as: func_name(arg1, arg2, ...)
-                format!("{}({})", func_name, args.join(", "))
+                // UFCS method calls: obj.method(args) becomes method(obj, args)
+                // For UFCS calls, the first argument is the receiver object
+                if call.ufcs {
+                    // For UFCS, the receiver is the first argument
+                    // Format as: func_name(receiver, arg1, arg2, ...)
+                    format!("{}({})", func_name, args.join(", "))
+                } else {
+                    // Regular function call
+                    format!("{}({})", func_name, args.join(", "))
+                }
             }
-            parser::Expression::Constructor(_) => "/* TODO: constructor */".to_string(),
-            parser::Expression::Member(_) => "/* TODO: member */".to_string(),
-            parser::Expression::Index(_) => "/* TODO: index */".to_string(),
-            parser::Expression::Assignment(_) => "/* TODO: assignment */".to_string(),
-            parser::Expression::For(_) => "/* TODO: for */".to_string(),
-            parser::Expression::While(_) => "/* TODO: while */".to_string(),
-            parser::Expression::If(_) => "/* TODO: if */".to_string(),
+            parser::Expression::Constructor(ctor) => {
+                // Generate C99 compound literal with designated initializers
+                // Blitz: Lexer(source: source.chars(), index: 0)
+                // C: (Lexer){.source = source_chars(), .index = 0}
+
+                // For constructors, we need the raw struct name, not the pointer type
+                // that map_type would give us
+                let type_name = &ctor.r#type.name;
+
+                // Generate field initializers
+                let mut field_inits = Vec::new();
+                for arg in &ctor.args {
+                    let field_name = &arg.label.name;
+                    let field_value = self.generate_expression(&arg.init, is_main);
+                    field_inits.push(format!(".{} = {}", field_name, field_value));
+                }
+
+                // Format as compound literal: (TypeName){.field1 = val1, .field2 = val2}
+                format!("({}){{{}}}", type_name, field_inits.join(", "))
+            }
+            parser::Expression::Member(member) => {
+                // Generate member access: obj.field or obj->field
+                let parent_code = self.generate_expression(&member.parent, is_main);
+                let member_name = &member.member;
+
+                // Special case: .mut is a Blitz mutability marker, not a real field
+                // Just return the parent expression
+                if member_name == "mut" {
+                    return parent_code;
+                }
+
+                // For C struct member access, we need to decide between '.' and '->'
+                // Since most structs are passed as pointers in our C codegen (see map_type),
+                // we should use '->' for struct types
+
+                // Simple heuristic: if parent_code starts with '&' or contains '->', use '.'
+                // Otherwise, use '->' for struct member access (assuming pointers)
+                if parent_code.starts_with('&') || parent_code.contains("->") {
+                    format!("{}.{}", parent_code.trim_start_matches('&'), member_name)
+                } else if parent_code.starts_with('*') {
+                    // Dereferenced pointer: (*ptr).field can be simplified to ptr->field
+                    format!("{}->{}", parent_code.trim_start_matches('*'), member_name)
+                } else {
+                    // Default: use arrow operator for pointer-based struct access
+                    format!("{}->{}", parent_code, member_name)
+                }
+            }
+            parser::Expression::Index(idx) => {
+                // Generate array/list indexing
+                // For List(T) types, we need to access via .data[index]
+                // For plain arrays, we use direct indexing
+
+                let target_expr = self.generate_expression(&idx.target, is_main);
+                let index_expr = self.generate_expression(&idx.index, is_main);
+
+                // Check if this is a member access on a List type
+                // For now, we'll generate the simple form and rely on the user
+                // to provide the correct syntax. A full implementation would need
+                // type inference to determine if target is a List type.
+                //
+                // Simple heuristic: if target is a member access that looks like it might
+                // be a List field, we need to add .data
+                //
+                // For List types: target.data[index]
+                // For arrays: target[index]
+
+                // Check if the target is a Member expression accessing a List field
+                if let parser::Expression::Member(member) = &*idx.target {
+                    // This is something like lexer.source[i] or obj.field[index]
+                    // For List types, we need: lexer->source.data[i]
+                    // We'll use a simple heuristic: if the member name
+                    // suggests it's a list (like "source", "elems", "items"), add .data
+                    let member_name = &member.member;
+                    if member_name == "source"
+                        || member_name == "elems"
+                        || member_name == "items"
+                        || member_name == "data"
+                        || member_name.ends_with("List")
+                    {
+                        // Likely a List type field, add .data
+                        format!("{}.data[{}]", target_expr, index_expr)
+                    } else {
+                        // Regular array access
+                        format!("{}[{}]", target_expr, index_expr)
+                    }
+                } else {
+                    // Simple array or direct identifier indexing
+                    format!("{}[{}]", target_expr, index_expr)
+                }
+            }
+            parser::Expression::Assignment(assign) => {
+                // Generate assignment: lval = rhs
+                let lval_code = match &assign.left {
+                    parser::Lval::Ident(ident) => ident.name.clone(),
+                    parser::Lval::Member(member) => {
+                        // Use the same logic as Expression::Member for consistency
+                        let parent_code = self.generate_expression(&member.parent, is_main);
+                        let member_name = &member.member;
+
+                        // Special case: .mut is a Blitz mutability marker
+                        if member_name == "mut" {
+                            parent_code
+                        } else if parent_code.starts_with('&') || parent_code.contains("->") {
+                            format!("{}.{}", parent_code.trim_start_matches('&'), member_name)
+                        } else if parent_code.starts_with('*') {
+                            format!("{}->{}", parent_code.trim_start_matches('*'), member_name)
+                        } else {
+                            format!("{}->{}", parent_code, member_name)
+                        }
+                    }
+                    parser::Lval::Index(index) => {
+                        let target = self.generate_expression(&index.target, is_main);
+                        let idx = self.generate_expression(&index.index, is_main);
+                        format!("{}[{}]", target, idx)
+                    }
+                };
+                let rhs = self.generate_expression(&assign.right, is_main);
+                format!("{} = {}", lval_code, rhs)
+            }
+            parser::Expression::For(for_loop) => {
+                // For loops iterate over ranges: for i in 0..10 { body }
+                // We need to convert this to a C for loop
+                // The iter expression should be a Range or a list
+                // For simplicity, we'll handle Range cases and convert to C for loop
+
+                let iter_code = self.generate_expression(&for_loop.iter, is_main);
+                let elem_name = &for_loop.elem;
+
+                // Generate body statements
+                let mut body_code = String::new();
+                for stmt in &for_loop.body {
+                    let stmt_code = self.generate_statement(stmt, is_main);
+                    body_code.push_str("        ");
+                    body_code.push_str(&stmt_code);
+                    body_code.push_str("\n");
+                }
+
+                // For now, assume iter is a Range-like expression (begin..end)
+                // In the AST, ranges are typically BinaryOp with Range operator
+                // We'll generate a C for loop: for (int i = begin; i < end; i++)
+                // This is a simplification - full implementation would need range analysis
+                format!(
+                    "// For loop: for {} in {}\n    {{\n        /* TODO: proper range iteration */\n{}    }}",
+                    elem_name, iter_code, body_code
+                )
+            }
+            parser::Expression::While(while_loop) => {
+                // Generate while loop: while (condition) { body }
+                let cond = self.generate_expression(&while_loop.cond, is_main);
+
+                // Generate body statements
+                let mut body_code = String::new();
+                for stmt in &while_loop.body {
+                    let stmt_code = self.generate_statement(stmt, is_main);
+                    body_code.push_str("        ");
+                    body_code.push_str(&stmt_code);
+                    body_code.push_str("\n");
+                }
+
+                format!("while ({}) {{\n{}    }}", cond, body_code)
+            }
+            parser::Expression::If(if_expr) => {
+                // Generate if expression/statement
+                // If can be used as expression (returns value) or statement
+                let cond = self.generate_expression(&if_expr.cond, is_main);
+
+                // Generate body statements
+                let mut body_code = String::new();
+                for stmt in &if_expr.body {
+                    let stmt_code = self.generate_statement(stmt, is_main);
+                    body_code.push_str("        ");
+                    body_code.push_str(&stmt_code);
+                    body_code.push_str("\n");
+                }
+
+                format!("if ({}) {{\n{}    }}", cond, body_code)
+            }
             parser::Expression::Switch(_) => "/* TODO: switch */".to_string(),
             parser::Expression::List(_) => "/* TODO: list */".to_string(),
-            parser::Expression::Group(_) => "/* TODO: group */".to_string(),
-            parser::Expression::Block(_) => "/* TODO: block */".to_string(),
+            parser::Expression::Group(group) => {
+                // Parenthesized expression
+                let inner = self.generate_expression(&group.expr, is_main);
+                format!("({})", inner)
+            }
+            parser::Expression::Block(stmts) => {
+                // Block expression: { stmt1; stmt2; ... }
+                let mut block_code = String::new();
+                block_code.push_str("{\n");
+                for stmt in stmts {
+                    let stmt_code = self.generate_statement(stmt, is_main);
+                    block_code.push_str("        ");
+                    block_code.push_str(&stmt_code);
+                    block_code.push_str("\n");
+                }
+                block_code.push_str("    }");
+                block_code
+            }
             parser::Expression::Continue => "continue".to_string(),
             parser::Expression::Break => "break".to_string(),
         }
