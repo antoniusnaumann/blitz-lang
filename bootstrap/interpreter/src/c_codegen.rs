@@ -805,7 +805,7 @@ impl CCodegen {
 
                 format!("if ({}) {{\n{}    }}", cond, body_code)
             }
-            parser::Expression::Switch(_) => "/* TODO: switch */".to_string(),
+            parser::Expression::Switch(switch_expr) => self.generate_switch(switch_expr, is_main),
             parser::Expression::List(_) => "/* TODO: list */".to_string(),
             parser::Expression::Group(group) => {
                 // Parenthesized expression
@@ -828,6 +828,199 @@ impl CCodegen {
             parser::Expression::Continue => "continue".to_string(),
             parser::Expression::Break => "break".to_string(),
         }
+    }
+
+    fn generate_switch(&mut self, switch_expr: &parser::Switch, is_main: bool) -> String {
+        let cond = self.generate_expression(&switch_expr.cond, is_main);
+
+        // Check if we can use a C switch statement or need if-else chain
+        // C switch only works with integer/char constants, not strings or complex patterns
+        let can_use_c_switch = switch_expr.cases.iter().all(|case| {
+            matches!(
+                case.label,
+                parser::SwitchLabel::CharLit(_)
+                    | parser::SwitchLabel::NumberLit(_)
+                    | parser::SwitchLabel::Ident(_)
+                    | parser::SwitchLabel::Else(_)
+            )
+        });
+
+        if can_use_c_switch {
+            self.generate_c_switch(&cond, &switch_expr.cases, is_main)
+        } else {
+            self.generate_if_else_chain(&cond, &switch_expr.cases, is_main)
+        }
+    }
+
+    fn generate_c_switch(
+        &mut self,
+        cond: &str,
+        cases: &[parser::SwitchCase],
+        is_main: bool,
+    ) -> String {
+        let mut code = format!("switch ({}) {{\n", cond);
+
+        for case in cases {
+            // Generate case label
+            match &case.label {
+                parser::SwitchLabel::CharLit(ch) => {
+                    // Character literal
+                    let escaped = match ch.value {
+                        '\'' => "\\'".to_string(),
+                        '\\' => "\\\\".to_string(),
+                        '\n' => "\\n".to_string(),
+                        '\r' => "\\r".to_string(),
+                        '\t' => "\\t".to_string(),
+                        c => c.to_string(),
+                    };
+                    code.push_str(&format!("        case '{}':\n", escaped));
+                }
+                parser::SwitchLabel::NumberLit(num) => {
+                    // Number literal
+                    if num.value.fract() == 0.0 {
+                        code.push_str(&format!("        case {}:\n", num.value as i64));
+                    } else {
+                        // Can't use float in C switch, fall back to if-else
+                        return self.generate_if_else_chain(cond, cases, is_main);
+                    }
+                }
+                parser::SwitchLabel::Ident(ident) => {
+                    // Identifier - could be enum variant or "else"
+                    if ident.name == "else" {
+                        code.push_str("        default:\n");
+                    } else {
+                        // Enum variant - use it directly as a constant
+                        code.push_str(&format!("        case {}:\n", ident.name));
+                    }
+                }
+                parser::SwitchLabel::Else(_) => {
+                    // "otherwise" variant
+                    code.push_str("        default:\n");
+                }
+                parser::SwitchLabel::Type(_) => {
+                    // Type pattern - not supported in simple switch, use if-else chain
+                    return self.generate_if_else_chain(cond, cases, is_main);
+                }
+                parser::SwitchLabel::StringLit(_) => {
+                    // String pattern - not supported in C switch, use if-else chain
+                    return self.generate_if_else_chain(cond, cases, is_main);
+                }
+            }
+
+            // Generate case body
+            code.push_str("        {\n");
+            for stmt in &case.body {
+                let stmt_code = self.generate_statement(stmt, is_main);
+                code.push_str("            ");
+                code.push_str(&stmt_code);
+                code.push_str("\n");
+            }
+
+            // Add break unless the body ends with return/break/continue
+            let needs_break = if let Some(last_stmt) = case.body.last() {
+                match last_stmt {
+                    parser::Statement::Expression(expr) => !matches!(
+                        expr,
+                        parser::Expression::Return(_)
+                            | parser::Expression::Break
+                            | parser::Expression::Continue
+                    ),
+                    _ => true,
+                }
+            } else {
+                true
+            };
+
+            if needs_break {
+                code.push_str("            break;\n");
+            }
+            code.push_str("        }\n");
+        }
+
+        code.push_str("    }");
+        code
+    }
+
+    fn generate_if_else_chain(
+        &mut self,
+        cond: &str,
+        cases: &[parser::SwitchCase],
+        is_main: bool,
+    ) -> String {
+        let mut code = String::new();
+        let mut first = true;
+
+        for case in cases {
+            // Check if this is a default case
+            let is_default = matches!(case.label, parser::SwitchLabel::Else(_))
+                || (matches!(&case.label, parser::SwitchLabel::Ident(i) if i.name == "else"));
+
+            if is_default {
+                // Default case - just use else
+                if !first {
+                    code.push_str(" else {\n");
+                } else {
+                    code.push_str("{\n");
+                }
+            } else {
+                // Generate condition
+                let condition = match &case.label {
+                    parser::SwitchLabel::CharLit(ch) => {
+                        let escaped = match ch.value {
+                            '\'' => "\\'".to_string(),
+                            '\\' => "\\\\".to_string(),
+                            '\n' => "\\n".to_string(),
+                            '\r' => "\\r".to_string(),
+                            '\t' => "\\t".to_string(),
+                            c => c.to_string(),
+                        };
+                        format!("{} == '{}'", cond, escaped)
+                    }
+                    parser::SwitchLabel::NumberLit(num) => {
+                        if num.value.fract() == 0.0 {
+                            format!("{} == {}", cond, num.value as i64)
+                        } else {
+                            format!("{} == {}", cond, num.value)
+                        }
+                    }
+                    parser::SwitchLabel::StringLit(s) => {
+                        // String comparison - use strcmp
+                        format!(
+                            "strcmp({}, \"{}\") == 0",
+                            cond,
+                            s.value.replace("\\", "\\\\").replace("\"", "\\\"")
+                        )
+                    }
+                    parser::SwitchLabel::Ident(ident) => {
+                        // Enum variant comparison
+                        format!("{} == {}", cond, ident.name)
+                    }
+                    parser::SwitchLabel::Type(ty) => {
+                        // Type pattern - check tag field for tagged unions
+                        format!("{}->tag == {}_tag_{}", cond, ty.name, ty.name)
+                    }
+                    parser::SwitchLabel::Else(_) => unreachable!(), // handled above
+                };
+
+                if first {
+                    code.push_str(&format!("if ({}) {{\n", condition));
+                    first = false;
+                } else {
+                    code.push_str(&format!(" else if ({}) {{\n", condition));
+                }
+            }
+
+            // Generate case body
+            for stmt in &case.body {
+                let stmt_code = self.generate_statement(stmt, is_main);
+                code.push_str("        ");
+                code.push_str(&stmt_code);
+                code.push_str("\n");
+            }
+            code.push_str("    }");
+        }
+
+        code
     }
 
     fn map_type(&self, ty: &Type) -> String {
