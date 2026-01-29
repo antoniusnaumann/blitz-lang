@@ -102,6 +102,8 @@ struct CCodegen {
     generated_types: HashSet<String>,
     /// Track generic instantiations needed (e.g., "List_Arg" -> ["List", "Arg"])
     generic_instances: HashMap<String, (String, Vec<String>)>,
+    /// Current function return type (for context-sensitive code generation)
+    current_return_type: Option<Type>,
 }
 
 impl CCodegen {
@@ -116,6 +118,7 @@ impl CCodegen {
             enum_types: HashSet::new(),
             generated_types: HashSet::new(),
             generic_instances: HashMap::new(),
+            current_return_type: None,
         }
     }
 
@@ -162,6 +165,20 @@ impl CCodegen {
                     }
                 }
             }
+            Definition::Fn(f) => {
+                // Analyze function return type
+                if let Some(ref ret_ty) = f.r#type {
+                    self.analyze_type(ret_ty);
+                }
+                // Analyze function parameter types
+                for arg in &f.args {
+                    self.analyze_type(&arg.r#type);
+                }
+                // Analyze types in function body (variable declarations)
+                for stmt in &f.body {
+                    self.analyze_statement(stmt);
+                }
+            }
             Definition::Pub(p) => {
                 self.analyze_definition(&p.item)?;
             }
@@ -171,6 +188,19 @@ impl CCodegen {
             _ => {}
         }
         Ok(())
+    }
+
+    /// Analyze a statement to find generic instantiations
+    fn analyze_statement(&mut self, stmt: &parser::Statement) {
+        match stmt {
+            parser::Statement::Declaration(decl) => {
+                self.analyze_type(&decl.r#type);
+            }
+            parser::Statement::Expression(_expr) => {
+                // For now, we don't analyze expressions
+                // A full implementation would analyze nested types
+            }
+        }
     }
 
     /// Analyze a type to track generic instantiations
@@ -451,8 +481,45 @@ impl CCodegen {
         ));
 
         // Generate function body from statements
-        for stmt in &func.body {
-            let stmt_code = self.generate_statement(stmt, is_main);
+        let body_len = func.body.len();
+        for (i, stmt) in func.body.iter().enumerate() {
+            let is_last = i == body_len - 1;
+            let stmt_code = if is_last && !is_main && func.r#type.is_some() {
+                // For the last statement in a non-void, non-main function,
+                // add implicit return if it's an expression
+                match stmt {
+                    parser::Statement::Expression(expr)
+                        if !matches!(expr, parser::Expression::Return(_)) =>
+                    {
+                        // Check if it's a switch expression - need special handling
+                        if let parser::Expression::Switch(switch_expr) = expr {
+                            // Get the return type
+                            let ret_type = if let Some(ref ty) = func.r#type {
+                                self.map_type(ty)
+                            } else {
+                                "void".to_string()
+                            };
+
+                            // Use a temp variable and then return it
+                            let temp_var = "_switch_result";
+                            let mut switch_code = self.generate_switch_as_statement(
+                                switch_expr,
+                                is_main,
+                                &ret_type,
+                                temp_var,
+                            );
+                            switch_code.push_str(&format!("\n    return {};", temp_var));
+                            switch_code
+                        } else {
+                            let expr_code = self.generate_expression(expr, is_main);
+                            format!("return {};", expr_code)
+                        }
+                    }
+                    _ => self.generate_statement(stmt, is_main),
+                }
+            } else {
+                self.generate_statement(stmt, is_main)
+            };
             self.impl_code.push_str("    ");
             self.impl_code.push_str(&stmt_code);
             self.impl_code.push_str("\n");
@@ -514,6 +581,17 @@ impl CCodegen {
 
                 // Generate initialization expression if present
                 if let Some(init_expr) = &decl.init {
+                    // Special handling for switch expressions in assignment context
+                    if let parser::Expression::Switch(switch_expr) = init_expr {
+                        // Transform switch expression to statement form with temp variable
+                        return self.generate_switch_as_statement(
+                            switch_expr,
+                            is_main,
+                            &c_type,
+                            var_name,
+                        );
+                    }
+
                     let init_code = self.generate_expression(init_expr, is_main);
                     format!("{} {} = {};", c_type, var_name, init_code)
                 } else {
@@ -570,12 +648,42 @@ impl CCodegen {
                         }
                     }
                     _ => {
-                        let expr_code = self.generate_expression(ret_expr, is_main);
-                        format!("return {};", expr_code)
+                        // Check if it\'s a switch expression - need special handling
+                        if let parser::Expression::Switch(switch_expr) = &**ret_expr {
+                            // We can\'t determine the return type here easily without context
+                            // For now, use int64_t as default - this is a limitation
+                            // TODO: proper type inference or pass return type context
+                            let temp_var = "_switch_result";
+                            let mut switch_code = self.generate_switch_as_statement(
+                                switch_expr,
+                                is_main,
+                                "int64_t",  // Default type
+                                temp_var,
+                            );
+                            switch_code.push_str(&format!("\n    return {};", temp_var));
+                            switch_code
+                        } else {
+                            let expr_code = self.generate_expression(ret_expr, is_main);
+                            format!("return {};", expr_code)
+                        }
                     }
                 }
             }
-            parser::Expression::Ident(ident) => ident.name.clone(),
+            parser::Expression::Ident(ident) => {
+                // Special handling for Option's 'none' constructor
+                if ident.name == "none" {
+                    // Check if we're in a function that returns an Option type
+                    if let Some(ref return_type) = self.current_return_type {
+                        if return_type.name == "Option" && !return_type.params.is_empty() {
+                            // Generate the monomorphized type name
+                            let type_name = self.type_name_for_instance(return_type);
+                            // Generate: (Option_Int){.tag = Option_Int_tag_none}
+                            return format!("({}){{.tag = {}_tag_none}}", type_name, type_name);
+                        }
+                    }
+                }
+                ident.name.clone()
+            }
             parser::Expression::BinaryOp(binop) => {
                 // Map Blitz operators to C operators
                 let op_str = match binop.op {
@@ -629,6 +737,33 @@ impl CCodegen {
                         self.generate_expression(&arg.init, is_main)
                     })
                     .collect();
+
+                // Special handling for Option/Result constructors
+                // some(x) -> (Option_T){.tag = Option_T_tag_some, .value = x}
+                // ok(x) -> (Result_T_E){.tag = Result_T_E_tag_ok, .value = x}
+                // err(e) -> (Result_T_E){.tag = Result_T_E_tag_err, .value = e}
+                if (func_name == "some" || func_name == "ok" || func_name == "err")
+                    && args.len() == 1
+                {
+                    if let Some(ref return_type) = self.current_return_type {
+                        // Check if this is an Option or Result type
+                        if (return_type.name == "Option"
+                            && func_name == "some"
+                            && return_type.params.len() == 1)
+                            || (return_type.name == "Result"
+                                && (func_name == "ok" || func_name == "err")
+                                && return_type.params.len() == 2)
+                        {
+                            // Generate the monomorphized type name
+                            let type_name = self.type_name_for_instance(return_type);
+                            // Generate: (Option_Int){.tag = Option_Int_tag_some, .value = arg}
+                            return format!(
+                                "({}){{.tag = {}_tag_{}, .value = {}}}",
+                                type_name, type_name, func_name, args[0]
+                            );
+                        }
+                    }
+                }
 
                 // UFCS method calls: obj.method(args) becomes method(obj, args)
                 // For UFCS calls, the first argument is the receiver object
@@ -819,7 +954,54 @@ impl CCodegen {
                 format!("if ({}) {{\n{}    }}", cond, body_code)
             }
             parser::Expression::Switch(switch_expr) => self.generate_switch(switch_expr, is_main),
-            parser::Expression::List(_) => "/* TODO: list */".to_string(),
+            parser::Expression::List(list) => {
+                // Generate list literal: List(T) with malloc'd data array
+                // For empty lists: []
+                // For initialized lists: [a, b, c]
+
+                if list.elems.is_empty() {
+                    // Empty list: We can't determine the element type without context
+                    // For now, generate a zero initializer that will work with any List_T type
+                    "(List_Int){.data = NULL, .len = 0, .cap = 0}".to_string()
+                } else {
+                    // Non-empty list: allocate array and initialize elements
+                    // We use a GNU C statement expression for complex initialization
+                    let len = list.elems.len();
+                    let mut code = String::new();
+                    code.push_str("({\n");
+
+                    // Check if all elements are integers for simple type inference
+                    let all_ints = list
+                        .elems
+                        .iter()
+                        .all(|e| matches!(e, parser::Expression::Number(_)));
+
+                    if all_ints {
+                        // All integers - use int64_t*
+                        code.push_str(&format!(
+                            "        int64_t* _tmp = malloc(sizeof(int64_t) * {});\n",
+                            len
+                        ));
+                        for (i, elem) in list.elems.iter().enumerate() {
+                            let elem_code = self.generate_expression(elem, is_main);
+                            code.push_str(&format!("        _tmp[{}] = {};\n", i, elem_code));
+                        }
+                        code.push_str(&format!(
+                            "        (List_Int){{.data = _tmp, .len = {}, .cap = {}}}\n",
+                            len, len
+                        ));
+                    } else {
+                        // Mixed/complex types - we can't infer the type properly
+                        // Just generate a stub for now
+                        code.push_str("        /* TODO: non-integer list literal requires type inference */\n");
+                        code.push_str(&format!("        void* _tmp = NULL;\n"));
+                        code.push_str("        (void*){{}};\n");
+                    }
+
+                    code.push_str("    })");
+                    code
+                }
+            }
             parser::Expression::Group(group) => {
                 // Parenthesized expression
                 let inner = self.generate_expression(&group.expr, is_main);
@@ -1030,6 +1212,292 @@ impl CCodegen {
                 code.push_str(&stmt_code);
                 code.push_str("\n");
             }
+            code.push_str("    }");
+        }
+
+        code
+    }
+
+    /// Generate switch expression as a statement with assignment to variable
+    /// This is needed because C switch is a statement, not an expression
+    fn generate_switch_as_statement(
+        &mut self,
+        switch_expr: &parser::Switch,
+        is_main: bool,
+        var_type: &str,
+        var_name: &str,
+    ) -> String {
+        let cond = self.generate_expression(&switch_expr.cond, is_main);
+
+        // Declare the variable first
+        let mut code = format!("{} {};\n    ", var_type, var_name);
+
+        // Check if we can use a C switch statement or need if-else chain
+        let can_use_c_switch = switch_expr.cases.iter().all(|case| {
+            matches!(
+                case.label,
+                parser::SwitchLabel::CharLit(_)
+                    | parser::SwitchLabel::NumberLit(_)
+                    | parser::SwitchLabel::Ident(_)
+                    | parser::SwitchLabel::Else(_)
+            )
+        });
+
+        if can_use_c_switch {
+            code.push_str(&self.generate_c_switch_as_statement(
+                &cond,
+                &switch_expr.cases,
+                is_main,
+                var_name,
+            ));
+        } else {
+            code.push_str(&self.generate_if_else_chain_as_statement(
+                &cond,
+                &switch_expr.cases,
+                is_main,
+                var_name,
+            ));
+        }
+
+        code
+    }
+
+    /// Generate C switch statement form with assignments to variable
+    fn generate_c_switch_as_statement(
+        &mut self,
+        cond: &str,
+        cases: &[parser::SwitchCase],
+        is_main: bool,
+        var_name: &str,
+    ) -> String {
+        let mut code = format!("switch ({}) {{\n", cond);
+
+        for case in cases {
+            // Generate case label
+            match &case.label {
+                parser::SwitchLabel::CharLit(ch) => {
+                    let escaped = match ch.value {
+                        '\'' => "\\'".to_string(),
+                        '\\' => "\\\\".to_string(),
+                        '\n' => "\\n".to_string(),
+                        '\r' => "\\r".to_string(),
+                        '\t' => "\\t".to_string(),
+                        c => c.to_string(),
+                    };
+                    code.push_str(&format!("        case \'{}\':\n", escaped));
+                }
+                parser::SwitchLabel::NumberLit(num) => {
+                    if num.value.fract() == 0.0 {
+                        code.push_str(&format!("        case {}:\n", num.value as i64));
+                    } else {
+                        // Can't use float in C switch, fall back to if-else
+                        return self
+                            .generate_if_else_chain_as_statement(cond, cases, is_main, var_name);
+                    }
+                }
+                parser::SwitchLabel::Ident(ident) => {
+                    if ident.name == "else" {
+                        code.push_str("        default:\n");
+                    } else {
+                        code.push_str(&format!("        case {}:\n", ident.name));
+                    }
+                }
+                parser::SwitchLabel::Else(_) => {
+                    code.push_str("        default:\n");
+                }
+                parser::SwitchLabel::Type(_) => {
+                    return self
+                        .generate_if_else_chain_as_statement(cond, cases, is_main, var_name);
+                }
+                parser::SwitchLabel::StringLit(_) => {
+                    return self
+                        .generate_if_else_chain_as_statement(cond, cases, is_main, var_name);
+                }
+            }
+
+            // Generate case body with assignment
+            code.push_str("        {\n");
+
+            // If the body has statements, process them
+            if !case.body.is_empty() {
+                // Check if the last statement is an expression that should be assigned
+                let last_idx = case.body.len() - 1;
+
+                for (idx, stmt) in case.body.iter().enumerate() {
+                    if idx == last_idx {
+                        // Last statement - check if it\'s an expression to assign
+                        match stmt {
+                            parser::Statement::Expression(expr) => {
+                                // If it\'s a control flow expression, generate it normally
+                                if matches!(
+                                    expr,
+                                    parser::Expression::Return(_)
+                                        | parser::Expression::Break
+                                        | parser::Expression::Continue
+                                ) {
+                                    let stmt_code = self.generate_statement(stmt, is_main);
+                                    code.push_str("            ");
+                                    code.push_str(&stmt_code);
+                                    code.push_str("\n");
+                                } else {
+                                    // Regular expression - assign its value
+                                    let expr_code = self.generate_expression(expr, is_main);
+                                    code.push_str(&format!(
+                                        "            {} = {};\n",
+                                        var_name, expr_code
+                                    ));
+                                }
+                            }
+                            parser::Statement::Declaration(_) => {
+                                // Declaration as last statement - just generate it
+                                let stmt_code = self.generate_statement(stmt, is_main);
+                                code.push_str("            ");
+                                code.push_str(&stmt_code);
+                                code.push_str("\n");
+                            }
+                        }
+                    } else {
+                        // Not the last statement - generate normally
+                        let stmt_code = self.generate_statement(stmt, is_main);
+                        code.push_str("            ");
+                        code.push_str(&stmt_code);
+                        code.push_str("\n");
+                    }
+                }
+            }
+
+            // Add break unless the body ends with return/break/continue
+            let needs_break = if let Some(last_stmt) = case.body.last() {
+                match last_stmt {
+                    parser::Statement::Expression(expr) => !matches!(
+                        expr,
+                        parser::Expression::Return(_)
+                            | parser::Expression::Break
+                            | parser::Expression::Continue
+                    ),
+                    _ => true,
+                }
+            } else {
+                true
+            };
+
+            if needs_break {
+                code.push_str("            break;\n");
+            }
+            code.push_str("        }\n");
+        }
+
+        code.push_str("    }");
+        code
+    }
+
+    /// Generate if-else chain statement form with assignments to variable
+    fn generate_if_else_chain_as_statement(
+        &mut self,
+        cond: &str,
+        cases: &[parser::SwitchCase],
+        is_main: bool,
+        var_name: &str,
+    ) -> String {
+        let mut code = String::new();
+        let mut first = true;
+
+        for case in cases {
+            let is_default = matches!(case.label, parser::SwitchLabel::Else(_))
+                || (matches!(&case.label, parser::SwitchLabel::Ident(i) if i.name == "else"));
+
+            if is_default {
+                if !first {
+                    code.push_str(" else {\n");
+                } else {
+                    code.push_str("{\n");
+                }
+            } else {
+                let condition = match &case.label {
+                    parser::SwitchLabel::CharLit(ch) => {
+                        let escaped = match ch.value {
+                            '\'' => "\\'".to_string(),
+                            '\\' => "\\\\".to_string(),
+                            '\n' => "\\n".to_string(),
+                            '\r' => "\\r".to_string(),
+                            '\t' => "\\t".to_string(),
+                            c => c.to_string(),
+                        };
+                        format!("{} == '{}'", cond, escaped)
+                    }
+                    parser::SwitchLabel::NumberLit(num) => {
+                        if num.value.fract() == 0.0 {
+                            format!("{} == {}", cond, num.value as i64)
+                        } else {
+                            format!("{} == {}", cond, num.value)
+                        }
+                    }
+                    parser::SwitchLabel::StringLit(s) => {
+                        format!(
+                            "strcmp({}, \"{}\") == 0",
+                            cond,
+                            s.value.replace("\\", "\\\\").replace("\"", "\\\"")
+                        )
+                    }
+                    parser::SwitchLabel::Ident(ident) => {
+                        format!("{} == {}", cond, ident.name)
+                    }
+                    parser::SwitchLabel::Type(ty) => {
+                        format!("{}->tag == {}_tag_{}", cond, ty.name, ty.name)
+                    }
+                    parser::SwitchLabel::Else(_) => unreachable!(),
+                };
+
+                if first {
+                    code.push_str(&format!("if ({}) {{\n", condition));
+                    first = false;
+                } else {
+                    code.push_str(&format!(" else if ({}) {{\n", condition));
+                }
+            }
+
+            // Generate case body with assignment
+            if !case.body.is_empty() {
+                let last_idx = case.body.len() - 1;
+
+                for (idx, stmt) in case.body.iter().enumerate() {
+                    if idx == last_idx {
+                        match stmt {
+                            parser::Statement::Expression(expr) => {
+                                if matches!(
+                                    expr,
+                                    parser::Expression::Return(_)
+                                        | parser::Expression::Break
+                                        | parser::Expression::Continue
+                                ) {
+                                    let stmt_code = self.generate_statement(stmt, is_main);
+                                    code.push_str("        ");
+                                    code.push_str(&stmt_code);
+                                    code.push_str("\n");
+                                } else {
+                                    let expr_code = self.generate_expression(expr, is_main);
+                                    code.push_str(&format!(
+                                        "        {} = {};\n",
+                                        var_name, expr_code
+                                    ));
+                                }
+                            }
+                            parser::Statement::Declaration(_) => {
+                                let stmt_code = self.generate_statement(stmt, is_main);
+                                code.push_str("        ");
+                                code.push_str(&stmt_code);
+                                code.push_str("\n");
+                            }
+                        }
+                    } else {
+                        let stmt_code = self.generate_statement(stmt, is_main);
+                        code.push_str("        ");
+                        code.push_str(&stmt_code);
+                        code.push_str("\n");
+                    }
+                }
+            }
+
             code.push_str("    }");
         }
 
