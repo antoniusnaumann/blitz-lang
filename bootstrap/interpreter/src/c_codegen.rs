@@ -602,7 +602,20 @@ impl CCodegen {
                 // Generate with parentheses for proper precedence
                 format!("({} {} {})", left, op_str, right)
             }
-            parser::Expression::UnaryOp(_) => "/* TODO: unary_op */".to_string(),
+            parser::Expression::UnaryOp(unary_op) => {
+                // Map Blitz unary operators to C operators
+                let op_str = match unary_op.op {
+                    parser::Operator::Not => "!",
+                    parser::Operator::Neg => "-",
+                    _ => "/* unsupported_unary_op */",
+                };
+
+                // Recursively generate the operand expression
+                let operand = self.generate_expression(&unary_op.expr, is_main);
+
+                // Generate with parentheses for proper precedence
+                format!("({}{})", op_str, operand)
+            }
             parser::Expression::Call(call) => {
                 // Generate function name
                 let func_name = &call.name;
