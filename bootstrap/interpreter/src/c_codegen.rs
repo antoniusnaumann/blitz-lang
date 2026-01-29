@@ -425,7 +425,8 @@ impl CCodegen {
 
         // Special case: main function must return int in C
         let is_main = func.name == "main";
-        if is_main && return_type == "void" {
+        if is_main {
+            // main() in C must always return int
             return_type = "int".to_string();
         }
 
@@ -473,7 +474,47 @@ impl CCodegen {
                     format!("{};", expr_code)
                 }
             }
-            parser::Statement::Declaration(_) => "/* TODO: declaration */".to_string(),
+            parser::Statement::Declaration(decl) => {
+                // Generate variable declaration: <type> <name> = <init_expr>;
+                let mut c_type = self.map_type(&decl.r#type);
+                let var_name = &decl.name;
+
+                // If type is empty or "_", try to infer from initialization expression
+                if c_type.is_empty() || c_type == "_" {
+                    if let Some(init_expr) = &decl.init {
+                        c_type = match init_expr {
+                            parser::Expression::Number(n) => {
+                                if n.fract() == 0.0 {
+                                    "int64_t".to_string()
+                                } else {
+                                    "double".to_string()
+                                }
+                            }
+                            parser::Expression::BoolLit(_) => "bool".to_string(),
+                            parser::Expression::String(_) => "char*".to_string(),
+                            parser::Expression::Rune(_) => "uint32_t".to_string(),
+                            _ => {
+                                // For complex expressions, default to int64_t as a fallback
+                                // In a real compiler, we'd do proper type inference
+                                "int64_t".to_string()
+                            }
+                        };
+                    } else {
+                        // No type and no init - error, but use int64_t as fallback
+                        c_type = "int64_t".to_string();
+                    }
+                }
+
+                // Generate initialization expression if present
+                if let Some(init_expr) = &decl.init {
+                    let init_code = self.generate_expression(init_expr, is_main);
+                    format!("{} {} = {};", c_type, var_name, init_code)
+                } else {
+                    // Declaration without initialization
+                    format!("{} {};", c_type, var_name)
+                }
+                // Note: is_mut is semantic only in Blitz, not represented in C
+            }
         }
     }
 
@@ -528,9 +569,55 @@ impl CCodegen {
                 }
             }
             parser::Expression::Ident(ident) => ident.name.clone(),
-            parser::Expression::BinaryOp(_) => "/* TODO: binary_op */".to_string(),
+            parser::Expression::BinaryOp(binop) => {
+                // Map Blitz operators to C operators
+                let op_str = match binop.op {
+                    parser::Operator::Add => "+",
+                    parser::Operator::Sub => "-",
+                    parser::Operator::Mul => "*",
+                    parser::Operator::Div => "/",
+                    parser::Operator::Rem => "%",
+                    parser::Operator::Eq => "==",
+                    parser::Operator::Ne => "!=",
+                    parser::Operator::Lt => "<",
+                    parser::Operator::Le => "<=",
+                    parser::Operator::Gt => ">",
+                    parser::Operator::Ge => ">=",
+                    parser::Operator::And => "&&",
+                    parser::Operator::Or => "||",
+                    _ => "/* unsupported_op */",
+                };
+
+                // Recursively generate left and right expressions
+                let left = self.generate_expression(&binop.left, is_main);
+                let right = self.generate_expression(&binop.right, is_main);
+
+                // Generate with parentheses for proper precedence
+                format!("({} {} {})", left, op_str, right)
+            }
             parser::Expression::UnaryOp(_) => "/* TODO: unary_op */".to_string(),
-            parser::Expression::Call(_) => "/* TODO: call */".to_string(),
+            parser::Expression::Call(call) => {
+                // Skip UFCS method calls for now (too complex)
+                if call.ufcs {
+                    return "/* TODO: UFCS method call */".to_string();
+                }
+
+                // Generate function name
+                let func_name = &call.name;
+
+                // Generate arguments
+                let args: Vec<String> = call
+                    .args
+                    .iter()
+                    .map(|arg| {
+                        // For now, ignore labels (named arguments) - just use the expression
+                        self.generate_expression(&arg.init, is_main)
+                    })
+                    .collect();
+
+                // Format as: func_name(arg1, arg2, ...)
+                format!("{}({})", func_name, args.join(", "))
+            }
             parser::Expression::Constructor(_) => "/* TODO: constructor */".to_string(),
             parser::Expression::Member(_) => "/* TODO: member */".to_string(),
             parser::Expression::Index(_) => "/* TODO: index */".to_string(),
