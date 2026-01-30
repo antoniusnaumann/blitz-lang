@@ -611,7 +611,7 @@ impl CCodegen {
 
     /// Check if a type is a built-in type defined in blitz_types.h
     fn is_builtin_type(&self, type_name: &str) -> bool {
-        matches!(type_name, "Range" | "List_Rune")
+        matches!(type_name, "Range" | "List_Rune" | "Option_String")
     }
 
     /// Check if a function name collides with C standard library function names
@@ -724,17 +724,21 @@ impl CCodegen {
         C_STDLIB_NAMES.contains(&name)
     }
 
-    /// Mangle a variable name if it collides with C keywords (not stdlib functions)
-    /// Returns the mangled name (e.g., "int" -> "blitz_int", "return" -> "blitz_return")
-    /// Note: C stdlib function names like "time" and "read" are OK for variables in C
+    /// Mangle a variable name if it collides with C keywords or function names
+    /// Returns the mangled name (e.g., "int" -> "blitz_int", "return" -> "blitz_return", "time" -> "time_var")
+    ///
+    /// This handles three types of collisions:
+    /// 1. C keywords: cannot be used as variable names at all
+    /// 2. C stdlib functions: technically OK, but we mangle Blitz functions that call them (time -> blitz_time)
+    ///    so we need to check if the variable shadows a mangled Blitz function
+    /// 3. User-defined Blitz functions: variables cannot shadow these in their declaration scope
     fn mangle_variable_name(&mut self, name: &str) -> String {
         // Check if we've already mangled this name
         if let Some(mangled) = self.variable_name_mappings.get(name) {
             return mangled.clone();
         }
 
-        // Only mangle C keywords, not stdlib function names
-        // Variables can have the same names as stdlib functions without issues
+        // Check for C keywords first
         const C_KEYWORDS: &[&str] = &[
             "auto",
             "break",
@@ -783,13 +787,42 @@ impl CCodegen {
             );
             self.variable_name_mappings
                 .insert(name.to_string(), mangled.clone());
-            mangled
-        } else {
-            // No collision, use original name
-            self.variable_name_mappings
-                .insert(name.to_string(), name.to_string());
-            name.to_string()
+            return mangled;
         }
+
+        // Check if this variable name matches a C stdlib function name
+        // Since we mangle all Blitz functions with C stdlib names to `blitz_<name>`,
+        // we must also mangle variables with those names to avoid shadowing
+        // For example: `let time = time()` becomes `int64_t time = blitz_time()`
+        // which is invalid C (variable shadows function). We mangle to: `int64_t time_var = blitz_time()`
+        if Self::is_reserved_c_name(name) {
+            let mangled = format!("{}_var", name);
+            eprintln!(
+                "DEBUG: Mangling variable '{}' -> '{}' (would shadow 'blitz_{}' function)",
+                name, mangled, name
+            );
+            self.variable_name_mappings
+                .insert(name.to_string(), mangled.clone());
+            return mangled;
+        }
+
+        // Check if this variable name matches any user-defined Blitz function
+        // This prevents: int64_t func_name = func_name()
+        if self.function_signatures.contains_key(name) {
+            let mangled = format!("{}_var", name);
+            eprintln!(
+                "DEBUG: Mangling variable '{}' -> '{}' (shadows Blitz function)",
+                name, mangled
+            );
+            self.variable_name_mappings
+                .insert(name.to_string(), mangled.clone());
+            return mangled;
+        }
+
+        // No collision, use original name
+        self.variable_name_mappings
+            .insert(name.to_string(), name.to_string());
+        name.to_string()
     }
 
     /// Get the C name for a variable, returning the mangled version if it was previously mangled
@@ -1405,6 +1438,13 @@ impl CCodegen {
                     let arg_type = self.infer_expr_type(&call.args[0].init);
                     // If argument is Option_T, return T
                     if let Some(inner) = arg_type.strip_prefix("Option_") {
+                        // Check if the inner type is a generic parameter (single uppercase letter)
+                        // If so, we can't infer the concrete type, fallback to void*
+                        let is_generic = inner.len() == 1
+                            && inner.chars().next().map_or(false, |c| c.is_uppercase());
+                        if is_generic {
+                            return "void*".to_string();
+                        }
                         // Map the inner type name to its C equivalent
                         return self.map_type_name(inner);
                     }
@@ -1664,30 +1704,43 @@ impl CCodegen {
                         // If expr is None, evaluate fallback (which might be a return statement)
                         // We need to handle this differently depending on whether right is a statement or expression
 
+                        // Infer the Option type from the left expression
+                        let option_type = self.infer_expr_type(&binop.left);
+
+                        // Determine the type-specific tag name
+                        // The option_type should be something like "Option_Expression", "Option_Token", etc.
+                        let tag_name = if option_type.starts_with("Option_") {
+                            // Use the full type name for the tag (e.g., "Option_Expression_tag_none")
+                            format!("{}_tag_none", option_type)
+                        } else {
+                            // Fallback to a generic pattern if we can't infer the type
+                            eprintln!("WARNING: Could not infer Option type for else operator, using generic Option_T_tag_none. Expression type: {}", option_type);
+                            "Option_T_tag_none".to_string()
+                        };
+
                         // Check if the right side is a return statement
                         let is_right_return =
                             matches!(&*binop.right, parser::Expression::Return(_));
 
                         if is_right_return {
-                            // Generate: if (left.tag == Option_tag_none) { right; } unwrap(left)
+                            // Generate: if (left.tag == Option_Expression_tag_none) { right; } unwrap(left)
                             // But since we're in an expression context, we can't do this inline
                             // We need to use a statement-expression or handle at a higher level
-                            // For now, generate an invalid pattern that will trigger an error
                             let left = self.generate_expression(&binop.left, is_main);
                             let right = self.generate_expression(&binop.right, is_main);
                             // Use a GNU statement expression to allow statements in expression context
                             return format!(
-                                "({{ if (({}).tag == Option_tag_none) {{ {}; }} ({}).value; }})",
-                                left, right, left
+                                "({{ if (({}).tag == {}) {{ {}; }} ({}).value; }})",
+                                left, tag_name, right, left
                             );
                         } else {
                             // Simple case: both sides are expressions
                             let left = self.generate_expression(&binop.left, is_main);
                             let right = self.generate_expression(&binop.right, is_main);
-                            // Generate: (left.tag == Option_tag_none ? right : left.value)
+                            // Generate: (left.tag == Option_Expression_tag_none ? right : left.value)
                             return format!(
-                                "(({}).tag == Option_tag_none ? ({}) : ({}).value)",
-                                left, right, left
+                                "(({}).tag == {} ? ({}) : ({}).value)",
+                                left, tag_name, right, left
                             );
                         }
                     }
@@ -1816,14 +1869,27 @@ impl CCodegen {
                         if option_type.starts_with("Option_") {
                             // Extract the inner type from Option_T
                             let inner_type = option_type.strip_prefix("Option_").unwrap();
-                            // Track that we need to generate this unwrap function
-                            self.unwrap_needed.insert(inner_type.to_string());
-                            // Also track the Option generic instance
-                            self.generic_instances
-                                .entry(option_type.clone())
-                                .or_insert(("Option".to_string(), vec![inner_type.to_string()]));
-                            // Generate call to monomorphized unwrap function
-                            return format!("unwrap_{}({})", inner_type, args[0]);
+                            // Check if the inner type is a generic parameter (can't monomorphize)
+                            let is_generic = inner_type.len() == 1
+                                && inner_type
+                                    .chars()
+                                    .next()
+                                    .map_or(false, |c| c.is_uppercase());
+                            if !is_generic {
+                                // Track that we need to generate this unwrap function
+                                self.unwrap_needed.insert(inner_type.to_string());
+                                // Also track the Option generic instance
+                                self.generic_instances
+                                    .entry(option_type.clone())
+                                    .or_insert((
+                                        "Option".to_string(),
+                                        vec![inner_type.to_string()],
+                                    ));
+                                // Generate call to monomorphized unwrap function
+                                return format!("unwrap_{}({})", inner_type, args[0]);
+                            }
+                            // Fallback for generic types - cast to void* (not ideal but prevents invalid C)
+                            eprintln!("WARNING: Cannot monomorphize unwrap for generic type parameter '{}'", inner_type);
                         }
                     }
 
@@ -1871,14 +1937,27 @@ impl CCodegen {
                         if option_type.starts_with("Option_") {
                             // Extract the inner type from Option_T
                             let inner_type = option_type.strip_prefix("Option_").unwrap();
-                            // Track that we need to generate this unwrap function
-                            self.unwrap_needed.insert(inner_type.to_string());
-                            // Also track the Option generic instance
-                            self.generic_instances
-                                .entry(option_type.clone())
-                                .or_insert(("Option".to_string(), vec![inner_type.to_string()]));
-                            // Generate call to monomorphized unwrap function
-                            return format!("unwrap_{}({})", inner_type, args[0]);
+                            // Check if the inner type is a generic parameter (can't monomorphize)
+                            let is_generic = inner_type.len() == 1
+                                && inner_type
+                                    .chars()
+                                    .next()
+                                    .map_or(false, |c| c.is_uppercase());
+                            if !is_generic {
+                                // Track that we need to generate this unwrap function
+                                self.unwrap_needed.insert(inner_type.to_string());
+                                // Also track the Option generic instance
+                                self.generic_instances
+                                    .entry(option_type.clone())
+                                    .or_insert((
+                                        "Option".to_string(),
+                                        vec![inner_type.to_string()],
+                                    ));
+                                // Generate call to monomorphized unwrap function
+                                return format!("unwrap_{}({})", inner_type, args[0]);
+                            }
+                            // Fallback for generic types - cast to void* (not ideal but prevents invalid C)
+                            eprintln!("WARNING: Cannot monomorphize unwrap for generic type parameter '{}'", inner_type);
                         }
                     }
 
@@ -2787,6 +2866,17 @@ typedef struct List_Rune {
     size_t cap;
 } List_Rune;
 
+// Option type for String (used by blitz_read)
+typedef enum {
+    Option_String_tag_none,
+    Option_String_tag_some
+} Option_String_Tag;
+
+typedef struct {
+    Option_String_Tag tag;
+    char* value;
+} Option_String;
+
 // Built-in string method implementations
 
 // String.chars() - converts a C string to a List(Rune)
@@ -2910,7 +3000,7 @@ char* read_to_string(const char* path);
 // Forward declarations for built-in runtime functions (if not user-defined)
 // These are declared here and implemented in blitz_runtime.c
 int64_t blitz_time(void);
-void* blitz_read(char* path);  // Returns Option(String) but using void* for now
+Option_String blitz_read(char* path);  // Returns Option(String)
 
 #endif // BLITZ_TYPES_H
 "#;
