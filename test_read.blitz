@@ -1,0 +1,4 @@
+fn main() {
+    let result = read("test.txt")
+    print(result)
+}

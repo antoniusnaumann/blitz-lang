@@ -1740,47 +1740,66 @@ impl CCodegen {
                     parser::Operator::Else => {
                         // Error handling: left else right
                         // This operator is used for error propagation: expr else fallback
-                        // If expr is None, evaluate fallback (which might be a return statement)
+                        // If expr is None/null/empty, evaluate fallback (which might be a return statement)
                         // We need to handle this differently depending on whether right is a statement or expression
 
-                        // Infer the Option type from the left expression
-                        let option_type = self.infer_expr_type(&binop.left);
-
-                        // Determine the type-specific tag name
-                        // The option_type should be something like "Option_Expression", "Option_Token", etc.
-                        let tag_name = if option_type.starts_with("Option_") {
-                            // Use the full type name for the tag (e.g., "Option_Expression_tag_none")
-                            format!("{}_tag_none", option_type)
-                        } else {
-                            // Fallback to a generic pattern if we can't infer the type
-                            eprintln!("WARNING: Could not infer Option type for else operator, using generic Option_T_tag_none. Expression type: {}", option_type);
-                            "Option_T_tag_none".to_string()
-                        };
+                        // Infer the type from the left expression
+                        let left_type = self.infer_expr_type(&binop.left);
 
                         // Check if the right side is a return statement
                         let is_right_return =
                             matches!(&*binop.right, parser::Expression::Return(_));
 
-                        if is_right_return {
-                            // Generate: if (left.tag == Option_Expression_tag_none) { right; } unwrap(left)
-                            // But since we're in an expression context, we can't do this inline
-                            // We need to use a statement-expression or handle at a higher level
-                            let left = self.generate_expression(&binop.left, is_main);
-                            let right = self.generate_expression(&binop.right, is_main);
-                            // Use a GNU statement expression to allow statements in expression context
-                            return format!(
-                                "({{ if (({}).tag == {}) {{ {}; }} ({}).value; }})",
-                                left, tag_name, right, left
-                            );
+                        // Determine how to check for "none" based on the type
+                        if left_type.starts_with("Option_") {
+                            // Option type: check .tag field
+                            let tag_name = format!("{}_tag_none", left_type);
+
+                            if is_right_return {
+                                let left = self.generate_expression(&binop.left, is_main);
+                                let right = self.generate_expression(&binop.right, is_main);
+                                return format!(
+                                    "({{ if (({}).tag == {}) {{ {}; }} ({}).value; }})",
+                                    left, tag_name, right, left
+                                );
+                            } else {
+                                let left = self.generate_expression(&binop.left, is_main);
+                                let right = self.generate_expression(&binop.right, is_main);
+                                return format!(
+                                    "(({}).tag == {} ? ({}) : ({}).value)",
+                                    left, tag_name, right, left
+                                );
+                            }
                         } else {
-                            // Simple case: both sides are expressions
+                            // Non-Option type: check for NULL/zero/empty
+                            // For List types, check len == 0
+                            // For pointer types, check == NULL
+                            // For int types, check == 0
+                            let check_expr = if left_type.starts_with("List_") {
+                                format!("({}).len == 0", "LEFT_EXPR")
+                            } else if left_type.ends_with("*") || left_type == "char*" {
+                                format!("({}) == NULL", "LEFT_EXPR")
+                            } else if left_type == "int64_t" || left_type == "bool" {
+                                format!("!({})", "LEFT_EXPR")
+                            } else {
+                                // Unknown type - assume pointer
+                                format!("({}) == NULL", "LEFT_EXPR")
+                            };
+
                             let left = self.generate_expression(&binop.left, is_main);
-                            let right = self.generate_expression(&binop.right, is_main);
-                            // Generate: (left.tag == Option_Expression_tag_none ? right : left.value)
-                            return format!(
-                                "(({}).tag == {} ? ({}) : ({}).value)",
-                                left, tag_name, right, left
-                            );
+
+                            if is_right_return {
+                                let right = self.generate_expression(&binop.right, is_main);
+                                let check = check_expr.replace("LEFT_EXPR", &left);
+                                return format!(
+                                    "({{ if ({}) {{ {}; }} ({}); }})",
+                                    check, right, left
+                                );
+                            } else {
+                                let right = self.generate_expression(&binop.right, is_main);
+                                let check = check_expr.replace("LEFT_EXPR", &left);
+                                return format!("({} ? ({}) : ({}))", check, right, left);
+                            }
                         }
                     }
                     parser::Operator::Member => {
@@ -2897,7 +2916,7 @@ typedef char* String;
 // Built-in Range type (TODO: verify structure)
 typedef struct {
     int64_t begin;
-    int64_t end;
+    int64_t until;  // exclusive upper bound (matches Blitz source)
 } Range;
 
 // List type definition for Rune
