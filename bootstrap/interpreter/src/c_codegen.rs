@@ -117,6 +117,8 @@ struct CCodegen {
     current_return_type: Option<Type>,
     /// Track function signatures for overload resolution: name -> list of (param_types, mangled_name)
     function_signatures: HashMap<String, Vec<(Vec<String>, String)>>,
+    /// Track function return types: func_name -> return_type
+    function_return_types: HashMap<String, Type>,
     /// Type name registry for collision detection and resolution
     type_name_registry: TypeNameRegistry,
     /// Type dependency graph: type_name -> set of types it depends on
@@ -129,6 +131,8 @@ struct CCodegen {
     all_functions: Vec<(String, String)>,
     /// Track enum variants: enum_name -> set of variant names
     enum_variants: HashMap<String, HashSet<String>>,
+    /// Track which unwrap functions need to be generated (inner_type_name)
+    unwrap_needed: HashSet<String>,
 }
 
 impl CCodegen {
@@ -145,12 +149,14 @@ impl CCodegen {
             generic_instances: HashMap::new(),
             current_return_type: None,
             function_signatures: HashMap::new(),
+            function_return_types: HashMap::new(),
             type_name_registry: TypeNameRegistry::new(),
             type_dependencies: HashMap::new(),
             type_definitions: HashMap::new(),
             variable_name_mappings: HashMap::new(),
             all_functions: Vec::new(),
             enum_variants: HashMap::new(),
+            unwrap_needed: HashSet::new(),
         }
     }
 
@@ -201,6 +207,12 @@ impl CCodegen {
                     .entry(f.name.clone())
                     .or_insert_with(Vec::new)
                     .push((param_types, f.name.clone())); // Initially store unmangled name
+
+                // Store the return type for type inference
+                if let Some(ref ret_ty) = f.r#type {
+                    self.function_return_types
+                        .insert(f.name.clone(), ret_ty.clone());
+                }
             }
             Definition::Pub(p) => {
                 self.collect_definition(&p.item)?;
@@ -602,8 +614,10 @@ impl CCodegen {
         matches!(type_name, "Range" | "List_Rune")
     }
 
-    /// Check if a variable name collides with C standard library names
-    /// Returns true if the name is a reserved C keyword or stdlib function
+    /// Check if a function name collides with C standard library function names
+    /// Returns true if the name is a C stdlib function that should be mangled
+    /// Note: This is used for FUNCTIONS only. Variables can have the same names
+    /// as C stdlib functions without issues (e.g., `int time = 0;` is valid C).
     fn is_reserved_c_name(name: &str) -> bool {
         // Common C standard library functions that shouldn't be shadowed
         const C_STDLIB_NAMES: &[&str] = &[
@@ -710,19 +724,61 @@ impl CCodegen {
         C_STDLIB_NAMES.contains(&name)
     }
 
-    /// Mangle a variable name if it collides with C standard library names
-    /// Returns the mangled name (e.g., "time" -> "blitz_time")
+    /// Mangle a variable name if it collides with C keywords (not stdlib functions)
+    /// Returns the mangled name (e.g., "int" -> "blitz_int", "return" -> "blitz_return")
+    /// Note: C stdlib function names like "time" and "read" are OK for variables in C
     fn mangle_variable_name(&mut self, name: &str) -> String {
         // Check if we've already mangled this name
         if let Some(mangled) = self.variable_name_mappings.get(name) {
             return mangled.clone();
         }
 
-        // Check if the name collides
-        if Self::is_reserved_c_name(name) {
+        // Only mangle C keywords, not stdlib function names
+        // Variables can have the same names as stdlib functions without issues
+        const C_KEYWORDS: &[&str] = &[
+            "auto",
+            "break",
+            "case",
+            "char",
+            "const",
+            "continue",
+            "default",
+            "do",
+            "double",
+            "else",
+            "enum",
+            "extern",
+            "float",
+            "for",
+            "goto",
+            "if",
+            "inline",
+            "int",
+            "long",
+            "register",
+            "restrict",
+            "return",
+            "short",
+            "signed",
+            "sizeof",
+            "static",
+            "struct",
+            "switch",
+            "typedef",
+            "union",
+            "unsigned",
+            "void",
+            "volatile",
+            "while",
+            "_Bool",
+            "_Complex",
+            "_Imaginary",
+        ];
+
+        if C_KEYWORDS.contains(&name) {
             let mangled = format!("blitz_{}", name);
             eprintln!(
-                "DEBUG: Mangling variable '{}' -> '{}' (C stdlib collision)",
+                "DEBUG: Mangling variable '{}' -> '{}' (C keyword collision)",
                 name, mangled
             );
             self.variable_name_mappings
@@ -790,6 +846,15 @@ impl CCodegen {
         // Special case: main function is never mangled
         if func_name == "main" {
             return func_name.to_string();
+        }
+
+        // Check if function name collides with C stdlib first
+        if Self::is_reserved_c_name(func_name) {
+            eprintln!(
+                "DEBUG: Mangling function call '{}' -> 'blitz_{}' (C stdlib collision)",
+                func_name, func_name
+            );
+            return format!("blitz_{}", func_name);
         }
 
         // Check if this function has overloads
@@ -1086,23 +1151,12 @@ impl CCodegen {
         // Clear variable name mappings for new function scope
         self.variable_name_mappings.clear();
 
-        // Track function for forward declaration
+        // Track function for forward declaration - collect parameter types
         let param_types: Vec<String> = func
             .args
             .iter()
             .map(|arg| self.type_signature(&arg.r#type))
             .collect();
-        let c_func_name = if func.name == "main" {
-            func.name.clone()
-        } else if let Some(signatures) = self.function_signatures.get(&func.name) {
-            if signatures.len() > 1 {
-                self.mangle_function_name(&func.name, &param_types)
-            } else {
-                func.name.clone()
-            }
-        } else {
-            func.name.clone()
-        };
 
         // Store the return type for context-sensitive code generation
         self.current_return_type = func.r#type.clone();
@@ -1144,8 +1198,16 @@ impl CCodegen {
         let c_func_name = if is_main {
             func.name.clone()
         } else {
-            // Check if we need to mangle this function name
-            if let Some(signatures) = self.function_signatures.get(&func.name) {
+            // Check if function name collides with C stdlib first
+            // This takes precedence over overload mangling
+            if Self::is_reserved_c_name(&func.name) {
+                // Mangle to avoid collision: time -> blitz_time, read -> blitz_read
+                eprintln!(
+                    "DEBUG: Mangling function definition '{}' -> 'blitz_{}' (C stdlib collision)",
+                    func.name, func.name
+                );
+                format!("blitz_{}", func.name)
+            } else if let Some(signatures) = self.function_signatures.get(&func.name) {
                 if signatures.len() > 1 {
                     // Multiple overloads, use mangled name
                     self.mangle_function_name(&func.name, &param_types)
@@ -1264,8 +1326,11 @@ impl CCodegen {
                 // Mangle variable name if it collides with C stdlib
                 let var_name = self.mangle_variable_name(&decl.name);
 
-                // If type is empty or "_", try to infer from initialization expression
-                if c_type.is_empty() || c_type == "_" {
+                // If type is empty, "_", or a generic type parameter (single uppercase letter),
+                // try to infer from initialization expression
+                let is_generic_param =
+                    c_type.len() == 1 && c_type.chars().next().map_or(false, |c| c.is_uppercase());
+                if c_type.is_empty() || c_type == "_" || is_generic_param {
                     if let Some(init_expr) = &decl.init {
                         c_type = self.infer_expr_type(init_expr);
                     } else {
@@ -1335,26 +1400,114 @@ impl CCodegen {
                 format!("{}*", ctor.r#type.name)
             }
             parser::Expression::Call(call) => {
-                // Try to infer return type from known functions
+                // Special handling for unwrap - needs to infer from argument type
+                if call.name == "unwrap" && !call.args.is_empty() {
+                    let arg_type = self.infer_expr_type(&call.args[0].init);
+                    // If argument is Option_T, return T
+                    if let Some(inner) = arg_type.strip_prefix("Option_") {
+                        // Map the inner type name to its C equivalent
+                        return self.map_type_name(inner);
+                    }
+                    return "void*".to_string(); // Generic fallback
+                }
+
+                // Try to look up the function's return type from our registry
+                if let Some(ret_type) = self.function_return_types.get(&call.name) {
+                    // We have the actual return type - convert it to a C type
+                    return self.map_type(ret_type);
+                }
+
+                // Fallback to hardcoded heuristics for built-in functions
                 match call.name.as_str() {
-                    "read" => return "char*".to_string(),
+                    // String functions
+                    "read" | "blitz_read" => return "Option_String".to_string(),
                     "chars" => return "List_Rune".to_string(),
-                    "len" => return "int64_t".to_string(),
                     "substring" => return "char*".to_string(),
-                    "parse_int" => return "int64_t".to_string(),
+
+                    // List/collection functions
+                    "len" => return "int64_t".to_string(),
+
+                    // Parser functions (with mangled names for overloads)
                     "new_parser" => return "Parser*".to_string(),
                     "parse_Parser" => return "List_Definition".to_string(),
-                    "unwrap" => {
-                        // Special case: unwrap(read(...)) returns String
-                        if !call.args.is_empty() {
-                            if let parser::Expression::Call(inner_call) = &*call.args[0].init {
-                                if inner_call.name == "read" {
-                                    return "char*".to_string();
-                                }
-                            }
-                        }
-                        return "void*".to_string(); // Generic fallback
-                    }
+                    "parse_String" => return "List_Definition".to_string(),
+                    "peek_Parser" => return "Token*".to_string(),
+                    "peek_Parser_Int" => return "Token*".to_string(),
+                    "tok_Parser" => return "Token*".to_string(),
+                    "last_Parser" => return "Token*".to_string(),
+                    "next_Parser" => return "Option_Definition".to_string(),
+                    "eof_Parser" => return "bool".to_string(),
+                    "has_Parser_TokenKind" => return "bool".to_string(),
+                    "expect_Parser_TokenKind" => return "Option_Token".to_string(),
+                    "accept_Parser_TokenKind" => return "Option_Token".to_string(),
+                    "accept_Parser_List_TokenKind" => return "Option_Token".to_string(),
+                    "span_Parser" => return "Span*".to_string(),
+                    "span_Parser_Token" => return "Span*".to_string(),
+                    "span_Parser_Token_Token" => return "Span*".to_string(),
+                    "span_Parser_Span" => return "Span*".to_string(),
+                    "span_Parser_Span_Span" => return "Span*".to_string(),
+
+                    // Parser expression/statement functions
+                    "parse_expression" => return "Option_Expression".to_string(),
+                    "parse_expression_bp" => return "Option_Expression".to_string(),
+                    "parse_statement" => return "Option_Statement".to_string(),
+                    "parse_declaration" => return "Option_Declaration".to_string(),
+
+                    // Parser definition functions
+                    "parse_def" => return "Option_Definition".to_string(),
+                    "parse_fn" => return "Option_Fn".to_string(),
+                    "parse_struct" => return "Option_Struct".to_string(),
+                    "parse_union" => return "Option_Union".to_string(),
+                    "parse_alias" => return "Option_Alias".to_string(),
+                    "parse_actor" => return "Option_Actor".to_string(),
+                    "parse_test" => return "Option_Test".to_string(),
+
+                    // Parser component functions
+                    "parse_type" => return "Option_Type".to_string(),
+                    "parse_type_ident" => return "Option_Type".to_string(),
+                    "parse_type_params" => return "List_Type".to_string(),
+                    "parse_ident" => return "Option_Ident".to_string(),
+                    "parse_arg" => return "Option_Arg".to_string(),
+                    "parse_args" => return "Option_List_CallArg".to_string(),
+                    "parse_fields" => return "List_Field".to_string(),
+                    "parse_cases" => return "List_Case".to_string(),
+                    "parse_body" => return "Option_Block".to_string(),
+
+                    // Parser control flow functions
+                    "parse_if" => return "Option_If".to_string(),
+                    "parse_while" => return "Option_While".to_string(),
+                    "parse_for" => return "Option_For".to_string(),
+                    "parse_switch" => return "Option_Switch".to_string(),
+                    "parse_switch_label" => return "Option_SwitchLabel".to_string(),
+
+                    // Parser literal functions
+                    "parse_int_lit" => return "Option_Lit_Int".to_string(),
+                    "parse_float_lit" => return "Option_Lit_Float".to_string(),
+                    "parse_string_lit" => return "Option_Lit_String".to_string(),
+                    "parse_char_lit" => return "Option_Lit_Rune".to_string(),
+
+                    // Parser call/constructor functions
+                    "parse_call" => return "Option_Call".to_string(),
+                    "parse_member_call" => return "Option_Call".to_string(),
+                    "parse_constructor" => return "Option_Constructor".to_string(),
+                    "parse_group" => return "Option_Expression".to_string(),
+                    "parse_list" => return "Option_List_".to_string(),
+                    "parse_precedence" => return "Option_Expression".to_string(),
+
+                    // Lexer functions
+                    "new_lexer" => return "Lexer*".to_string(),
+                    "new_lexer_List_Rune" => return "Lexer*".to_string(),
+                    "new_lexer_String" => return "Lexer*".to_string(),
+                    "lex_Lexer" => return "List_Token".to_string(),
+                    "lex_String" => return "List_Token".to_string(),
+                    "next_Lexer" => return "Option_Token".to_string(),
+
+                    // Token/utility functions
+                    "kinds" => return "List_TokenKind".to_string(),
+
+                    // Numeric parsing
+                    "parse_int" => return "int64_t".to_string(),
+
                     _ => {}
                 }
                 // Default for unknown function calls
@@ -1377,6 +1530,32 @@ impl CCodegen {
                 _ => self.infer_expr_type(&unop.expr),
             },
             parser::Expression::Group(group) => self.infer_expr_type(&group.expr),
+            parser::Expression::Member(member) => {
+                // Try to infer the type of a member access
+                // For method calls without parens (like parser.parse_def), check if it matches a known function
+                let member_name = &member.member;
+
+                // Check if this matches a known function return type
+                if let Some(ret_type) = self.function_return_types.get(member_name) {
+                    return self.map_type(ret_type);
+                }
+
+                // Fallback: try hardcoded heuristics for common parser methods
+                match member_name.as_str() {
+                    "parse_def" => return "Option_Definition".to_string(),
+                    "parse_fn" => return "Option_Fn".to_string(),
+                    "parse_struct" => return "Option_Struct".to_string(),
+                    "parse_union" => return "Option_Union".to_string(),
+                    "parse_type" => return "Option_Type".to_string(),
+                    "parse_ident" => return "Option_Ident".to_string(),
+                    "parse_expression" => return "Option_Expression".to_string(),
+                    "parse_statement" => return "Option_Statement".to_string(),
+                    _ => {}
+                }
+
+                // Default: can't infer member type
+                "int64_t".to_string()
+            }
             _ => "int64_t".to_string(), // Fallback for complex expressions
         }
     }
@@ -1471,37 +1650,102 @@ impl CCodegen {
                 }
             }
             parser::Expression::BinaryOp(binop) => {
-                // Map Blitz operators to C operators
-                let op_str = match binop.op {
-                    parser::Operator::Add => "+",
-                    parser::Operator::Sub => "-",
-                    parser::Operator::Mul => "*",
-                    parser::Operator::Div => "/",
-                    parser::Operator::Rem => "%",
-                    parser::Operator::Eq => "==",
-                    parser::Operator::Ne => "!=",
-                    parser::Operator::Lt => "<",
-                    parser::Operator::Le => "<=",
-                    parser::Operator::Gt => ">",
-                    parser::Operator::Ge => ">=",
-                    parser::Operator::And => "&&",
-                    parser::Operator::Or => "||",
-                    _ => "/* unsupported_op */",
-                };
+                // Handle special operators that need custom codegen
+                match binop.op {
+                    parser::Operator::Concat => {
+                        // String concatenation - use blitz_string_concat helper
+                        let left = self.generate_expression(&binop.left, is_main);
+                        let right = self.generate_expression(&binop.right, is_main);
+                        return format!("blitz_string_concat({}, {})", left, right);
+                    }
+                    parser::Operator::Else => {
+                        // Error handling: left else right
+                        // This operator is used for error propagation: expr else fallback
+                        // If expr is None, evaluate fallback (which might be a return statement)
+                        // We need to handle this differently depending on whether right is a statement or expression
 
-                // Recursively generate left and right expressions
-                let left = self.generate_expression(&binop.left, is_main);
-                let right = self.generate_expression(&binop.right, is_main);
+                        // Check if the right side is a return statement
+                        let is_right_return =
+                            matches!(&*binop.right, parser::Expression::Return(_));
 
-                // Generate with parentheses for proper precedence
-                format!("({} {} {})", left, op_str, right)
+                        if is_right_return {
+                            // Generate: if (left.tag == Option_tag_none) { right; } unwrap(left)
+                            // But since we're in an expression context, we can't do this inline
+                            // We need to use a statement-expression or handle at a higher level
+                            // For now, generate an invalid pattern that will trigger an error
+                            let left = self.generate_expression(&binop.left, is_main);
+                            let right = self.generate_expression(&binop.right, is_main);
+                            // Use a GNU statement expression to allow statements in expression context
+                            return format!(
+                                "({{ if (({}).tag == Option_tag_none) {{ {}; }} ({}).value; }})",
+                                left, right, left
+                            );
+                        } else {
+                            // Simple case: both sides are expressions
+                            let left = self.generate_expression(&binop.left, is_main);
+                            let right = self.generate_expression(&binop.right, is_main);
+                            // Generate: (left.tag == Option_tag_none ? right : left.value)
+                            return format!(
+                                "(({}).tag == Option_tag_none ? ({}) : ({}).value)",
+                                left, right, left
+                            );
+                        }
+                    }
+                    parser::Operator::Member => {
+                        // Member access should be handled by Expression::Member, not BinaryOp
+                        // If we get here, something is wrong - but handle it gracefully
+                        eprintln!(
+                            "WARNING: Member operator in BinaryOp - should be Expression::Member"
+                        );
+                        let left = self.generate_expression(&binop.left, is_main);
+                        let right = self.generate_expression(&binop.right, is_main);
+                        return format!("({}).{}", left, right);
+                    }
+                    _ => {
+                        // Map standard Blitz operators to C operators
+                        let op_str = match binop.op {
+                            parser::Operator::Add => "+",
+                            parser::Operator::Sub => "-",
+                            parser::Operator::Mul => "*",
+                            parser::Operator::Div => "/",
+                            parser::Operator::Rem => "%",
+                            parser::Operator::Eq => "==",
+                            parser::Operator::Ne => "!=",
+                            parser::Operator::Lt => "<",
+                            parser::Operator::Le => "<=",
+                            parser::Operator::Gt => ">",
+                            parser::Operator::Ge => ">=",
+                            parser::Operator::And => "&&",
+                            parser::Operator::Or => "||",
+                            _ => {
+                                eprintln!(
+                                    "ERROR: Unsupported operator in BinaryOp: {:?}",
+                                    binop.op
+                                );
+                                // Instead of generating malformed C code, generate a placeholder
+                                return format!("(/*UNSUPPORTED_OP {:?}*/ 0)", binop.op);
+                            }
+                        };
+
+                        // Recursively generate left and right expressions
+                        let left = self.generate_expression(&binop.left, is_main);
+                        let right = self.generate_expression(&binop.right, is_main);
+
+                        // Generate with parentheses for proper precedence
+                        format!("({} {} {})", left, op_str, right)
+                    }
+                }
             }
             parser::Expression::UnaryOp(unary_op) => {
                 // Map Blitz unary operators to C operators
                 let op_str = match unary_op.op {
                     parser::Operator::Not => "!",
                     parser::Operator::Neg => "-",
-                    _ => "/* unsupported_unary_op */",
+                    _ => {
+                        eprintln!("ERROR: Unsupported operator in UnaryOp: {:?}", unary_op.op);
+                        // Instead of generating malformed C code, generate a placeholder
+                        return format!("(/*UNSUPPORTED_UNARY_OP {:?}*/ 0)", unary_op.op);
+                    }
                 };
 
                 // Recursively generate the operand expression
@@ -1562,6 +1806,27 @@ impl CCodegen {
                 // UFCS method calls: obj.method(args) becomes method(obj, args)
                 // For UFCS calls, the first argument is the receiver object
                 if call.ufcs {
+                    // Special handling for unwrap() - needs monomorphization
+                    if func_name == "unwrap" && args.len() == 1 {
+                        // Infer the Option type from the receiver (first argument)
+                        let arg_expr = &call.args[0].init;
+                        let option_type = self.infer_expr_type(arg_expr);
+
+                        // Check if this is an Option type
+                        if option_type.starts_with("Option_") {
+                            // Extract the inner type from Option_T
+                            let inner_type = option_type.strip_prefix("Option_").unwrap();
+                            // Track that we need to generate this unwrap function
+                            self.unwrap_needed.insert(inner_type.to_string());
+                            // Also track the Option generic instance
+                            self.generic_instances
+                                .entry(option_type.clone())
+                                .or_insert(("Option".to_string(), vec![inner_type.to_string()]));
+                            // Generate call to monomorphized unwrap function
+                            return format!("unwrap_{}({})", inner_type, args[0]);
+                        }
+                    }
+
                     // Special handling for built-in string/list methods
                     match func_name.as_str() {
                         "chars" if args.len() == 1 => {
@@ -1596,6 +1861,27 @@ impl CCodegen {
                         }
                     }
                 } else {
+                    // Special handling for unwrap() - needs monomorphization
+                    if func_name == "unwrap" && args.len() == 1 {
+                        // Infer the Option type from the argument
+                        let arg_expr = &call.args[0].init;
+                        let option_type = self.infer_expr_type(arg_expr);
+
+                        // Check if this is an Option type
+                        if option_type.starts_with("Option_") {
+                            // Extract the inner type from Option_T
+                            let inner_type = option_type.strip_prefix("Option_").unwrap();
+                            // Track that we need to generate this unwrap function
+                            self.unwrap_needed.insert(inner_type.to_string());
+                            // Also track the Option generic instance
+                            self.generic_instances
+                                .entry(option_type.clone())
+                                .or_insert(("Option".to_string(), vec![inner_type.to_string()]));
+                            // Generate call to monomorphized unwrap function
+                            return format!("unwrap_{}({})", inner_type, args[0]);
+                        }
+                    }
+
                     // Regular function call - try to guess argument types for overload resolution
                     let arg_types: Vec<String> = call
                         .args
@@ -2380,6 +2666,29 @@ impl CCodegen {
         code
     }
 
+    /// Map a type name string to its C equivalent
+    /// This is used when we have a type name as a string (from infer_expr_type)
+    /// rather than a Type struct
+    fn map_type_name(&self, type_name: &str) -> String {
+        match type_name {
+            "Int" => "int64_t".to_string(),
+            "Bool" => "bool".to_string(),
+            "Float" => "double".to_string(),
+            "String" => "char*".to_string(),
+            "Rune" => "uint32_t".to_string(),
+            "Void" => "void".to_string(),
+            _ => {
+                // For other types, check if it's a struct type (should be pointer)
+                // or an enum type (should be value)
+                if self.seen_types.contains(type_name) && !self.enum_types.contains(type_name) {
+                    format!("{}*", type_name)
+                } else {
+                    type_name.to_string()
+                }
+            }
+        }
+    }
+
     fn map_type(&self, ty: &Type) -> String {
         match ty.name.as_str() {
             "Int" => "int64_t".to_string(),
@@ -2557,24 +2866,18 @@ void panic(const char* message) __attribute__((noreturn));
 
 // Unwrap functions for Option types
 // These extract the value from Some(x) or panic if None
-// Each Option(T) type needs its own unwrap function
-#define DECLARE_UNWRAP(T) \
-    T unwrap_##T(void* option_ptr);
-
-// Common unwrap declarations
-DECLARE_UNWRAP(Int)
-DECLARE_UNWRAP(Bool)
-DECLARE_UNWRAP(String)
-DECLARE_UNWRAP(Float)
-
-// Generic unwrap macro - for use with Option types
-// Handles both simple identifiers and function call expressions
-// Uses GNU C statement expression extension (supported by GCC and Clang)
-#define unwrap(opt) ({ \
-    __typeof__(opt) _tmp = (opt); \
-    if (_tmp == NULL) panic("Unwrap called on None"); \
-    _tmp; \
-})
+// Note: Unwrap functions are now generated automatically by the transpiler
+// for each Option type that is actually used. The generated functions are
+// type-safe and take Option_T as a parameter rather than void*.
+//
+// The old macro-based approach is commented out:
+// #define DECLARE_UNWRAP(T) \
+//     T unwrap_##T(void* option_ptr);
+//
+// DECLARE_UNWRAP(Int)
+// DECLARE_UNWRAP(Bool)
+// DECLARE_UNWRAP(String)
+// DECLARE_UNWRAP(Float)
 
 // Read functions for basic I/O
 // These are placeholders for file/stdin reading operations
@@ -2587,6 +2890,27 @@ typedef struct {
 ReadResult read_line(void);
 ReadResult read_file(const char* path);
 char* read_to_string(const char* path);
+
+// ============================================================================
+// Built-in Blitz runtime functions
+// ============================================================================
+// These functions are provided by the Blitz runtime and are available to all
+// Blitz programs without explicit import.
+
+// Note: time() and read() are typically user-defined functions in Blitz programs.
+// When they are called, the transpiler automatically mangles them to avoid C stdlib
+// collisions:
+//   - time() -> blitz_time() (returns int64_t milliseconds since epoch)
+//   - read() -> blitz_read() (returns Option(String))
+//
+// If these functions are NOT defined in user code, you can provide implementations
+// in blitz_runtime.c. The forward declarations will be generated automatically in
+// blitz.h when user code defines them. For built-in implementations, declare them here:
+
+// Forward declarations for built-in runtime functions (if not user-defined)
+// These are declared here and implemented in blitz_runtime.c
+int64_t blitz_time(void);
+void* blitz_read(char* path);  // Returns Option(String) but using void* for now
 
 #endif // BLITZ_TYPES_H
 "#;
@@ -2750,6 +3074,26 @@ char* read_to_string(const char* path);
             );
         }
 
+        // Add unwrap function forward declarations
+        if !self.unwrap_needed.is_empty() {
+            full_header.push_str("// Unwrap function forward declarations\n");
+            for inner_type in &self.unwrap_needed {
+                // Determine the C type for the unwrap return value
+                // This should match the type used in the Option_T value field
+                let c_type = if self.is_primitive_type(inner_type) {
+                    self.map_type_name(inner_type)
+                } else {
+                    // Non-primitive: use pointer (match Option value field type)
+                    format!("{}*", inner_type)
+                };
+                full_header.push_str(&format!(
+                    "{} unwrap_{}(Option_{} opt);\n",
+                    c_type, inner_type, inner_type
+                ));
+            }
+            full_header.push_str("\n");
+        }
+
         // Add type definitions
         full_header.push_str(&self.header);
         full_header.push_str("\n#endif // BLITZ_H\n");
@@ -2767,6 +3111,44 @@ char* read_to_string(const char* path);
         let impl_path = self.output_dir.join("blitz.c");
         let mut full_impl = String::new();
         full_impl.push_str("#include \"blitz.h\"\n\n");
+
+        // Generate unwrap function implementations for all Option types that are used
+        if !self.unwrap_needed.is_empty() {
+            full_impl.push_str("// Unwrap function implementations\n");
+            full_impl.push_str(
+                "// These functions extract values from Option types or panic if None\n\n",
+            );
+
+            for inner_type in &self.unwrap_needed {
+                // Determine the C type for the unwrap return value
+                // This should match the type used in the Option_T value field
+                // Use the same logic as Option generation:
+                // - primitives use value type
+                // - non-primitives use pointer type
+                let c_type = if self.is_primitive_type(inner_type) {
+                    self.map_type_name(inner_type)
+                } else {
+                    // Non-primitive: use pointer (match Option value field type)
+                    format!("{}*", inner_type)
+                };
+
+                // Generate the unwrap function for this type
+                // unwrap_String(Option_String opt) -> char*
+                full_impl.push_str(&format!(
+                    "{} unwrap_{}(Option_{} opt) {{\n",
+                    c_type, inner_type, inner_type
+                ));
+                full_impl.push_str(&format!(
+                    "    if (opt.tag == Option_{}_tag_none) {{\n",
+                    inner_type
+                ));
+                full_impl.push_str("        panic(\"Unwrapped a None value!\");\n");
+                full_impl.push_str("    }\n");
+                full_impl.push_str("    return opt.value;\n");
+                full_impl.push_str("}\n\n");
+            }
+        }
+
         full_impl.push_str(&self.impl_code);
 
         fs::write(&impl_path, full_impl)
