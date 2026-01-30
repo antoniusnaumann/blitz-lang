@@ -133,6 +133,8 @@ struct CCodegen {
     enum_variants: HashMap<String, HashSet<String>>,
     /// Track which unwrap functions need to be generated (inner_type_name)
     unwrap_needed: HashSet<String>,
+    /// Track variable types in current function scope (variable_name -> c_type)
+    variable_types: HashMap<String, String>,
 }
 
 impl CCodegen {
@@ -157,6 +159,7 @@ impl CCodegen {
             all_functions: Vec::new(),
             enum_variants: HashMap::new(),
             unwrap_needed: HashSet::new(),
+            variable_types: HashMap::new(),
         }
     }
 
@@ -1181,8 +1184,9 @@ impl CCodegen {
     }
 
     fn generate_function(&mut self, func: &parser::Fn) -> Result<(), String> {
-        // Clear variable name mappings for new function scope
+        // Clear variable name mappings and types for new function scope
         self.variable_name_mappings.clear();
+        self.variable_types.clear();
 
         // Track function for forward declaration - collect parameter types
         let param_types: Vec<String> = func
@@ -1217,6 +1221,9 @@ impl CCodegen {
             param_types.push(param_type_sig);
             // Mangle parameter name if it collides with C stdlib
             let param_name = self.mangle_variable_name(&arg.name);
+            // Track parameter type for type inference
+            self.variable_types
+                .insert(param_name.clone(), param_type.clone());
             // Note: mutability is handled in Blitz semantics, not at C level
             // In C, all parameters are passed by value (or pointer for structs)
             params.push(format!("{} {}", param_type, param_name));
@@ -1366,6 +1373,10 @@ impl CCodegen {
                 if c_type.is_empty() || c_type == "_" || is_generic_param {
                     if let Some(init_expr) = &decl.init {
                         c_type = self.infer_expr_type(init_expr);
+                        eprintln!(
+                            "DEBUG: Inferred type '{}' for variable '{}'",
+                            c_type, decl.name
+                        );
                     } else {
                         // No type and no init - error, but use int64_t as fallback
                         c_type = "int64_t".to_string();
@@ -1386,9 +1397,13 @@ impl CCodegen {
                     }
 
                     let init_code = self.generate_expression(init_expr, is_main);
+                    // Track variable type for type inference
+                    self.variable_types.insert(var_name.clone(), c_type.clone());
                     format!("{} {} = {};", c_type, var_name, init_code)
                 } else {
                     // Declaration without initialization
+                    // Track variable type for type inference
+                    self.variable_types.insert(var_name.clone(), c_type.clone());
                     format!("{} {};", c_type, var_name)
                 }
                 // Note: is_mut is semantic only in Blitz, not represented in C
@@ -1562,6 +1577,17 @@ impl CCodegen {
                     | parser::Operator::Le
                     | parser::Operator::Gt
                     | parser::Operator::Ge => "bool".to_string(),
+                    parser::Operator::Else => {
+                        // Else operator unwraps Option types
+                        // If left is Option_T, the result is T* (value field is always a pointer for non-primitives)
+                        let left_type = self.infer_expr_type(&binop.left);
+                        if let Some(inner) = left_type.strip_prefix("Option_") {
+                            // The .value field of Option always holds pointers for struct/enum types
+                            format!("{}*", inner)
+                        } else {
+                            left_type
+                        }
+                    }
                     _ => self.infer_expr_type(&binop.left), // Arithmetic ops return operand type
                 }
             }
@@ -1594,6 +1620,19 @@ impl CCodegen {
                 }
 
                 // Default: can't infer member type
+                "int64_t".to_string()
+            }
+            parser::Expression::Ident(ident) => {
+                // Look up identifier type in variable types map
+                if let Some(var_type) = self.variable_types.get(&ident.name) {
+                    return var_type.clone();
+                }
+                // Also check mangled name
+                let mangled = self.get_variable_name(&ident.name);
+                if let Some(var_type) = self.variable_types.get(&mangled) {
+                    return var_type.clone();
+                }
+                // Default fallback for unknown identifiers
                 "int64_t".to_string()
             }
             _ => "int64_t".to_string(), // Fallback for complex expressions
@@ -2325,8 +2364,9 @@ impl CCodegen {
                     if ident.name == "else" {
                         code.push_str("        default:\n");
                     } else {
-                        // Enum variant - use it directly as a constant
-                        code.push_str(&format!("        case {}:\n", ident.name));
+                        // Enum variant - qualify it with enum type
+                        let qualified = self.qualify_identifier(&ident.name);
+                        code.push_str(&format!("        case {}:\n", qualified));
                     }
                 }
                 parser::SwitchLabel::Else(_) => {
@@ -2428,8 +2468,9 @@ impl CCodegen {
                         )
                     }
                     parser::SwitchLabel::Ident(ident) => {
-                        // Enum variant comparison
-                        format!("{} == {}", cond, ident.name)
+                        // Enum variant comparison - qualify the identifier
+                        let qualified = self.qualify_identifier(&ident.name);
+                        format!("{} == {}", cond, qualified)
                     }
                     parser::SwitchLabel::Type(ty) => {
                         // Type pattern - check tag field for tagged unions
@@ -2940,6 +2981,7 @@ static inline String blitz_substring(List_Rune list, int64_t start, int64_t unti
     bool: print_bool, \
     double: print_float, \
     List_Rune: print_list_rune, \
+    List_Definition: print_unknown, \
     default: print_unknown \
 )(x)
 
