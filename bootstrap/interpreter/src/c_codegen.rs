@@ -992,6 +992,11 @@ impl CCodegen {
                 }
 
                 self.generate_union(&u.sig, &u.cases)?;
+
+                // Helper for common fields (like span) in tagged unions
+                if has_typed_variants && (union_name == "Expression" || union_name == "Statement") {
+                    self.generate_union_span_helper(&c_name, &u.cases)?;
+                }
             }
             Definition::Fn(f) => {
                 self.generate_function(f)?;
@@ -1183,6 +1188,52 @@ impl CCodegen {
             self.header.push_str(&format!("}};\n\n"));
         }
 
+        Ok(())
+    }
+
+    fn generate_union_span_helper(
+        &mut self,
+        c_name: &str,
+        cases: &[parser::Case],
+    ) -> Result<(), String> {
+        // Generate helper function to access span from tagged union
+        // Span* Expression_span(Expression* expr)
+
+        // Add to forward declarations
+        let sig = format!("Span* {}_span({}* expr);", c_name, c_name);
+        self.all_functions
+            .push((format!("{}_span", c_name), sig.clone()));
+
+        // Add implementation
+        let mut code = format!("Span* {}_span({}* expr) {{\n", c_name, c_name);
+        code.push_str("    if (!expr) return NULL;\n");
+        code.push_str(&format!("    switch (expr->tag) {{\n"));
+
+        for case in cases {
+            if let Some(label) = &case.label {
+                // Check if this variant has a span field
+                // This assumes all variants in Expression/Statement have a span field
+                // We'd need to verify this by looking up the variant type definition
+                // But for now we'll assume it's true for AST nodes
+
+                code.push_str(&format!("        case {}_tag_{}:\n", c_name, label));
+
+                // If it's a value type (like Lit variants sometimes), we might need different access
+                // But generally AST nodes store pointers or structs with span
+
+                // For variants that hold a pointer (most AST nodes)
+                code.push_str(&format!(
+                    "            return expr->data.as_{}->span;\n",
+                    label
+                ));
+            }
+        }
+
+        code.push_str("        default: return NULL;\n");
+        code.push_str("    }\n");
+        code.push_str("}\n\n");
+
+        self.impl_code.push_str(&code);
         Ok(())
     }
 
@@ -1397,6 +1448,12 @@ impl CCodegen {
                     }
                 }
 
+                // Fix for Expression/Statement value types being assigned pointers
+                // If c_type is Expression or Statement, it should be a pointer
+                if c_type == "Expression" || c_type == "Statement" {
+                    c_type = format!("{}*", c_type);
+                }
+
                 // Generate initialization expression if present
                 if let Some(init_expr) = &decl.init {
                     // Special handling for switch expressions in assignment context
@@ -1440,6 +1497,17 @@ impl CCodegen {
                 return format!("{}_{}", enum_name, ident_name);
             }
         }
+
+        // Check for special reserved identifier mappings for enum variants
+        if ident_name == "for_" {
+            // Check if TokenKind exists and has for_ variant
+            if let Some(variants) = self.enum_variants.get("TokenKind") {
+                if variants.contains("for_") {
+                    return "TokenKind_for_".to_string();
+                }
+            }
+        }
+
         // Not an enum variant, return as-is
         ident_name.to_string()
     }
@@ -2100,6 +2168,34 @@ impl CCodegen {
                     return parent_code;
                 }
 
+                // Special case: .span access on Expression/Statement tagged unions
+                // These don't have a direct .span field, we need to use the helper function
+                if member_name == "span" {
+                    // Check if parent type is Expression or Statement (inferred or known)
+                    // infer_expr_type returns things like "Option_Expression", "Expression*"
+                    let parent_type = self.infer_expr_type(&member.parent);
+
+                    // Strip pointer/Option to get base type
+                    let base_type = parent_type
+                        .trim_end_matches('*')
+                        .trim_start_matches("Option_");
+
+                    if base_type == "Expression" || base_type == "Statement" {
+                        // Use helper function: Expression_span(expr)
+                        return format!("{}_span({})", base_type, parent_code);
+                    }
+
+                    // Also check variable type directly if available
+                    if let parser::Expression::Ident(ident) = &*member.parent {
+                        if let Some(var_type) = self.variable_types.get(&ident.name) {
+                            let base = var_type.trim_end_matches('*').trim_start_matches("Option_");
+                            if base == "Expression" || base == "Statement" {
+                                return format!("{}_span({})", base, parent_code);
+                            }
+                        }
+                    }
+                }
+
                 // Special case: Option types need .value to access members of inner type
                 // This is a heuristic - we check if parent is likely an Option type
                 // But we don't have full type info here easily.
@@ -2478,6 +2574,8 @@ impl CCodegen {
                             }
                         } else if ident.name == "mut_" {
                             "TokenKind_mut_".to_string()
+                        } else if ident.name == "for_" {
+                            "TokenKind_for_".to_string()
                         } else {
                             qualified
                         };
