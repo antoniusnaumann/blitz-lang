@@ -614,7 +614,10 @@ impl CCodegen {
 
     /// Check if a type is a built-in type defined in blitz_types.h
     fn is_builtin_type(&self, type_name: &str) -> bool {
-        matches!(type_name, "Range" | "List_Rune" | "Option_String")
+        matches!(
+            type_name,
+            "Range" | "List_Rune" | "Option_String" | "List_String"
+        )
     }
 
     /// Check if a function name collides with C standard library function names
@@ -1320,7 +1323,18 @@ impl CCodegen {
                                 &ret_type,
                                 temp_var,
                             );
-                            switch_code.push_str(&format!("\n    return {};", temp_var));
+
+                            // If returning an Option type, we might need to wrap the result
+                            if ret_type.starts_with("Option_") {
+                                // Check if it's already an Option (by variable type)
+                                // If the switch result is a pointer (from 'some' branch), wrap it?
+                                // No, generate_switch_as_statement handles the assignment types
+
+                                // Just return the temp var
+                                switch_code.push_str(&format!("\n    return {};", temp_var));
+                            } else {
+                                switch_code.push_str(&format!("\n    return {};", temp_var));
+                            }
                             switch_code
                         } else {
                             let expr_code = self.generate_expression(expr, is_main);
@@ -1582,8 +1596,13 @@ impl CCodegen {
                         // If left is Option_T, the result is T* (value field is always a pointer for non-primitives)
                         let left_type = self.infer_expr_type(&binop.left);
                         if let Some(inner) = left_type.strip_prefix("Option_") {
-                            // The .value field of Option always holds pointers for struct/enum types
-                            format!("{}*", inner)
+                            // Check if it's a primitive type that doesn't use pointers
+                            if self.is_primitive_type(inner) {
+                                self.map_type_name(inner)
+                            } else {
+                                // The .value field of Option always holds pointers for struct/enum types
+                                format!("{}*", inner)
+                            }
                         } else {
                             left_type
                         }
@@ -1759,15 +1778,18 @@ impl CCodegen {
                                 let left = self.generate_expression(&binop.left, is_main);
                                 let right = self.generate_expression(&binop.right, is_main);
                                 return format!(
-                                    "({{ if (({}).tag == {}) {{ {}; }} ({}).value; }})",
-                                    left, tag_name, right, left
+                                    "({{ {} _opt = {}; if (_opt.tag == {}) {{ {}; }} _opt.value; }})",
+                                    left_type, left, tag_name, right
                                 );
                             } else {
                                 let left = self.generate_expression(&binop.left, is_main);
                                 let right = self.generate_expression(&binop.right, is_main);
+
+                                // Need to wrap result in 'some' constructor if the result is assigned to an Option
+                                // But here we're unwrapping, so we return the value directly
                                 return format!(
-                                    "(({}).tag == {} ? ({}) : ({}).value)",
-                                    left, tag_name, right, left
+                                    "({{ {} _opt = {}; _opt.tag == {} ? ({}) : _opt.value; }})",
+                                    left_type, left, tag_name, right
                                 );
                             }
                         } else {
@@ -2078,20 +2100,47 @@ impl CCodegen {
                     return parent_code;
                 }
 
+                // Special case: Option types need .value to access members of inner type
+                // This is a heuristic - we check if parent is likely an Option type
+                // But we don't have full type info here easily.
+                // However, we can check if the parent expression string suggests it was unwrapped
+                // or if it's a variable we know is an Option.
+
+                let parent_is_option = if let parser::Expression::Ident(ident) = &*member.parent {
+                    if let Some(ty) = self.variable_types.get(&ident.name) {
+                        ty.starts_with("Option_")
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+
                 // For C struct member access, we need to decide between '.' and '->'
                 // Since most structs are passed as pointers in our C codegen (see map_type),
                 // we should use '->' for struct types
 
                 // Simple heuristic: if parent_code starts with '&' or contains '->', use '.'
                 // Otherwise, use '->' for struct member access (assuming pointers)
-                if parent_code.starts_with('&') || parent_code.contains("->") {
-                    format!("{}.{}", parent_code.trim_start_matches('&'), member_name)
+                let separator = if parent_code.starts_with('&')
+                    || parent_code.contains("->")
+                    || parent_is_option
+                {
+                    "."
                 } else if parent_code.starts_with('*') {
                     // Dereferenced pointer: (*ptr).field can be simplified to ptr->field
-                    format!("{}->{}", parent_code.trim_start_matches('*'), member_name)
+                    "->"
                 } else {
                     // Default: use arrow operator for pointer-based struct access
-                    format!("{}->{}", parent_code, member_name)
+                    "->"
+                };
+
+                if parent_is_option {
+                    format!("{}.value->{}", parent_code, member_name)
+                } else if parent_code.starts_with('*') {
+                    format!("{}->{}", parent_code.trim_start_matches('*'), member_name)
+                } else {
+                    format!("{}{}{}", parent_code, separator, member_name)
                 }
             }
             parser::Expression::Index(idx) => {
@@ -2133,8 +2182,35 @@ impl CCodegen {
                         format!("{}[{}]", target_expr, index_expr)
                     }
                 } else {
-                    // Simple array or direct identifier indexing
-                    format!("{}[{}]", target_expr, index_expr)
+                    // Also check if the target variable itself is a List type
+                    if let parser::Expression::Ident(ident) = &*idx.target {
+                        let var_type = if let Some(t) = self.variable_types.get(&ident.name) {
+                            t.clone()
+                        } else {
+                            self.get_variable_name(&ident.name)
+                                .split('_')
+                                .next()
+                                .unwrap_or("")
+                                .to_string()
+                        };
+
+                        if var_type.starts_with("List_")
+                            || var_type == "String"
+                            || var_type == "char*"
+                        {
+                            // List types and Strings are accessed differently
+                            if var_type == "String" || var_type == "char*" {
+                                format!("{}[{}]", target_expr, index_expr)
+                            } else {
+                                format!("{}.data[{}]", target_expr, index_expr)
+                            }
+                        } else {
+                            format!("{}[{}]", target_expr, index_expr)
+                        }
+                    } else {
+                        // Simple array or direct identifier indexing
+                        format!("{}[{}]", target_expr, index_expr)
+                    }
                 }
             }
             parser::Expression::Assignment(assign) => {
@@ -2385,7 +2461,32 @@ impl CCodegen {
                     } else {
                         // Enum variant - qualify it with enum type
                         let qualified = self.qualify_identifier(&ident.name);
-                        code.push_str(&format!("        case {}:\n", qualified));
+
+                        // Handle bare enum variants like 'none', 'some', 'mut'
+                        let final_label = if ident.name == "none" {
+                            // Try to infer enum type from condition
+                            let cond_type = cond.split("->").next().unwrap_or("").trim();
+                            // This is a hacky way to guess the type, but sufficient for simple switches
+                            // A better way would be passing down type context
+                            if cond_type.contains("Option") {
+                                // Assume Option type
+                                // Need to extract the full type name... challenging without type table
+                                // Fallback: generate default case which is safer than wrong constant
+                                "default".to_string()
+                            } else {
+                                "default".to_string()
+                            }
+                        } else if ident.name == "mut_" {
+                            "TokenKind_mut_".to_string()
+                        } else {
+                            qualified
+                        };
+
+                        if final_label == "default" {
+                            code.push_str("        default:\n");
+                        } else {
+                            code.push_str(&format!("        case {}:\n", final_label));
+                        }
                     }
                 }
                 parser::SwitchLabel::Else(_) => {
@@ -3129,12 +3230,19 @@ Option_String blitz_read(char* path);  // Returns Option(String)
                         // Rune is uint32_t
                         "uint32_t".to_string()
                     } else {
-                        // Fallback
-                        param_type.clone()
+                        // Fallback - check if it's a struct type that needs a pointer
+                        if self.seen_types.contains(param_type)
+                            && !self.enum_types.contains(param_type)
+                            && !self.is_primitive_type(param_type)
+                        {
+                            format!("{}*", param_type)
+                        } else {
+                            param_type.clone()
+                        }
                     };
                     full_header.push_str(&format!(
-                        "typedef struct {{\n    {}* data;\n    size_t len;\n    size_t cap;\n}} {};\n\n",
-                        c_type, instance_name
+                        "typedef struct {} {{\n    {}* data;\n    size_t len;\n    size_t cap;\n}} {};\n\n",
+                        instance_name, c_type, instance_name
                     ));
                 } else if base_type == "Option" && params.len() == 1 {
                     // Option(T) -> tagged union
