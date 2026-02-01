@@ -843,41 +843,8 @@ impl CCodegen {
     /// This is not a full type inference system, just enough to disambiguate common overloads
     /// Returns type names without pointer notation (e.g., "Range" not "Range*")
     fn guess_arg_type(&self, expr: &parser::Expression) -> String {
-        match expr {
-            // Member access like first.range or second.range suggests the member's type
-            parser::Expression::Member(member) => {
-                // If accessing .range member, the type is likely Range
-                if member.member == "range" {
-                    return "Range".to_string();
-                }
-                // If accessing .span member, the type is likely Span
-                if member.member == "span" {
-                    return "Span".to_string();
-                }
-                // Default: try to guess from parent
-                self.guess_arg_type(&member.parent)
-            }
-            // Identifier - try to look up in variable mappings
-            parser::Expression::Ident(ident) => {
-                // For common identifiers, make educated guesses
-                if ident.name.contains("parser") {
-                    return "Parser".to_string();
-                }
-                if ident.name.contains("lexer") {
-                    return "Lexer".to_string();
-                }
-                "void*".to_string()
-            }
-            // Constructor gives us the type directly
-            parser::Expression::Constructor(ctor) => ctor.r#type.name.clone(),
-            // For function calls, we can't easily determine the return type without full type tracking
-            parser::Expression::Call(_call) => "void*".to_string(),
-            // Literals
-            parser::Expression::Number(_) => "Int".to_string(),
-            parser::Expression::String(_) => "String".to_string(),
-            parser::Expression::BoolLit(_) => "Bool".to_string(),
-            _ => "void*".to_string(),
-        }
+        // Use the more robust infer_expr_type which checks variable_types
+        self.infer_expr_type(expr)
     }
 
     /// Get the mangled name for a function call based on argument types
@@ -1199,12 +1166,23 @@ impl CCodegen {
         // Generate helper function to access span from tagged union
         // Span* Expression_span(Expression* expr)
 
-        // Add to forward declarations
-        let sig = format!("Span* {}_span({}* expr);", c_name, c_name);
-        self.all_functions
-            .push((format!("{}_span", c_name), sig.clone()));
+        // Add to header (inline function or prototype)
+        // We put it in header so it's available everywhere.
+        // We use static inline to avoid linker errors if included multiple times,
+        // but for now let's just use a regular function prototype in header and implementation in impl_code.
+        // Actually, since this is called from inline contexts potentially, let's put it in impl_code
+        // but ensure the prototype is in the header immediately after the struct definition.
 
-        // Add implementation
+        // Wait, self.header is where we are writing right now in generate_union.
+        // So we can just append the prototype there.
+        let sig = format!("Span* {}_span({}* expr);", c_name, c_name);
+        // Only append if not already appended (though generate_union_span_helper calls are guarded)
+        if !self.header.contains(&sig) {
+            self.header.push_str(&sig);
+            self.header.push_str("\n\n");
+        }
+
+        // Add implementation to impl_code
         let mut code = format!("Span* {}_span({}* expr) {{\n", c_name, c_name);
         code.push_str("    if (!expr) return NULL;\n");
         code.push_str(&format!("    switch (expr->tag) {{\n"));
@@ -1222,10 +1200,28 @@ impl CCodegen {
                 // But generally AST nodes store pointers or structs with span
 
                 // For variants that hold a pointer (most AST nodes)
-                code.push_str(&format!(
-                    "            return expr->data.as_{}->span;\n",
-                    label
-                ));
+                // Need to dereference if it's a pointer to struct
+                // The union field `as_Variant` is the pointer/struct itself.
+                // If it's a pointer type (e.g. BinaryOp*), we access ->span.
+                // If it's a value type (e.g. Ident), we access .span.
+
+                // We need to know if the variant type maps to a pointer.
+                let variant_type = case.r#type.as_ref().unwrap();
+                let c_type = self.map_type(variant_type);
+
+                if c_type.ends_with("*") {
+                    code.push_str(&format!(
+                        "            return expr->data.as_{}->span;\n",
+                        label
+                    ));
+                } else {
+                    // Hack for Lit - it stores value directly, but span is part of it?
+                    // Wait, Lit(T) struct has span. So if it's not a pointer, it's a struct value.
+                    code.push_str(&format!(
+                        "            return &expr->data.as_{}.span;\n",
+                        label
+                    ));
+                }
             }
         }
 
@@ -1388,7 +1384,28 @@ impl CCodegen {
                             }
                             switch_code
                         } else {
-                            let expr_code = self.generate_expression(expr, is_main);
+                            let mut expr_code = self.generate_expression(expr, is_main);
+
+                            // Auto-wrap return value if needed (Ptr -> Option)
+                            if let Some(ref ret_ty) = func.r#type {
+                                let c_ret_ty = self.map_type(ret_ty);
+                                if c_ret_ty.starts_with("Option_") {
+                                    // Check if expr_code looks like a pointer or non-option
+                                    // Heuristic: if it's not a struct literal (...) or switch result
+                                    // and not "none", we wrap it in Some
+                                    if !expr_code.contains("Option_")
+                                        && !expr_code.contains("_tag_")
+                                    {
+                                        // It might be a pointer being returned where Option is expected
+                                        // Wrap it: (Option_T){.tag = Option_T_tag_some, .value = expr}
+                                        let inner_val = expr_code.clone();
+                                        expr_code = format!(
+                                            "({}){{.tag = {}_tag_some, .value = {}}}",
+                                            c_ret_ty, c_ret_ty, inner_val
+                                        );
+                                    }
+                                }
+                            }
                             format!("return {};", expr_code)
                         }
                     }
@@ -1507,6 +1524,14 @@ impl CCodegen {
                 }
             }
         }
+        if ident_name == "mut_" {
+            // Check if TokenKind exists and has mut_ variant
+            if let Some(variants) = self.enum_variants.get("TokenKind") {
+                if variants.contains("mut_") {
+                    return "TokenKind_mut_".to_string();
+                }
+            }
+        }
 
         // Not an enum variant, return as-is
         ident_name.to_string()
@@ -1616,6 +1641,7 @@ impl CCodegen {
                     "parse_for" => return "Option_For".to_string(),
                     "parse_switch" => return "Option_Switch".to_string(),
                     "parse_switch_label" => return "Option_SwitchLabel".to_string(),
+                    "parse_member_call" => return "Option_Expression".to_string(),
 
                     // Parser literal functions
                     "parse_int_lit" => return "Option_Lit_Int".to_string(),
@@ -1777,16 +1803,42 @@ impl CCodegen {
                             // For now, use int64_t as default - this is a limitation
                             // TODO: proper type inference or pass return type context
                             let temp_var = "_switch_result";
+                            // Try to use current_return_type if available
+                            let ret_type = if let Some(ref ty) = self.current_return_type {
+                                self.map_type(ty)
+                            } else {
+                                "int64_t".to_string()
+                            };
+
                             let mut switch_code = self.generate_switch_as_statement(
                                 switch_expr,
                                 is_main,
-                                "int64_t", // Default type
+                                &ret_type,
                                 temp_var,
                             );
                             switch_code.push_str(&format!("\n    return {};", temp_var));
                             switch_code
                         } else {
-                            let expr_code = self.generate_expression(ret_expr, is_main);
+                            let mut expr_code = self.generate_expression(ret_expr, is_main);
+
+                            // Auto-wrap return value if needed (Ptr -> Option)
+                            if let Some(ref ret_ty) = self.current_return_type {
+                                let c_ret_ty = self.map_type(ret_ty);
+                                if c_ret_ty.starts_with("Option_") {
+                                    if !expr_code.contains("Option_")
+                                        && !expr_code.contains("_tag_")
+                                        && expr_code != "none"
+                                    {
+                                        // Wrap it
+                                        let inner_val = expr_code.clone();
+                                        expr_code = format!(
+                                            "({}){{.tag = {}_tag_some, .value = {}}}",
+                                            c_ret_ty, c_ret_ty, inner_val
+                                        );
+                                    }
+                                }
+                            }
+
                             format!("return {};", expr_code)
                         }
                     }
@@ -1959,13 +2011,44 @@ impl CCodegen {
                 // Generate function name
                 let func_name = &call.name;
 
+                // Try to find the function signature to guide argument generation
+                // Use the first signature found (overloading might make this inexact but it helps)
+                // CLONE the signature to avoid borrowing self while calling generate_expression later
+                let signature = self
+                    .function_signatures
+                    .get(func_name)
+                    .and_then(|sigs| sigs.first())
+                    .cloned();
+
                 // Generate arguments
                 let args: Vec<String> = call
                     .args
                     .iter()
-                    .map(|arg| {
+                    .enumerate()
+                    .map(|(i, arg)| {
                         // For now, ignore labels (named arguments) - just use the expression
-                        self.generate_expression(&arg.init, is_main)
+                        let mut arg_code = self.generate_expression(&arg.init, is_main);
+
+                        // Auto-unwrap Option -> Ptr if needed to match function signature
+                        if let Some((param_types, _)) = &signature {
+                            if i < param_types.len() {
+                                let param_type = &param_types[i];
+                                // Check if param is Ptr (ends with *) and arg is Option
+                                if param_type.ends_with("*") {
+                                    // Check if arg is Option type
+                                    let arg_type = self.infer_expr_type(&arg.init);
+                                    if arg_type.starts_with("Option_") {
+                                        // It's an Option, but we need a Ptr.
+                                        // Assume we want the value (implicit unwrap for C interop/transpilation)
+                                        // Check if we haven't already unwrapped it manually (unlikely in arg_code)
+                                        if !arg_code.ends_with(".value") {
+                                            arg_code = format!("{}.value", arg_code);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        arg_code
                     })
                     .collect();
 
@@ -2565,10 +2648,8 @@ impl CCodegen {
                             // This is a hacky way to guess the type, but sufficient for simple switches
                             // A better way would be passing down type context
                             if cond_type.contains("Option") {
-                                // Assume Option type
-                                // Need to extract the full type name... challenging without type table
-                                // Fallback: generate default case which is safer than wrong constant
-                                "default".to_string()
+                                // Assume Option type - e.g. Option_Token_tag_none
+                                format!("{}_tag_none", cond_type.replace("*", ""))
                             } else {
                                 "default".to_string()
                             }
@@ -2576,6 +2657,18 @@ impl CCodegen {
                             "TokenKind_mut_".to_string()
                         } else if ident.name == "for_" {
                             "TokenKind_for_".to_string()
+                        } else if ident.name == "some" {
+                            // Try to infer enum type from condition
+                            let cond_type = cond.split("->").next().unwrap_or("").trim();
+                            if cond_type.contains("Option") {
+                                // Assume Option type - e.g. Option_Token_tag_some
+                                format!("{}_tag_some", cond_type.replace("*", ""))
+                            } else {
+                                "default".to_string()
+                            }
+                        } else if ident.name.ends_with("_") {
+                            // Check if it's a TokenKind variant
+                            format!("TokenKind_{}", ident.name)
                         } else {
                             qualified
                         };
