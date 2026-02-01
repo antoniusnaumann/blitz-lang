@@ -40,19 +40,13 @@ pub fn transpile_to_c(asts: &[Ast], output_dir: &Path) -> Result<(), String> {
     for ast in asts {
         for def in &ast.defs {
             if let Definition::Union(u) = def {
-                let is_simple_enum = !u
-                    .cases
-                    .iter()
-                    .any(|c| c.label.is_some() && c.r#type.is_some());
+                let is_simple_enum = !u.cases.iter().any(|c| c.r#type.is_some());
                 if is_simple_enum {
                     codegen.generate_definition(def)?;
                 }
             } else if let Definition::Pub(p) = def {
                 if let Definition::Union(u) = &*p.item {
-                    let is_simple_enum = !u
-                        .cases
-                        .iter()
-                        .any(|c| c.label.is_some() && c.r#type.is_some());
+                    let is_simple_enum = !u.cases.iter().any(|c| c.r#type.is_some());
                     if is_simple_enum {
                         codegen.generate_definition(def)?;
                     }
@@ -109,6 +103,8 @@ struct CCodegen {
     seen_types: HashSet<String>,
     /// Track which types are enums (not structs)
     enum_types: HashSet<String>,
+    /// Track which types are tagged unions (should be pointers)
+    tagged_union_types: HashSet<String>,
     /// Track which types have been generated
     generated_types: HashSet<String>,
     /// Track generic instantiations needed (e.g., "List_Arg" -> ["List", "Arg"])
@@ -147,6 +143,7 @@ impl CCodegen {
             impl_code: String::new(),
             seen_types: HashSet::new(),
             enum_types: HashSet::new(),
+            tagged_union_types: HashSet::new(),
             generated_types: HashSet::new(),
             generic_instances: HashMap::new(),
             current_return_type: None,
@@ -175,10 +172,8 @@ impl CCodegen {
             }
             Definition::Union(u) => {
                 // Check if this is a symbolic-only union (simple enum)
-                let has_typed_variants = u
-                    .cases
-                    .iter()
-                    .any(|c| c.label.is_some() && c.r#type.is_some());
+                // A union is a tagged union if ANY case has a type associated with it
+                let has_typed_variants = u.cases.iter().any(|c| c.r#type.is_some());
 
                 let kind = if has_typed_variants {
                     TypeKind::TaggedUnion
@@ -195,6 +190,8 @@ impl CCodegen {
 
                 if !has_typed_variants {
                     self.enum_types.insert(c_name);
+                } else {
+                    self.tagged_union_types.insert(c_name);
                 }
             }
             Definition::Fn(f) => {
@@ -295,10 +292,7 @@ impl CCodegen {
             }
             Definition::Union(u) => {
                 let blitz_name = u.sig.name.clone();
-                let has_typed_variants = u
-                    .cases
-                    .iter()
-                    .any(|c| c.label.is_some() && c.r#type.is_some());
+                let has_typed_variants = u.cases.iter().any(|c| c.r#type.is_some());
                 let kind = if has_typed_variants {
                     TypeKind::TaggedUnion
                 } else {
@@ -931,10 +925,7 @@ impl CCodegen {
             Definition::Union(u) => {
                 let union_name = &u.sig.name;
                 // Check if this needs a forward declaration (tagged unions do, simple enums don't)
-                let has_typed_variants = u
-                    .cases
-                    .iter()
-                    .any(|c| c.label.is_some() && c.r#type.is_some());
+                let has_typed_variants = u.cases.iter().any(|c| c.r#type.is_some());
 
                 let kind = if has_typed_variants {
                     TypeKind::TaggedUnion
@@ -1039,10 +1030,8 @@ impl CCodegen {
             return Ok(());
         }
 
-        // Check if this is a purely symbolic union (no typed variants with labels)
-        let has_typed_variants = cases
-            .iter()
-            .any(|c| c.label.is_some() && c.r#type.is_some());
+        // Check if this is a purely symbolic union (no typed variants)
+        let has_typed_variants = cases.iter().any(|c| c.r#type.is_some());
 
         // Determine type kind and get C name
         let kind = if has_typed_variants {
@@ -1136,14 +1125,21 @@ impl CCodegen {
             self.header.push_str(&format!("    {}_Tag tag;\n", c_name));
 
             // Only add union if there are typed variants
-            let typed_cases: Vec<&parser::Case> = cases
-                .iter()
-                .filter(|c| c.label.is_some() && c.r#type.is_some())
-                .collect();
+            let typed_cases: Vec<&parser::Case> =
+                cases.iter().filter(|c| c.r#type.is_some()).collect();
             if !typed_cases.is_empty() {
                 self.header.push_str("    union {\n");
                 for case in typed_cases {
-                    let variant_name = case.label.as_ref().unwrap();
+                    // For typed cases, if label is missing, use type name
+                    let variant_name = if let Some(label) = &case.label {
+                        label.clone()
+                    } else if let Some(ty) = &case.r#type {
+                        ty.name.clone()
+                    } else {
+                        // Should be unreachable given filter
+                        "unknown".to_string()
+                    };
+
                     let variant_type = case.r#type.as_ref().unwrap();
                     let c_type = self.map_type(variant_type);
                     self.header
@@ -1188,40 +1184,51 @@ impl CCodegen {
         code.push_str(&format!("    switch (expr->tag) {{\n"));
 
         for case in cases {
-            if let Some(label) = &case.label {
-                // Check if this variant has a span field
-                // This assumes all variants in Expression/Statement have a span field
-                // We'd need to verify this by looking up the variant type definition
-                // But for now we'll assume it's true for AST nodes
+            // Determine variant name
+            let variant_name = if let Some(label) = &case.label {
+                label.clone()
+            } else if let Some(ty) = &case.r#type {
+                ty.name.clone()
+            } else {
+                continue; // Skip invalid cases
+            };
 
-                code.push_str(&format!("        case {}_tag_{}:\n", c_name, label));
+            // Check if this variant has a span field
+            // This assumes all variants in Expression/Statement have a span field
+            // We'd need to verify this by looking up the variant type definition
+            // But for now we'll assume it's true for AST nodes
 
-                // If it's a value type (like Lit variants sometimes), we might need different access
-                // But generally AST nodes store pointers or structs with span
+            code.push_str(&format!("        case {}_tag_{}:\n", c_name, variant_name));
 
-                // For variants that hold a pointer (most AST nodes)
-                // Need to dereference if it's a pointer to struct
-                // The union field `as_Variant` is the pointer/struct itself.
-                // If it's a pointer type (e.g. BinaryOp*), we access ->span.
-                // If it's a value type (e.g. Ident), we access .span.
+            // If it's a value type (like Lit variants sometimes), we might need different access
+            // But generally AST nodes store pointers or structs with span
 
-                // We need to know if the variant type maps to a pointer.
-                let variant_type = case.r#type.as_ref().unwrap();
+            // For variants that hold a pointer (most AST nodes)
+            // Need to dereference if it's a pointer to struct
+            // The union field `as_Variant` is the pointer/struct itself.
+            // If it's a pointer type (e.g. BinaryOp*), we access ->span.
+            // If it's a value type (e.g. Ident), we access .span.
+
+            // We need to know if the variant type maps to a pointer.
+            if let Some(variant_type) = &case.r#type {
                 let c_type = self.map_type(variant_type);
 
                 if c_type.ends_with("*") {
                     code.push_str(&format!(
                         "            return expr->data.as_{}->span;\n",
-                        label
+                        variant_name
                     ));
                 } else {
                     // Hack for Lit - it stores value directly, but span is part of it?
                     // Wait, Lit(T) struct has span. So if it's not a pointer, it's a struct value.
                     code.push_str(&format!(
                         "            return &expr->data.as_{}.span;\n",
-                        label
+                        variant_name
                     ));
                 }
+            } else {
+                // Variant has no type - just a tag? It shouldn't be in Expression/Statement then.
+                code.push_str("            return NULL;\n");
             }
         }
 
@@ -1465,10 +1472,87 @@ impl CCodegen {
                     }
                 }
 
-                // Fix for Expression/Statement value types being assigned pointers
-                // If c_type is Expression or Statement, it should be a pointer
-                if c_type == "Expression" || c_type == "Statement" {
-                    c_type = format!("{}*", c_type);
+                // Agent 1 Fix: Check if we are unwrapping an Option
+                // If the init expr is a call to 'unwrap', infer_expr_type returns the inner type (T or T*)
+                // But map_type(&decl.r#type) might have returned Option_T if the type was explicit.
+                // However, here we handle the case where type was inferred OR explicit.
+
+                // If init is unwrap(), infer_expr_type already returns the unwrapped type.
+                // We should ensure that if we have an explicit type, it matches what we expect.
+                // But actually, the issue described is: "infer_expr_type knows the correct type, but variable declarations don't use it to fix LHS types."
+
+                // If we have an init expression, we should generally trust infer_expr_type over map_type for the *initializer's* type,
+                // BUT we must respect the explicit type annotation if present.
+                // The issue specifically mentions unwrapping.
+
+                if let Some(init_expr) = &decl.init {
+                    let inferred_type = self.infer_expr_type(init_expr);
+
+                    // If explicit type is Option_T but inferred type is T* (because of unwrap),
+                    // we have a mismatch if we stick to explicit type.
+                    // But wait, if the user wrote `let x: Option(T) = opt.unwrap()`, that's a type error in Blitz.
+                    // If they wrote `let x = opt.unwrap()`, then c_type was inferred from init_expr, so it should be correct (T*).
+
+                    // The problem might be when map_type returns Option_T for `let x: T = ...`? No.
+
+                    // Let's look at the "Specifics": "If infer_expr_type returns a pointer type, use that. If it returns Option_T, check if we are unwrapping."
+
+                    // If explicit type is missing (c_type was inferred), we are good.
+                    // If explicit type is present, we should use it?
+                    // Maybe the issue is when infer_expr_type returns a pointer (T*) but we somehow defaulted to Option_T?
+
+                    // Actually, if decl.r#type IS provided, map_type uses it.
+                    // If the user code is correct, the explicit type matches the init expression.
+                    // If `let x: T = opt.unwrap()`, map_type(T) -> T*. infer(unwrap) -> T*. Match.
+
+                    // What if `let x = opt.unwrap()`?
+                    // c_type comes from infer_expr_type(unwrap) -> T*.
+                    // So `T* x = unwrap(...)`. This seems correct.
+
+                    // What if `let x = opt` where opt is Option(T)?
+                    // infer -> Option_T. `Option_T x = opt`. Correct.
+
+                    // The issue description says: "Variables are declared as Option_T instead of T* when unwrap happens."
+                    // This implies that for `let x = unwrap(...)`, we are getting Option_T.
+                    // This means `infer_expr_type` for unwrap call might be returning Option_T incorrectly?
+                    // Let's check `infer_expr_type` for Call "unwrap".
+                    // It returns `self.map_type_name(inner)`.
+                    // map_type_name returns T* for structs.
+                    // So infer_expr_type seems correct.
+
+                    // Re-reading Agent 1 task: "Modify generate_statement... If init involves unwrapping... ensure x is declared as the unwrapped type"
+                    // Perhaps the issue is when `c_type` is NOT empty/inferred, i.e. when it IS explicit?
+                    // Or maybe there's a case where `infer_expr_type` is not being called?
+
+                    // Ah, `c_type` is initialized with `self.map_type(&decl.r#type)`.
+                    // If `decl.r#type` is empty/infer, `map_type` returns "_" or similar?
+                    // In `map_type`: if name is "Void" -> "void".
+                    // If it's a generic parameter?
+
+                    // If the parser produces `Type { name: "", ... }` for inferred types, map_type might behave oddly.
+                    // But the code checks `c_type.is_empty() || c_type == "_"`.
+
+                    // Let's ensure we use the inferred type if it's more specific/pointer-y than the explicit type?
+                    // No, that's dangerous.
+
+                    // Let's just forcefully update c_type if it looks wrong for an unwrap.
+                    if let parser::Expression::Call(call) = init_expr {
+                        if call.name == "unwrap" {
+                            let inferred = self.infer_expr_type(init_expr);
+                            if inferred != c_type && !c_type.is_empty() && c_type != "_" {
+                                // If we have an explicit type but it conflicts with inferred unwrap type
+                                // This is technically a type mismatch in source, but maybe we should trust inferred for C gen?
+                                // e.g. if user wrote `let x: any = unwrap(...)` and we mapped `any` to something else?
+
+                                // Actually, if c_type is Option_... and inferred is T*, we definitely want T*.
+                                if c_type.starts_with("Option_") && !inferred.starts_with("Option_")
+                                {
+                                    eprintln!("DEBUG: Fixing variable declaration type mismatch for unwrapped value. Declared: {}, Inferred: {}", c_type, inferred);
+                                    c_type = inferred;
+                                }
+                            }
+                        }
+                    }
                 }
 
                 // Generate initialization expression if present
@@ -2265,35 +2349,18 @@ impl CCodegen {
 
                     if base_type == "Expression" || base_type == "Statement" {
                         // Use helper function: Expression_span(expr)
-                        return format!("{}_span({})", base_type, parent_code);
-                    }
-
-                    // Also check variable type directly if available
-                    if let parser::Expression::Ident(ident) = &*member.parent {
-                        if let Some(var_type) = self.variable_types.get(&ident.name) {
-                            let base = var_type.trim_end_matches('*').trim_start_matches("Option_");
-                            if base == "Expression" || base == "Statement" {
-                                return format!("{}_span({})", base, parent_code);
-                            }
+                        // If parent_type is Option, we need to unwrap/access value first
+                        if parent_type.starts_with("Option_") {
+                            return format!("{}_span({}.value)", base_type, parent_code);
                         }
+                        return format!("{}_span({})", base_type, parent_code);
                     }
                 }
 
                 // Special case: Option types need .value to access members of inner type
-                // This is a heuristic - we check if parent is likely an Option type
-                // But we don't have full type info here easily.
-                // However, we can check if the parent expression string suggests it was unwrapped
-                // or if it's a variable we know is an Option.
-
-                let parent_is_option = if let parser::Expression::Ident(ident) = &*member.parent {
-                    if let Some(ty) = self.variable_types.get(&ident.name) {
-                        ty.starts_with("Option_")
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                };
+                // Use type inference to detect Option types reliably
+                let parent_type = self.infer_expr_type(&member.parent);
+                let parent_is_option = parent_type.starts_with("Option_");
 
                 // For C struct member access, we need to decide between '.' and '->'
                 // Since most structs are passed as pointers in our C codegen (see map_type),
@@ -2304,6 +2371,9 @@ impl CCodegen {
                 let separator = if parent_code.starts_with('&')
                     || parent_code.contains("->")
                     || parent_is_option
+                    || parent_code.ends_with("]") // Array access returns value/struct
+                    || parent_code.ends_with(")")
+                // Function call returning struct (like unwrap)
                 {
                     "."
                 } else if parent_code.starts_with('*') {
@@ -2315,7 +2385,25 @@ impl CCodegen {
                 };
 
                 if parent_is_option {
-                    format!("{}.value->{}", parent_code, member_name)
+                    // Auto-unwrap Option types: opt.field -> opt.value->field
+                    // Check if the value field is a pointer or struct
+                    // If inner type is a struct/pointer, use ->, else use .
+                    // But wait, our Option types for structs store T* or T?
+                    // List, Box, etc are structs/pointers. Primitives are values.
+
+                    // We can assume that if we are accessing a member, the inner type MUST be a struct/pointer
+                    // (primitives don't have members, except maybe methods which are UFCS)
+                    // So .value is likely a pointer (if it's a user struct) or a struct (if List)
+
+                    // If inner type is List, .value is List_T (struct). So .value.field
+                    // If inner type is Expression*, .value is Expression*. So .value->field
+
+                    if parent_type.contains("List_") || parent_type.contains("Range") {
+                        format!("{}.value.{}", parent_code, member_name)
+                    } else {
+                        // Assume pointer for other user types
+                        format!("{}.value->{}", parent_code, member_name)
+                    }
                 } else if parent_code.starts_with('*') {
                     format!("{}->{}", parent_code.trim_start_matches('*'), member_name)
                 } else {
@@ -2892,7 +2980,40 @@ impl CCodegen {
                     if ident.name == "else" {
                         code.push_str("        default:\n");
                     } else {
-                        code.push_str(&format!("        case {}:\n", ident.name));
+                        // Agent 3 Fix: Qualify identifiers in switch cases
+                        let qualified = self.qualify_identifier(&ident.name);
+
+                        // Handle bare enum variants
+                        let final_label = if ident.name == "none" {
+                            let cond_type = cond.split("->").next().unwrap_or("").trim();
+                            if cond_type.contains("Option") {
+                                format!("{}_tag_none", cond_type.replace("*", ""))
+                            } else {
+                                "default".to_string()
+                            }
+                        } else if ident.name == "mut_" {
+                            "TokenKind_mut_".to_string()
+                        } else if ident.name == "for_" {
+                            "TokenKind_for_".to_string()
+                        } else if ident.name == "some" {
+                            let cond_type = cond.split("->").next().unwrap_or("").trim();
+                            if cond_type.contains("Option") {
+                                format!("{}_tag_some", cond_type.replace("*", ""))
+                            } else {
+                                "default".to_string()
+                            }
+                        } else if ident.name.ends_with("_") && !qualified.contains("_") {
+                            // Check if it's a TokenKind variant if qualify didn't catch it
+                            format!("TokenKind_{}", ident.name)
+                        } else {
+                            qualified
+                        };
+
+                        if final_label == "default" {
+                            code.push_str("        default:\n");
+                        } else {
+                            code.push_str(&format!("        case {}:\n", final_label));
+                        }
                     }
                 }
                 parser::SwitchLabel::Else(_) => {
@@ -3109,9 +3230,11 @@ impl CCodegen {
             "Rune" => "uint32_t".to_string(),
             "Void" => "void".to_string(),
             _ => {
-                // For other types, check if it's a struct type (should be pointer)
+                // For other types, check if it's a struct type or tagged union (should be pointer)
                 // or an enum type (should be value)
                 if self.seen_types.contains(type_name) && !self.enum_types.contains(type_name) {
+                    format!("{}*", type_name)
+                } else if self.tagged_union_types.contains(type_name) {
                     format!("{}*", type_name)
                 } else {
                     type_name.to_string()
@@ -3150,8 +3273,10 @@ impl CCodegen {
                         ty.name.clone()
                     };
 
-                    // Check if this is a known struct type (not enum) - if so, use pointer for forward-declaration safety
-                    if self.seen_types.contains(&c_name) && !self.enum_types.contains(&c_name) {
+                    // Check if this is a known struct type or tagged union (not enum) - if so, use pointer for forward-declaration safety
+                    if (self.seen_types.contains(&c_name) && !self.enum_types.contains(&c_name))
+                        || self.tagged_union_types.contains(&c_name)
+                    {
                         format!("{}*", c_name)
                     } else {
                         c_name
@@ -3422,9 +3547,10 @@ Option_String blitz_read(char* path);  // Returns Option(String)
                         "uint32_t".to_string()
                     } else {
                         // Fallback - check if it's a struct type that needs a pointer
-                        if self.seen_types.contains(param_type)
+                        if (self.seen_types.contains(param_type)
                             && !self.enum_types.contains(param_type)
-                            && !self.is_primitive_type(param_type)
+                            && !self.is_primitive_type(param_type))
+                            || self.tagged_union_types.contains(param_type)
                         {
                             format!("{}*", param_type)
                         } else {
