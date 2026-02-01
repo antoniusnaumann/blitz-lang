@@ -84,7 +84,12 @@ fn some_loading(elems [T~]) Bool {
 	}
 
 	false
-} 
+}
+
+// non-copy types need to be moved explicitly if saved into a struct
+fn wrap_file(move file File) Wrapper(File) {
+	Wrapper(inner: move file) // or file.move
+}
 
 fn main() {
 	// actors by default have a zero argument constructor that initializes all fields with zero values
