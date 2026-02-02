@@ -16,6 +16,14 @@ pub fn transpile_to_c(asts: &[Ast], output_dir: &Path) -> Result<(), String> {
         }
     }
 
+    // Register variant-to-union mappings after all types have been collected.
+    // This ensures type_name_for_instance returns consistent collision-resolved names.
+    for ast in asts {
+        for def in &ast.defs {
+            codegen.register_variants(def)?;
+        }
+    }
+
     // Second pass: analyze types to find generic instantiations needed
     for ast in asts {
         for def in &ast.defs {
@@ -125,11 +133,21 @@ struct CCodegen {
     enum_variants: HashMap<String, HashSet<String>>,
     /// Track which unwrap functions need to be generated (inner_type_name)
     unwrap_needed: HashSet<String>,
+    /// Track which list append functions need to be generated (element_type_name)
+    list_append_needed: HashSet<String>,
+    /// Track which list concat functions need to be generated (element_type_name)
+    list_concat_needed: HashSet<String>,
     /// Track variable types in current function scope (variable_name -> c_type)
     variable_types: HashMap<String, String>,
     /// Track variant types to their parent tagged unions: variant_name (e.g., "Lit_Bool") -> set of union names (e.g., {"Expression"})
     /// A variant can belong to multiple unions (e.g., "Ident" is in both Expression and SwitchLabel)
     variant_to_union: HashMap<String, HashSet<String>>,
+    /// Track struct field types: struct_name -> field_name -> field_type (Blitz type name)
+    /// Used for type-aware code generation (e.g., qualifying enum variants correctly)
+    struct_field_types: HashMap<String, HashMap<String, String>>,
+    /// Track label-only variants in tagged unions: union_name -> set of label names
+    /// These are variants without associated data (e.g., "default" in SwitchLabel)
+    tagged_union_labels: HashMap<String, HashSet<String>>,
 }
 
 impl CCodegen {
@@ -164,8 +182,12 @@ impl CCodegen {
             all_functions: Vec::new(),
             enum_variants: HashMap::new(),
             unwrap_needed: HashSet::new(),
+            list_append_needed: HashSet::new(),
+            list_concat_needed: HashSet::new(),
             variable_types: HashMap::new(),
             variant_to_union: HashMap::new(),
+            struct_field_types: HashMap::new(),
+            tagged_union_labels: HashMap::new(),
         }
     }
 
@@ -176,7 +198,16 @@ impl CCodegen {
                 let c_name = self
                     .type_name_registry
                     .register_type(&s.sig.name, TypeKind::Struct);
-                self.seen_types.insert(c_name);
+                self.seen_types.insert(c_name.clone());
+
+                // Collect field types for this struct
+                let mut field_types = HashMap::new();
+                for field in &s.fields {
+                    // Store the Blitz type name for each field
+                    let field_type_name = self.type_signature(&field.r#type);
+                    field_types.insert(field.name.clone(), field_type_name);
+                }
+                self.struct_field_types.insert(c_name, field_types);
             }
             Definition::Union(u) => {
                 // Check if this is a symbolic-only union (simple enum)
@@ -197,20 +228,9 @@ impl CCodegen {
                 } else {
                     self.tagged_union_types.insert(c_name.clone());
 
-                    // Track variant types to their parent union for constructor generation
-                    for case in &u.cases {
-                        if let Some(ty) = &case.r#type {
-                            let variant_name = self.type_name_for_instance(ty);
-                            eprintln!(
-                                "DEBUG: Registering variant '{}' -> union '{}'",
-                                variant_name, c_name
-                            );
-                            self.variant_to_union
-                                .entry(variant_name)
-                                .or_insert_with(HashSet::new)
-                                .insert(c_name.clone());
-                        }
-                    }
+                    // Note: variant registration is deferred to register_variants()
+                    // which is called after all types have been collected.
+                    // This ensures type_name_for_instance returns consistent results.
                 }
             }
             Definition::Fn(f) => {
@@ -244,6 +264,66 @@ impl CCodegen {
             }
             Definition::Test(_) => {
                 // Skip tests entirely
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Register variant types to their parent unions.
+    /// This must be called AFTER all types have been collected so that
+    /// type_name_for_instance returns consistent collision-resolved names.
+    fn register_variants(&mut self, def: &Definition) -> Result<(), String> {
+        match def {
+            Definition::Union(u) => {
+                // Skip generic unions - their label-only variants (like `none` in `Option(T)`)
+                // can't be resolved without knowing the concrete type parameter
+                if !u.sig.params.is_empty() {
+                    eprintln!(
+                        "DEBUG: Skipping generic union '{}' with params {:?}",
+                        u.sig.name, u.sig.params
+                    );
+                    return Ok(());
+                }
+
+                let has_typed_variants = u.cases.iter().any(|c| c.r#type.is_some());
+                if has_typed_variants {
+                    let c_name = self
+                        .type_name_registry
+                        .register_type(&u.sig.name, TypeKind::TaggedUnion);
+
+                    // Track variant types to their parent union for constructor generation
+                    for case in &u.cases {
+                        if let Some(ty) = &case.r#type {
+                            let variant_name = self.type_name_for_instance(ty);
+                            eprintln!(
+                                "DEBUG: Registering variant '{}' -> union '{}'",
+                                variant_name, c_name
+                            );
+                            self.variant_to_union
+                                .entry(variant_name)
+                                .or_insert_with(HashSet::new)
+                                .insert(c_name.clone());
+                        } else {
+                            // This is a label-only variant (no associated data)
+                            // Track it for identifier resolution
+                            // The variant name comes from the label field
+                            if let Some(label) = &case.label {
+                                eprintln!(
+                                    "DEBUG: Registering label-only variant '{}' -> union '{}'",
+                                    label, c_name
+                                );
+                                self.tagged_union_labels
+                                    .entry(c_name.clone())
+                                    .or_insert_with(HashSet::new)
+                                    .insert(label.clone());
+                            }
+                        }
+                    }
+                }
+            }
+            Definition::Pub(p) => {
+                self.register_variants(&p.item)?;
             }
             _ => {}
         }
@@ -545,18 +625,50 @@ impl CCodegen {
     /// Get a simple type name for use in instance names
     fn type_name_for_instance(&self, ty: &Type) -> String {
         if ty.params.is_empty() {
-            // Check if this type has been renamed due to collision
-            // If there's a collision and one version is an enum, prefer the enum version
-            // for use in generic types like Option(T) and List(T)
+            // For non-generic types, check for type name collisions
             let name = &ty.name;
 
             // Check if there's a collision suffix version that's an enum
+            // This is needed for Option/List generic types when both struct and enum exist
             let suffixed_name = format!("{}_1", name);
             if self.enum_types.contains(&suffixed_name) {
-                // Prefer the enum version for generic type instantiation
+                // If both struct and enum exist with the same original name,
+                // prefer the enum for generic type instances (Option, List, etc.)
+                // because enums are passed by value while structs are passed by pointer
                 return suffixed_name;
             }
 
+            // Also check if there's a collision detected in the type registry
+            // This handles the case where we're called before enum_types is fully populated
+            if self.type_name_registry.has_collision(name) {
+                // There's a collision - for struct types that are variants of unions,
+                // we need to use the suffixed name that matches how the union was generated
+                // Look up what the struct was registered as
+                if let Some(instances) = self.type_name_registry.get_instances(name) {
+                    // The first instance is the struct (registered first),
+                    // and there may be a second instance (the enum with suffix)
+                    // For variant registration, we want the struct's name (first one)
+                    // But for consistency with header generation, we need to use what
+                    // the header generation will use
+                    if instances.len() > 1 {
+                        // There's a collision - check if this is a struct being referenced
+                        // as a union variant. In this case, the header generation will
+                        // call type_name_for_instance AFTER enum_types is populated,
+                        // so it will return the suffixed name. We should do the same.
+                        // BUT: at this point enum_types isn't populated yet!
+                        // We need to check if ANY of the instances is an enum
+                        for (c_name, kind) in instances {
+                            if *kind == TypeKind::Enum && c_name.ends_with("_1") {
+                                // There's an enum with suffix - the struct should also use suffix
+                                // since that's how the header generation will treat it
+                                return suffixed_name;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Otherwise, use the original name
             ty.name.clone()
         } else {
             format!(
@@ -771,6 +883,15 @@ impl CCodegen {
     ///    so we need to check if the variable shadows a mangled Blitz function
     /// 3. User-defined Blitz functions: variables cannot shadow these in their declaration scope
     fn mangle_variable_name(&mut self, name: &str) -> String {
+        let mangled = self.compute_mangled_name(name);
+        self.register_variable(name, &mangled);
+        mangled
+    }
+
+    /// Compute the mangled name for a variable WITHOUT registering it
+    /// This allows generating initializer expressions before the variable is registered,
+    /// which is important when the initializer contains enum variants with the same name
+    fn compute_mangled_name(&self, name: &str) -> String {
         // Check if we've already mangled this name
         if let Some(mangled) = self.variable_name_mappings.get(name) {
             return mangled.clone();
@@ -818,49 +939,29 @@ impl CCodegen {
         ];
 
         if C_KEYWORDS.contains(&name) {
-            let mangled = format!("blitz_{}", name);
-            eprintln!(
-                "DEBUG: Mangling variable '{}' -> '{}' (C keyword collision)",
-                name, mangled
-            );
-            self.variable_name_mappings
-                .insert(name.to_string(), mangled.clone());
-            return mangled;
+            return format!("blitz_{}", name);
         }
 
         // Check if this variable name matches a C stdlib function name
-        // Since we mangle all Blitz functions with C stdlib names to `blitz_<name>`,
-        // we must also mangle variables with those names to avoid shadowing
-        // For example: `let time = time()` becomes `int64_t time = blitz_time()`
-        // which is invalid C (variable shadows function). We mangle to: `int64_t time_var = blitz_time()`
         if Self::is_reserved_c_name(name) {
-            let mangled = format!("{}_var", name);
-            eprintln!(
-                "DEBUG: Mangling variable '{}' -> '{}' (would shadow 'blitz_{}' function)",
-                name, mangled, name
-            );
-            self.variable_name_mappings
-                .insert(name.to_string(), mangled.clone());
-            return mangled;
+            return format!("{}_var", name);
         }
 
         // Check if this variable name matches any user-defined Blitz function
-        // This prevents: int64_t func_name = func_name()
         if self.function_signatures.contains_key(name) {
-            let mangled = format!("{}_var", name);
-            eprintln!(
-                "DEBUG: Mangling variable '{}' -> '{}' (shadows Blitz function)",
-                name, mangled
-            );
-            self.variable_name_mappings
-                .insert(name.to_string(), mangled.clone());
-            return mangled;
+            return format!("{}_var", name);
         }
 
         // No collision, use original name
-        self.variable_name_mappings
-            .insert(name.to_string(), name.to_string());
         name.to_string()
+    }
+
+    /// Register a variable name mapping
+    fn register_variable(&mut self, original_name: &str, mangled_name: &str) {
+        if !self.variable_name_mappings.contains_key(original_name) {
+            self.variable_name_mappings
+                .insert(original_name.to_string(), mangled_name.to_string());
+        }
     }
 
     /// Get the C name for a variable, returning the mangled version if it was previously mangled
@@ -1403,6 +1504,9 @@ impl CCodegen {
         ));
 
         // Generate function body from statements
+        // First, pre-analyze declarations with empty lists to infer their types from usage
+        self.preanalyze_empty_lists(&func.body);
+
         let body_len = func.body.len();
         for (i, stmt) in func.body.iter().enumerate() {
             let is_last = i == body_len - 1;
@@ -1443,29 +1547,88 @@ impl CCodegen {
                                 switch_code.push_str(&format!("\n    return {};", temp_var));
                             }
                             switch_code
-                        } else {
-                            let mut expr_code = self.generate_expression(expr, is_main);
+                        } else if let parser::Expression::BinaryOp(binop) = expr {
+                            // Check if this is an if-else expression (If else Block/If)
+                            if matches!(binop.op, parser::Operator::Else)
+                                && matches!(&*binop.left, parser::Expression::If(_))
+                            {
+                                // This is an if-else that needs to be the final expression
+                                // Generate it as if-else with returns in each branch
+                                let ret_type = if let Some(ref ty) = func.r#type {
+                                    self.map_type(ty)
+                                } else {
+                                    "void".to_string()
+                                };
+                                self.generate_if_else_with_returns(
+                                    &binop.left,
+                                    &binop.right,
+                                    &ret_type,
+                                    is_main,
+                                )
+                            } else {
+                                // Other binary op - regular handling
+                                let mut expr_code = self.generate_expression(expr, is_main);
 
-                            // Auto-wrap return value if needed (Ptr -> Option)
-                            if let Some(ref ret_ty) = func.r#type {
-                                let c_ret_ty = self.map_type(ret_ty);
-                                if c_ret_ty.starts_with("Option_") {
-                                    // Check if the expression already returns an Option type
-                                    let expr_type = self.infer_expr_type(expr);
-
-                                    // Only wrap if the expression doesn't already return an Option
-                                    if !expr_type.starts_with("Option_") {
-                                        // It might be a pointer being returned where Option is expected
-                                        // Wrap it: (Option_T){.tag = Option_T_tag_some, .value = expr}
-                                        let inner_val = expr_code.clone();
-                                        expr_code = format!(
-                                            "({}){{.tag = {}_tag_some, .value = {}}}",
-                                            c_ret_ty, c_ret_ty, inner_val
-                                        );
+                                if let Some(ref ret_ty) = func.r#type {
+                                    let c_ret_ty = self.map_type(ret_ty);
+                                    if c_ret_ty.starts_with("Option_") {
+                                        let expr_type = self.infer_expr_type(expr);
+                                        if !expr_type.starts_with("Option_") {
+                                            let inner_val = expr_code.clone();
+                                            expr_code = format!(
+                                                "({}){{.tag = {}_tag_some, .value = {}}}",
+                                                c_ret_ty, c_ret_ty, inner_val
+                                            );
+                                        }
                                     }
                                 }
+                                format!("return {};", expr_code)
                             }
-                            format!("return {};", expr_code)
+                        } else {
+                            // Check if it's a noreturn call like todo() or panic()
+                            let is_noreturn_call = matches!(expr, parser::Expression::Call(call) 
+                                if matches!(call.name.as_str(), "todo" | "panic" | "unreachable" | "assert"));
+
+                            // Check if it's a control flow expression that shouldn't be wrapped in return
+                            let is_control_flow = matches!(
+                                expr,
+                                parser::Expression::While(_)
+                                    | parser::Expression::For(_)
+                                    | parser::Expression::If(_)
+                            );
+
+                            if is_noreturn_call || is_control_flow {
+                                // For noreturn functions and control flow, just generate without return
+                                let expr_code = self.generate_expression(expr, is_main);
+                                if is_control_flow {
+                                    expr_code // Control flow doesn't need semicolon
+                                } else {
+                                    format!("{};", expr_code)
+                                }
+                            } else {
+                                let mut expr_code = self.generate_expression(expr, is_main);
+
+                                // Auto-wrap return value if needed (Ptr -> Option)
+                                if let Some(ref ret_ty) = func.r#type {
+                                    let c_ret_ty = self.map_type(ret_ty);
+                                    if c_ret_ty.starts_with("Option_") {
+                                        // Check if the expression already returns an Option type
+                                        let expr_type = self.infer_expr_type(expr);
+
+                                        // Only wrap if the expression doesn't already return an Option
+                                        if !expr_type.starts_with("Option_") {
+                                            // It might be a pointer being returned where Option is expected
+                                            // Wrap it: (Option_T){.tag = Option_T_tag_some, .value = expr}
+                                            let inner_val = expr_code.clone();
+                                            expr_code = format!(
+                                                "({}){{.tag = {}_tag_some, .value = {}}}",
+                                                c_ret_ty, c_ret_ty, inner_val
+                                            );
+                                        }
+                                    }
+                                }
+                                format!("return {};", expr_code)
+                            }
                         }
                     }
                     _ => self.generate_statement(stmt, is_main),
@@ -1493,6 +1656,12 @@ impl CCodegen {
                     return self.generate_switch_as_pure_statement(switch_expr, is_main);
                 }
 
+                // Special handling for standalone if expressions (without else)
+                // When used as a statement, generate a simple if statement, not a statement expression
+                if let parser::Expression::If(if_expr) = expr {
+                    return self.generate_if_as_pure_statement(if_expr, is_main);
+                }
+
                 let expr_code = self.generate_expression(expr, is_main);
                 // Control flow statements and return don't need semicolons
                 if matches!(
@@ -1511,15 +1680,27 @@ impl CCodegen {
             parser::Statement::Declaration(decl) => {
                 // Generate variable declaration: <type> <name> = <init_expr>;
                 let mut c_type = self.map_type(&decl.r#type);
-                // Mangle variable name if it collides with C stdlib
-                let var_name = self.mangle_variable_name(&decl.name);
+
+                // IMPORTANT: We compute the variable name but do NOT register it yet.
+                // This is because the initializer expression may contain enum variants
+                // that have the same name as the variable (e.g., `let type = if has(parser, type) {...}`)
+                // If we register the variable first, the enum variant `type` would be seen
+                // as the variable, not as `TokenKind_type`.
+                let var_name = self.compute_mangled_name(&decl.name);
 
                 // If type is empty, "_", or a generic type parameter (single uppercase letter),
                 // try to infer from initialization expression
                 let is_generic_param =
                     c_type.len() == 1 && c_type.chars().next().map_or(false, |c| c.is_uppercase());
                 if c_type.is_empty() || c_type == "_" || is_generic_param {
-                    if let Some(init_expr) = &decl.init {
+                    // First check if preanalysis determined the type (for empty lists)
+                    if let Some(preanalyzed_type) = self.variable_types.get(&decl.name) {
+                        c_type = preanalyzed_type.clone();
+                        eprintln!(
+                            "DEBUG: Using preanalyzed type '{}' for variable '{}'",
+                            c_type, decl.name
+                        );
+                    } else if let Some(init_expr) = &decl.init {
                         c_type = self.infer_expr_type(init_expr);
                         eprintln!(
                             "DEBUG: Inferred type '{}' for variable '{}'",
@@ -1618,6 +1799,8 @@ impl CCodegen {
                 if let Some(init_expr) = &decl.init {
                     // Special handling for switch expressions in assignment context
                     if let parser::Expression::Switch(switch_expr) = init_expr {
+                        // Register the variable before returning
+                        self.register_variable(&decl.name, &var_name);
                         // Transform switch expression to statement form with temp variable
                         return self.generate_switch_as_statement(
                             switch_expr,
@@ -1627,18 +1810,218 @@ impl CCodegen {
                         );
                     }
 
+                    // Special handling for empty list literals - use the declared type
+                    if let parser::Expression::List(list) = init_expr {
+                        if list.elems.is_empty() {
+                            // Register the variable before returning
+                            self.register_variable(&decl.name, &var_name);
+                            // Generate empty list with correct type from declaration
+                            self.variable_types.insert(var_name.clone(), c_type.clone());
+                            return format!(
+                                "{} {} = ({}){{{}.data = NULL, .len = 0, .cap = 0}};",
+                                c_type, var_name, c_type, ""
+                            );
+                        }
+                    }
+
+                    // Generate the initializer BEFORE registering the variable
+                    // This is important for cases like `let type = if has(parser, type) {...}`
+                    // where `type` in the condition should be qualified as `TokenKind_type`
                     let init_code = self.generate_expression(init_expr, is_main);
+
+                    // NOW register the variable (after init_code is generated)
+                    self.register_variable(&decl.name, &var_name);
+
                     // Track variable type for type inference
                     self.variable_types.insert(var_name.clone(), c_type.clone());
                     format!("{} {} = {};", c_type, var_name, init_code)
                 } else {
                     // Declaration without initialization
+                    // Register the variable
+                    self.register_variable(&decl.name, &var_name);
                     // Track variable type for type inference
                     self.variable_types.insert(var_name.clone(), c_type.clone());
                     format!("{} {};", c_type, var_name)
                 }
                 // Note: is_mut is semantic only in Blitz, not represented in C
             }
+        }
+    }
+
+    /// Pre-analyze declarations with empty lists to infer their types from usage
+    /// This scans the function body for patterns like `var ++= Constructor(...)` to determine list element types
+    fn preanalyze_empty_lists(&mut self, stmts: &[parser::Statement]) {
+        // First, collect all declarations with empty list initializers
+        let mut empty_list_vars: HashMap<String, ()> = HashMap::new();
+
+        for stmt in stmts {
+            if let parser::Statement::Declaration(decl) = stmt {
+                if let Some(init) = &decl.init {
+                    if let parser::Expression::List(list) = init {
+                        if list.elems.is_empty() {
+                            eprintln!(
+                                "DEBUG preanalyze_empty_lists: found empty list declaration '{}'",
+                                decl.name
+                            );
+                            empty_list_vars.insert(decl.name.clone(), ());
+                        }
+                    }
+                }
+            }
+        }
+
+        if empty_list_vars.is_empty() {
+            return;
+        }
+
+        eprintln!(
+            "DEBUG preanalyze_empty_lists: {} empty list vars to analyze",
+            empty_list_vars.len()
+        );
+
+        // Now scan for usages that tell us the element type
+        self.analyze_list_usage_in_stmts(stmts, &empty_list_vars);
+    }
+
+    /// Recursively scan statements for list usage patterns
+    fn analyze_list_usage_in_stmts(
+        &mut self,
+        stmts: &[parser::Statement],
+        empty_list_vars: &HashMap<String, ()>,
+    ) {
+        for stmt in stmts {
+            match stmt {
+                parser::Statement::Expression(expr) => {
+                    self.analyze_list_usage_in_expr(expr, empty_list_vars);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Analyze an expression to find list element types from usage patterns
+    fn analyze_list_usage_in_expr(
+        &mut self,
+        expr: &parser::Expression,
+        empty_list_vars: &HashMap<String, ()>,
+    ) {
+        match expr {
+            parser::Expression::Assignment(assign) => {
+                // Look for patterns like: cases ++= SwitchCase(...)
+                // This parses as Assignment { left: cases, right: BinaryOp(Concat, cases, SwitchCase(...)) }
+                if let parser::Lval::Ident(lval_ident) = &assign.left {
+                    eprintln!(
+                        "DEBUG analyze_list_usage: found assignment to '{}'",
+                        lval_ident.name
+                    );
+                    if empty_list_vars.contains_key(&lval_ident.name) {
+                        eprintln!(
+                            "DEBUG analyze_list_usage: '{}' is in empty_list_vars",
+                            lval_ident.name
+                        );
+                        // Check if RHS is a concat operation (from ++=)
+                        if let parser::Expression::BinaryOp(binop) = &*assign.right {
+                            eprintln!(
+                                "DEBUG analyze_list_usage: RHS is BinaryOp, op = {:?}",
+                                binop.op
+                            );
+                            if matches!(binop.op, parser::Operator::Concat) {
+                                // Check if the right side of concat is a constructor
+                                if let parser::Expression::Constructor(ctor) = &*binop.right {
+                                    let elem_type = self.type_name_for_instance(&ctor.r#type);
+                                    let list_type = format!("List_{}", elem_type);
+                                    eprintln!(
+                                        "DEBUG preanalyze_empty_lists: variable '{}' concat-assigned with constructor '{}', inferred type '{}'",
+                                        lval_ident.name, elem_type, list_type
+                                    );
+                                    self.variable_types
+                                        .insert(lval_ident.name.clone(), list_type);
+                                }
+                                // Also check if right side is a direct constructor (for = concat case)
+                                else if let parser::Expression::Constructor(ctor) = &*binop.left {
+                                    let elem_type = self.type_name_for_instance(&ctor.r#type);
+                                    let list_type = format!("List_{}", elem_type);
+                                    eprintln!(
+                                        "DEBUG preanalyze_empty_lists: variable '{}' concat with constructor '{}', inferred type '{}'",
+                                        lval_ident.name, elem_type, list_type
+                                    );
+                                    self.variable_types
+                                        .insert(lval_ident.name.clone(), list_type);
+                                }
+                                // Use type inference for other expressions (calls, member access, etc.)
+                                else {
+                                    let inferred = self.infer_expr_type(&binop.right);
+                                    // If the inferred type is Option_T, unwrap to get T
+                                    let elem_type =
+                                        if let Some(inner) = inferred.strip_prefix("Option_") {
+                                            inner.to_string()
+                                        } else {
+                                            inferred.trim_end_matches('*').to_string()
+                                        };
+                                    if elem_type != "int64_t" && elem_type != "void" {
+                                        let list_type = format!("List_{}", elem_type);
+                                        eprintln!(
+                                            "DEBUG preanalyze_empty_lists: variable '{}' concat-assigned with inferred elem type '{}', list type '{}'",
+                                            lval_ident.name, elem_type, list_type
+                                        );
+                                        self.variable_types
+                                            .insert(lval_ident.name.clone(), list_type);
+                                    }
+                                }
+                            }
+                        }
+                        // Direct constructor assignment (rare but possible)
+                        else if let parser::Expression::Constructor(ctor) = &*assign.right {
+                            let elem_type = self.type_name_for_instance(&ctor.r#type);
+                            let list_type = format!("List_{}", elem_type);
+                            eprintln!(
+                                "DEBUG preanalyze_empty_lists: variable '{}' assigned constructor '{}', inferred type '{}'",
+                                lval_ident.name, elem_type, list_type
+                            );
+                            self.variable_types
+                                .insert(lval_ident.name.clone(), list_type);
+                        }
+                    }
+                }
+            }
+            parser::Expression::BinaryOp(binop) => {
+                // Recursively analyze
+                self.analyze_list_usage_in_expr(&binop.left, empty_list_vars);
+                self.analyze_list_usage_in_expr(&binop.right, empty_list_vars);
+            }
+            parser::Expression::While(w) => {
+                // Scan the while body
+                self.analyze_list_usage_in_stmts(&w.body, empty_list_vars);
+            }
+            parser::Expression::For(for_expr) => {
+                // Scan the for body
+                self.analyze_list_usage_in_stmts(&for_expr.body, empty_list_vars);
+            }
+            parser::Expression::If(if_expr) => {
+                // If only has cond and body; else is handled via BinaryOp::Else
+                self.analyze_list_usage_in_stmts(&if_expr.body, empty_list_vars);
+            }
+            parser::Expression::Block(stmts) => {
+                // Block is just Vec<Statement>
+                self.analyze_list_usage_in_stmts(stmts, empty_list_vars);
+            }
+            parser::Expression::Ident(ident) => {
+                // Check if this identifier is an empty list variable being returned
+                // In that case, we should infer its type from the function return type
+                if empty_list_vars.contains_key(&ident.name) {
+                    if let Some(ref ret_type) = self.current_return_type {
+                        let mapped = self.map_type(ret_type);
+                        if mapped.starts_with("List_") {
+                            eprintln!(
+                                "DEBUG preanalyze_empty_lists: variable '{}' is returned, inferred type '{}' from return type",
+                                ident.name, mapped
+                            );
+                            self.variable_types.insert(ident.name.clone(), mapped);
+                        }
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -1696,7 +2079,24 @@ impl CCodegen {
         }
 
         // Check all enum types to see if this identifier is a variant
+        // IMPORTANT: Prioritize TokenKind since many variants (concat, add, sub, etc.)
+        // exist in both TokenKind and Operator/Assignment, and TokenKind is more common
+        // in the lexer context where these ambiguities arise
+        if let Some(variants) = self.enum_variants.get("TokenKind") {
+            if variants.contains(ident_name) {
+                eprintln!(
+                    "DEBUG qualify_identifier: '{}' found in enum 'TokenKind', returning '{}'",
+                    ident_name,
+                    format!("TokenKind_{}", ident_name)
+                );
+                return format!("TokenKind_{}", ident_name);
+            }
+        }
+        // Then check other enums
         for (enum_name, variants) in &self.enum_variants {
+            if enum_name == "TokenKind" {
+                continue; // Already checked
+            }
             if variants.contains(ident_name) {
                 eprintln!(
                     "DEBUG qualify_identifier: '{}' found in enum '{}', returning '{}'",
@@ -1804,6 +2204,17 @@ impl CCodegen {
                 }
             }
             parser::Expression::Call(call) => {
+                // Handle noreturn functions that return void
+                if call.name == "panic" || call.name == "todo" {
+                    return "void".to_string();
+                }
+
+                // Handle err() which also returns void in parser context
+                if call.name == "err" && call.args.len() == 2 {
+                    // err(parser, msg) is a void function
+                    return "void".to_string();
+                }
+
                 // Special handling for unwrap - needs to infer from argument type
                 if call.name == "unwrap" && !call.args.is_empty() {
                     let arg_type = self.infer_expr_type(&call.args[0].init);
@@ -2012,6 +2423,22 @@ impl CCodegen {
                     "path" => return "char*".to_string(),
                     "name" => return "char*".to_string(),
                     "kind" => return "TokenKind".to_string(),
+                    // List fields
+                    "args" => return "List_CallArg".to_string(),
+                    "elems" => return "List_Expression".to_string(),
+                    "cases" => {
+                        // Could be List_SwitchCase or List_Case depending on context
+                        let parent_type = self.infer_expr_type(&member.parent);
+                        if parent_type.contains("Switch") {
+                            return "List_SwitchCase".to_string();
+                        } else if parent_type.contains("Union") {
+                            return "List_Case".to_string();
+                        }
+                        return "List_SwitchCase".to_string();
+                    }
+                    "body" => return "List_Statement".to_string(),
+                    "params" => return "List_Arg".to_string(),
+                    "fields" => return "List_Field".to_string(),
                     "value" => {
                         // For Option types, return the inner type
                         let parent_type = self.infer_expr_type(&member.parent);
@@ -2024,10 +2451,34 @@ impl CCodegen {
                     _ => {}
                 }
 
+                // Try to infer parent type and look up field type from struct_field_types
+                let parent_type = self.infer_expr_type(&member.parent);
+                // Strip pointer notation to get struct name
+                let struct_name = parent_type.trim_end_matches('*');
+                if let Some(fields) = self.struct_field_types.get(struct_name) {
+                    if let Some(field_type) = fields.get(member_name) {
+                        return field_type.clone();
+                    }
+                }
+
                 // Default: can't infer member type
                 "int64_t".to_string()
             }
             parser::Expression::Ident(ident) => {
+                // Special case: 'none' is an Option literal that we can't type without context
+                // Return a placeholder that will hopefully be corrected by context
+                if ident.name == "none" {
+                    // If we have a current return type that's Option, use that
+                    if let Some(ref ret_ty) = self.current_return_type {
+                        let mapped = self.map_type(ret_ty);
+                        if mapped.starts_with("Option_") {
+                            return mapped;
+                        }
+                    }
+                    // Otherwise return a placeholder
+                    return "Option_void".to_string();
+                }
+
                 // Look up identifier type in variable types map
                 if let Some(var_type) = self.variable_types.get(&ident.name) {
                     return var_type.clone();
@@ -2039,7 +2490,18 @@ impl CCodegen {
                 }
 
                 // Check if this identifier is an enum variant
+                // Prioritize TokenKind since it's the most common case in the lexer
+                // and many TokenKind variants have the same name as Operator/Assignment variants
+                if let Some(variants) = self.enum_variants.get("TokenKind") {
+                    if variants.contains(&ident.name) {
+                        return "TokenKind".to_string();
+                    }
+                }
+                // Then check other enums
                 for (enum_name, variants) in &self.enum_variants {
+                    if enum_name == "TokenKind" {
+                        continue; // Already checked
+                    }
                     if variants.contains(&ident.name) {
                         return enum_name.clone();
                     }
@@ -2086,6 +2548,23 @@ impl CCodegen {
                                     // This is an Option of an expression variant, unify to Option_Expression
                                     return "Option_Expression".to_string();
                                 }
+
+                                // Check if this is an Option of a Definition variant
+                                // Definition variants: Struct, Union, Actor, Alias, Fn, Test, Pub
+                                let definition_variants = [
+                                    "Option_Struct",
+                                    "Option_Union",
+                                    "Option_Actor",
+                                    "Option_Alias",
+                                    "Option_Fn",
+                                    "Option_Test",
+                                    "Option_Pub",
+                                ];
+                                if definition_variants.iter().any(|v| inferred == *v) {
+                                    // This is an Option of a definition variant, unify to Option_Definition
+                                    return "Option_Definition".to_string();
+                                }
+
                                 return inferred;
                             }
                         }
@@ -2126,10 +2605,225 @@ impl CCodegen {
                     }
                 }
 
+                // Check if all elements are constructors
+                let all_constructors = list
+                    .elems
+                    .iter()
+                    .all(|e| matches!(e, parser::Expression::Constructor(_)));
+                if all_constructors && !list.elems.is_empty() {
+                    if let parser::Expression::Constructor(first_ctor) = &list.elems[0] {
+                        let elem_type = self.type_name_for_instance(&first_ctor.r#type);
+                        return format!("List_{}", elem_type);
+                    }
+                }
+
                 // Fallback to generic list
                 "List_Int".to_string()
             }
+            parser::Expression::If(if_expr) => {
+                // Standalone if (no else) returns Option<T> where T is the body's result type
+                // Try to infer T from the last expression in the body
+                if let Some(parser::Statement::Expression(last_expr)) = if_expr.body.last() {
+                    let body_type = self.infer_expr_type(last_expr);
+                    // Wrap in Option type
+                    if body_type.starts_with("Option_") {
+                        return body_type;
+                    } else if body_type == "void" || body_type == "int64_t" {
+                        // For void or int64_t, the if is likely used as a statement
+                        return "void".to_string();
+                    } else {
+                        // The result is Option<T>
+                        let base = body_type.trim_end_matches('*');
+                        return format!("Option_{}", base);
+                    }
+                }
+                // If body is empty or has no expression, treat as void
+                "void".to_string()
+            }
+            parser::Expression::BinaryOp(binop) if matches!(binop.op, parser::Operator::Else) => {
+                // If-else expression: infer from the then body
+                if let parser::Expression::If(if_expr) = &*binop.left {
+                    if let Some(parser::Statement::Expression(last_expr)) = if_expr.body.last() {
+                        return self.infer_expr_type(last_expr);
+                    }
+                }
+                // Fallback: try the else branch
+                self.infer_expr_type(&binop.right)
+            }
+            parser::Expression::Index(idx) => {
+                // Indexing into a List_T returns T*
+                let target_type = self.infer_expr_type(&idx.target);
+                if let Some(elem_type) = target_type.strip_prefix("List_") {
+                    // List_Token[i] returns Token*
+                    format!("{}*", elem_type)
+                } else if target_type == "char*" || target_type == "String" {
+                    // String indexing returns a character
+                    "uint32_t".to_string()
+                } else {
+                    // Unknown indexing, fallback to the target type
+                    target_type
+                }
+            }
             _ => "int64_t".to_string(), // Fallback for complex expressions
+        }
+    }
+
+    /// Infer the result type of an if-else expression
+    fn infer_if_else_result_type(
+        &self,
+        then_body: &[parser::Statement],
+        else_expr: &parser::Expression,
+    ) -> String {
+        // Try to infer from the last expression of the then body
+        if let Some(parser::Statement::Expression(expr)) = then_body.last() {
+            let then_type = self.infer_expr_type(expr);
+            if then_type != "int64_t" {
+                return then_type;
+            }
+        }
+
+        // Try to infer from the else body
+        match else_expr {
+            parser::Expression::Block(stmts) => {
+                if let Some(parser::Statement::Expression(expr)) = stmts.last() {
+                    return self.infer_expr_type(expr);
+                }
+            }
+            _ => return self.infer_expr_type(else_expr),
+        }
+
+        "int64_t".to_string()
+    }
+
+    /// Generate the result expression from a block of statements
+    /// Returns the last expression as a string
+    fn generate_block_result(&mut self, stmts: &[parser::Statement], is_main: bool) -> String {
+        if stmts.is_empty() {
+            return "(void)0".to_string();
+        }
+
+        // Generate all but the last statement as side effects
+        let mut result = String::new();
+        for stmt in stmts.iter().take(stmts.len().saturating_sub(1)) {
+            let stmt_code = self.generate_statement(stmt, is_main);
+            result.push_str(&format!("{} ", stmt_code));
+        }
+
+        // The last statement is the result
+        if let Some(last_stmt) = stmts.last() {
+            match last_stmt {
+                parser::Statement::Expression(expr) => {
+                    if result.is_empty() {
+                        return self.generate_expression(expr, is_main);
+                    } else {
+                        let expr_code = self.generate_expression(expr, is_main);
+                        // Use statement expression for multi-statement blocks
+                        return format!("({{ {}{} }})", result, expr_code);
+                    }
+                }
+                _ => {
+                    let stmt_code = self.generate_statement(last_stmt, is_main);
+                    return format!("({{ {}{} 0; }})", result, stmt_code);
+                }
+            }
+        }
+
+        "(void)0".to_string()
+    }
+
+    /// Normalize a type name to a valid C type name
+    fn normalize_c_type(&self, type_name: &str) -> String {
+        match type_name {
+            "int64_t" | "Int" => "Int".to_string(),
+            "bool" | "Bool" => "bool".to_string(),
+            "char*" | "String" | "Str" => "char*".to_string(),
+            "uint32_t" | "Rune" => "uint32_t".to_string(),
+            "void" => "void".to_string(),
+            other => other.to_string(),
+        }
+    }
+
+    /// Generate the body of an if-else branch, producing statements plus an assignment to _if_result
+    fn generate_if_else_branch_body(
+        &mut self,
+        stmts: &[parser::Statement],
+        is_main: bool,
+    ) -> String {
+        if stmts.is_empty() {
+            return "_if_result = (void)0;".to_string();
+        }
+
+        let mut result = String::new();
+
+        // Generate all but the last statement
+        for stmt in stmts.iter().take(stmts.len().saturating_sub(1)) {
+            let stmt_code = self.generate_statement(stmt, is_main);
+            result.push_str(&stmt_code);
+            result.push(' ');
+        }
+
+        // The last statement should be assigned to _if_result
+        if let Some(last_stmt) = stmts.last() {
+            match last_stmt {
+                parser::Statement::Expression(expr) => {
+                    // Check if this is a control flow statement - those don't need assignment
+                    if matches!(
+                        expr,
+                        parser::Expression::Return(_)
+                            | parser::Expression::Break
+                            | parser::Expression::Continue
+                    ) {
+                        let expr_code = self.generate_expression(expr, is_main);
+                        result.push_str(&format!("{};", expr_code));
+                    } else {
+                        let expr_code = self.generate_expression(expr, is_main);
+                        result.push_str(&format!("_if_result = {};", expr_code));
+                    }
+                }
+                _ => {
+                    // Non-expression statement (like variable declaration)
+                    let stmt_code = self.generate_statement(last_stmt, is_main);
+                    result.push_str(&stmt_code);
+                    result.push_str(" _if_result = 0;");
+                }
+            }
+        }
+
+        result
+    }
+
+    /// Collect all branches of an if-elif-else chain
+    fn collect_if_else_branches(
+        &mut self,
+        expr: &parser::Expression,
+        is_main: bool,
+        branches: &mut Vec<(String, String)>,
+        final_else: &mut Option<String>,
+    ) {
+        match expr {
+            parser::Expression::BinaryOp(binop)
+                if matches!(binop.op, parser::Operator::Else)
+                    && matches!(&*binop.left, parser::Expression::If(_)) =>
+            {
+                // This is an elif: if cond { body } else ...
+                if let parser::Expression::If(if_expr) = &*binop.left {
+                    let cond = self.generate_expression(&if_expr.cond, is_main);
+                    let body = self.generate_if_else_branch_body(&if_expr.body, is_main);
+                    branches.push((cond, body));
+
+                    // Recursively process the rest
+                    self.collect_if_else_branches(&binop.right, is_main, branches, final_else);
+                }
+            }
+            parser::Expression::Block(stmts) => {
+                // Final else block
+                *final_else = Some(self.generate_if_else_branch_body(stmts, is_main));
+            }
+            _ => {
+                // Single expression as final else
+                let expr_code = self.generate_expression(expr, is_main);
+                *final_else = Some(format!("_if_result = {};", expr_code));
+            }
         }
     }
 
@@ -2162,6 +2856,7 @@ impl CCodegen {
                     '\n' => "\\n".to_string(),
                     '\r' => "\\r".to_string(),
                     '\t' => "\\t".to_string(),
+                    '\0' => "\\0".to_string(),
                     c => c.to_string(),
                 };
                 format!("'{}'", escaped)
@@ -2203,19 +2898,25 @@ impl CCodegen {
                             let mut expr_code = self.generate_expression(ret_expr, is_main);
 
                             // Auto-wrap return value if needed (Ptr -> Option)
-                            if let Some(ref ret_ty) = self.current_return_type {
-                                let c_ret_ty = self.map_type(ret_ty);
-                                if c_ret_ty.starts_with("Option_") {
-                                    if !expr_code.contains("Option_")
-                                        && !expr_code.contains("_tag_")
-                                        && expr_code != "none"
-                                    {
-                                        // Wrap it
-                                        let inner_val = expr_code.clone();
-                                        expr_code = format!(
-                                            "({}){{.tag = {}_tag_some, .value = {}}}",
-                                            c_ret_ty, c_ret_ty, inner_val
-                                        );
+                            // But NOT if the expression is a noreturn/void function like todo() or panic()
+                            let is_noreturn_call = matches!(&**ret_expr, parser::Expression::Call(call) 
+                                if matches!(call.name.as_str(), "todo" | "panic" | "unreachable" | "assert"));
+
+                            if !is_noreturn_call {
+                                if let Some(ref ret_ty) = self.current_return_type {
+                                    let c_ret_ty = self.map_type(ret_ty);
+                                    if c_ret_ty.starts_with("Option_") {
+                                        if !expr_code.contains("Option_")
+                                            && !expr_code.contains("_tag_")
+                                            && expr_code != "none"
+                                        {
+                                            // Wrap it
+                                            let inner_val = expr_code.clone();
+                                            expr_code = format!(
+                                                "({}){{.tag = {}_tag_some, .value = {}}}",
+                                                c_ret_ty, c_ret_ty, inner_val
+                                            );
+                                        }
                                     }
                                 }
                             }
@@ -2237,7 +2938,41 @@ impl CCodegen {
                             return format!("({}){{.tag = {}_tag_none}}", type_name, type_name);
                         }
                     }
+                    // For none outside of a function returning Option, we need context
+                    // Generate a placeholder that will need to be typed by context
+                    // This happens in declarations like `let x = none`
+                    // For now, return 'none' and let it fail - this is a limitation
+                    eprintln!("DEBUG: Found 'none' without Option context, generating bare 'none'");
+                    return "none".to_string();
                 }
+
+                // Check if this is a label-only tagged union variant
+                // e.g., "default" in SwitchLabel union
+                eprintln!(
+                    "DEBUG generate_expression Ident: checking '{}' against tagged_union_labels: {:?}",
+                    ident.name, self.tagged_union_labels
+                );
+                for (union_name, labels) in &self.tagged_union_labels {
+                    if labels.contains(&ident.name) {
+                        // Escape C reserved keywords in the tag name
+                        let tag_label = if ident.name == "default" {
+                            "default".to_string() // Will be used as SwitchLabel_tag_default
+                        } else {
+                            ident.name.clone()
+                        };
+                        eprintln!(
+                            "DEBUG: Found label-only variant '{}' in union '{}', generating constructor",
+                            ident.name, union_name
+                        );
+                        // Generate: memcpy(malloc(sizeof(UnionName)), &((UnionName){.tag = UnionName_tag_label}), sizeof(UnionName))
+                        return format!(
+                            "memcpy(malloc(sizeof({union})), &(({union}){{.tag = {union}_tag_{label}}}), sizeof({union}))",
+                            union = union_name,
+                            label = tag_label
+                        );
+                    }
+                }
+
                 // Check if this is an enum variant that needs qualification
                 let var_name = self.get_variable_name(&ident.name);
                 // If the variable doesn't exist in our mappings, it might be an enum variant
@@ -2252,12 +2987,99 @@ impl CCodegen {
                 // Handle special operators that need custom codegen
                 match binop.op {
                     parser::Operator::Concat => {
-                        // String concatenation - use blitz_string_concat helper
+                        // Concatenation - could be string, list++element, or list++list
                         let left = self.generate_expression(&binop.left, is_main);
                         let right = self.generate_expression(&binop.right, is_main);
-                        return format!("blitz_string_concat({}, {})", left, right);
+
+                        // Infer type of operands to decide what kind of concatenation
+                        let left_type = self.infer_expr_type(&binop.left);
+                        let right_type = self.infer_expr_type(&binop.right);
+
+                        if left_type.starts_with("List_") {
+                            // List operation
+                            let elem_type = left_type
+                                .strip_prefix("List_")
+                                .unwrap_or("void")
+                                .to_string();
+
+                            if right_type.starts_with("List_") {
+                                // List ++ List concatenation
+                                self.list_concat_needed.insert(elem_type.clone());
+                                return format!(
+                                    "blitz_list_concat_{}({}, {})",
+                                    elem_type, left, right
+                                );
+                            } else {
+                                // List ++ element append
+                                self.list_append_needed.insert(elem_type.clone());
+
+                                // If right is an Option type, we need to unwrap it with .value
+                                let right_unwrapped = if right_type.starts_with("Option_") {
+                                    format!("{}.value", right)
+                                } else {
+                                    right
+                                };
+
+                                return format!(
+                                    "blitz_list_append_{}({}, {})",
+                                    elem_type, left, right_unwrapped
+                                );
+                            }
+                        } else {
+                            // String concatenation - use blitz_string_concat helper
+                            return format!("blitz_string_concat({}, {})", left, right);
+                        }
                     }
                     parser::Operator::Else => {
+                        // The 'else' operator is used for two different purposes:
+                        // 1. If-else branching: if cond { a } else { b }
+                        // 2. Error handling/unwrapping: expr else fallback
+
+                        // Check if the left side is an If expression - then this is if-else branching
+                        if let parser::Expression::If(if_expr) = &*binop.left {
+                            // This is an if-else expression
+                            // Collect all branches of the if-elif-else chain
+                            let mut branches: Vec<(String, String)> = Vec::new(); // (condition, body)
+                            let mut final_else: Option<String> = None;
+
+                            // First branch from the initial if
+                            let first_cond = self.generate_expression(&if_expr.cond, is_main);
+                            let first_body =
+                                self.generate_if_else_branch_body(&if_expr.body, is_main);
+                            branches.push((first_cond, first_body));
+
+                            // Collect elif branches and final else
+                            self.collect_if_else_branches(
+                                &binop.right,
+                                is_main,
+                                &mut branches,
+                                &mut final_else,
+                            );
+
+                            // Infer the result type from first branch
+                            let result_type =
+                                self.infer_if_else_result_type(&if_expr.body, &binop.right);
+
+                            // Generate the statement expression
+                            // ({ T _if_result; if (c1) { ... _if_result = v1; } else if (c2) { ... _if_result = v2; } else { ... _if_result = v3; } _if_result; })
+                            let mut code = format!("({{ {} _if_result; ", result_type);
+
+                            for (i, (cond, body)) in branches.iter().enumerate() {
+                                if i == 0 {
+                                    code.push_str(&format!("if ({}) {{ {} }}", cond, body));
+                                } else {
+                                    code.push_str(&format!(" else if ({}) {{ {} }}", cond, body));
+                                }
+                            }
+
+                            if let Some(else_body) = final_else {
+                                code.push_str(&format!(" else {{ {} }}", else_body));
+                            }
+
+                            code.push_str(" _if_result; })");
+                            return code;
+                        }
+
                         // Error handling: left else right
                         // This operator is used for error propagation: expr else fallback
                         // If expr is None/null/empty, evaluate fallback (which might be a return statement)
@@ -2266,16 +3088,32 @@ impl CCodegen {
                         // Infer the type from the left expression
                         let left_type = self.infer_expr_type(&binop.left);
 
-                        // Check if the right side is a return statement
-                        let is_right_return =
-                            matches!(&*binop.right, parser::Expression::Return(_));
+                        // Check if the right side is a control flow statement (return, break, continue)
+                        let is_right_control_flow = matches!(
+                            &*binop.right,
+                            parser::Expression::Return(_)
+                                | parser::Expression::Break
+                                | parser::Expression::Continue
+                        );
+
+                        // Check if the right side is a void expression (panic, todo, etc.)
+                        let is_right_void = match &*binop.right {
+                            parser::Expression::Call(call) => {
+                                matches!(
+                                    call.name.as_str(),
+                                    "panic" | "todo" | "unreachable" | "assert"
+                                )
+                            }
+                            _ => false,
+                        };
 
                         // Determine how to check for "none" based on the type
                         if left_type.starts_with("Option_") {
                             // Option type: check .tag field
                             let tag_name = format!("{}_tag_none", left_type);
 
-                            if is_right_return {
+                            if is_right_control_flow || is_right_void {
+                                // Use if-statement form for control flow or void expressions
                                 let left = self.generate_expression(&binop.left, is_main);
                                 let right = self.generate_expression(&binop.right, is_main);
                                 return format!(
@@ -2311,7 +3149,7 @@ impl CCodegen {
 
                             let left = self.generate_expression(&binop.left, is_main);
 
-                            if is_right_return {
+                            if is_right_control_flow || is_right_void {
                                 let right = self.generate_expression(&binop.right, is_main);
                                 let check = check_expr.replace("LEFT_EXPR", &left);
                                 return format!(
@@ -2362,11 +3200,37 @@ impl CCodegen {
                         };
 
                         // Recursively generate left and right expressions
-                        let left = self.generate_expression(&binop.left, is_main);
+                        let left_expr = self.generate_expression(&binop.left, is_main);
+
+                        // Special handling for comparisons with 'none'
+                        // We need to infer the Option type from the other operand
+                        if let parser::Expression::Ident(ident) = &*binop.right {
+                            if ident.name == "none" {
+                                // Infer Option type from left operand
+                                let left_type = self.infer_expr_type(&binop.left);
+                                if left_type.starts_with("Option_") {
+                                    // Generate tag comparison instead of struct comparison
+                                    let tag_name = format!("{}_tag_none", left_type);
+                                    return match binop.op {
+                                        parser::Operator::Eq => {
+                                            format!("({}.tag == {})", left_expr, tag_name)
+                                        }
+                                        parser::Operator::Ne => {
+                                            format!("({}.tag != {})", left_expr, tag_name)
+                                        }
+                                        _ => format!(
+                                            "({} {} ({}){{.tag = {}}})",
+                                            left_expr, op_str, left_type, tag_name
+                                        ),
+                                    };
+                                }
+                            }
+                        }
+
                         let right = self.generate_expression(&binop.right, is_main);
 
                         // Generate with parentheses for proper precedence
-                        format!("({} {} {})", left, op_str, right)
+                        format!("({} {} {})", left_expr, op_str, right)
                     }
                 }
             }
@@ -2393,12 +3257,18 @@ impl CCodegen {
                 let func_name = &call.name;
 
                 // Try to find the function signature to guide argument generation
-                // Use the first signature found (overloading might make this inexact but it helps)
+                // Use the signature that matches the argument count for overloaded functions
                 // CLONE the signature to avoid borrowing self while calling generate_expression later
+                let arg_count = call.args.len();
                 let signature = self
                     .function_signatures
                     .get(func_name)
-                    .and_then(|sigs| sigs.first())
+                    .and_then(|sigs| {
+                        // First, try to find a signature with matching arg count
+                        sigs.iter()
+                            .find(|(params, _)| params.len() == arg_count)
+                            .or_else(|| sigs.first()) // Fallback to first if no exact match
+                    })
                     .cloned();
 
                 // Generate arguments
@@ -2433,6 +3303,30 @@ impl CCodegen {
                                             arg_code = format!("{}.value", arg_code);
                                         }
                                     }
+                                } else if !param_type.starts_with("Option") {
+                                    // Param is not an Option type - check if arg IS an Option and unwrap
+                                    let arg_type = self.infer_expr_type(&arg.init);
+                                    if arg_type.starts_with("Option_") {
+                                        if !arg_code.ends_with(".value") {
+                                            arg_code = format!("{}.value", arg_code);
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            // No signature found - use heuristic: if arg is Option and function
+                            // doesn't seem to be Option-aware, unwrap it
+                            let arg_type = self.infer_expr_type(&arg.init);
+                            if arg_type.starts_with("Option_") {
+                                // Check if the function name suggests it expects Option
+                                // (heuristic: functions starting with Option, some, none, etc.)
+                                let expects_option = func_name.starts_with("Option")
+                                    || func_name.contains("_Option")
+                                    || func_name == "some"
+                                    || func_name == "none"
+                                    || func_name == "unwrap";
+                                if !expects_option && !arg_code.ends_with(".value") {
+                                    arg_code = format!("{}.value", arg_code);
                                 }
                             }
                         }
@@ -2529,6 +3423,16 @@ impl CCodegen {
                                 args[0], args[1], args[2]
                             );
                         }
+                        "precedence" if args.len() == 1 => {
+                            // op.precedence() where op is TokenKind but precedence() expects Operator*
+                            // Check if the receiver is TokenKind
+                            let receiver_type = self.infer_expr_type(&call.args[0].init);
+                            if receiver_type == "TokenKind" {
+                                return format!("precedence(TokenKind_to_Operator({}))", args[0]);
+                            }
+                            // Otherwise, pass through normally
+                            format!("precedence({})", args[0])
+                        }
                         _ => {
                             // For other UFCS calls, the receiver is the first argument
                             // Try to guess argument types for overload resolution
@@ -2602,6 +3506,30 @@ impl CCodegen {
                 // but not the pointer type that map_type would give us
                 let mut type_name = self.type_name_for_instance(&ctor.r#type);
 
+                // When there's a name collision between struct and enum (e.g., Assignment struct and
+                // Assignment enum -> Assignment_1), check if the constructor has named field arguments.
+                // If so, we need the struct version, not the enum.
+                if type_name.ends_with("_1") {
+                    // Check if the non-suffixed name is a struct with fields
+                    let base_name = &type_name[..type_name.len() - 2];
+                    if let Some(struct_fields) = self.struct_field_types.get(base_name) {
+                        // Check if the constructor args match the struct fields
+                        let arg_names: std::collections::HashSet<_> =
+                            ctor.args.iter().map(|a| a.label.name.as_str()).collect();
+                        let field_names: std::collections::HashSet<_> =
+                            struct_fields.keys().map(|s| s.as_str()).collect();
+
+                        // If there's overlap between arg names and struct field names, use the struct
+                        if !arg_names.is_disjoint(&field_names) {
+                            eprintln!(
+                                "DEBUG Constructor: using struct '{}' instead of enum '{}' (has matching fields)",
+                                base_name, type_name
+                            );
+                            type_name = base_name.to_string();
+                        }
+                    }
+                }
+
                 // Special case: Lit(value: ...) without type parameter
                 // Infer the type parameter from the value argument
                 if type_name == "Lit" {
@@ -2633,24 +3561,129 @@ impl CCodegen {
                 for arg in &ctor.args {
                     let field_name = &arg.label.name;
 
+                    // Look up the expected field type from struct_field_types
+                    let expected_field_type = self
+                        .struct_field_types
+                        .get(&type_name)
+                        .and_then(|fields| fields.get(field_name))
+                        .cloned();
+
                     // Check if this is an empty list - we need to determine the correct type
                     let mut field_value = if let parser::Expression::List(list) = &*arg.init {
                         if list.elems.is_empty() {
                             // Empty list - try to infer the correct List type from the struct field
-                            // For common patterns, use hardcoded mappings
-                            let list_type = match (type_name.as_str(), field_name.as_str()) {
-                                ("Block", "statements") | (_, "statements") => "List_Statement",
-                                ("SwitchCase", "body") | (_, "body") => "List_Statement",
-                                ("Fn", "args") | (_, "args") => "List_Arg",
-                                ("Struct", "fields") | (_, "fields") => "List_Field",
-                                ("Union", "cases") | (_, "cases") => "List_Case",
-                                ("Call", "args") => "List_CallArg",
-                                (_, "elems") => "List_Expression",
-                                _ => "List_Int", // Default fallback
+                            // First, check if we have the expected field type from struct definition
+                            let list_type = if let Some(ref eft) = expected_field_type {
+                                // Expected field type is from struct_field_types, e.g. "List(Error)"
+                                if eft.starts_with("List(") {
+                                    let inner = eft
+                                        .strip_prefix("List(")
+                                        .and_then(|s| s.strip_suffix(")"))
+                                        .unwrap_or("Int");
+                                    format!("List_{}", inner)
+                                } else if eft.starts_with("List_") {
+                                    eft.clone()
+                                } else {
+                                    "List_Int".to_string()
+                                }
+                            } else {
+                                // Fallback to hardcoded mappings for common patterns
+                                match (type_name.as_str(), field_name.as_str()) {
+                                    ("Block", "statements") | (_, "statements") => {
+                                        "List_Statement".to_string()
+                                    }
+                                    ("SwitchCase", "body") | (_, "body") => {
+                                        "List_Statement".to_string()
+                                    }
+                                    ("Fn", "args") | (_, "args") => "List_Arg".to_string(),
+                                    ("Struct", "fields") | (_, "fields") => {
+                                        "List_Field".to_string()
+                                    }
+                                    ("Union", "cases") | (_, "cases") => "List_Case".to_string(),
+                                    ("Call", "args") => "List_CallArg".to_string(),
+                                    (_, "elems") => "List_Expression".to_string(),
+                                    _ => "List_Int".to_string(), // Default fallback
+                                }
                             };
                             format!("({}){{.data = NULL, .len = 0, .cap = 0}}", list_type)
                         } else {
                             self.generate_expression(&arg.init, is_main)
+                        }
+                    } else if let parser::Expression::Ident(ident) = &*arg.init {
+                        // Special handling for 'none' - needs the field type to know which Option type
+                        if ident.name == "none" {
+                            if let Some(ref eft) = expected_field_type {
+                                // The field type should be Option_X, generate the none constructor
+                                if eft.starts_with("Option_") || eft.starts_with("Option(") {
+                                    // Extract the inner type for the C Option name
+                                    let option_type = if eft.starts_with("Option(") {
+                                        // Parse Option(Ident) -> Option_Ident
+                                        let inner = eft
+                                            .strip_prefix("Option(")
+                                            .and_then(|s| s.strip_suffix(")"))
+                                            .unwrap_or("Unknown");
+                                        format!("Option_{}", inner)
+                                    } else {
+                                        eft.clone()
+                                    };
+                                    format!("({}){{.tag = {}_tag_none}}", option_type, option_type)
+                                } else {
+                                    // Field isn't Option, use generic none (will likely error)
+                                    "none".to_string()
+                                }
+                            } else {
+                                // No field type info, try infer from field name conventions
+                                // Common Option field patterns in Blitz compiler
+                                match field_name.as_str() {
+                                    "label" => {
+                                        "(Option_Ident){.tag = Option_Ident_tag_none}".to_string()
+                                    }
+                                    "type" | "ty" => {
+                                        "(Option_Type){.tag = Option_Type_tag_none}".to_string()
+                                    }
+                                    "else" | "r#else" => {
+                                        "(Option_Block){.tag = Option_Block_tag_none}".to_string()
+                                    }
+                                    _ => "none".to_string(), // fallback
+                                }
+                            }
+                        } else {
+                            // Regular identifier expression handling
+                            // For identifier expressions, use the expected field type as a hint
+                            // This helps qualify enum variants correctly (e.g., `add` -> `BinaryOperator_add`)
+                            let var_name = self.get_variable_name(&ident.name);
+
+                            // Check if this is a known variable by looking in variable_types
+                            let var_type = self.variable_types.get(&ident.name).cloned();
+
+                            eprintln!(
+                                "DEBUG Constructor field: type={}, field={}, ident={}, var_type={:?}, expected={:?}",
+                                type_name, field_name, ident.name, var_type, expected_field_type
+                            );
+
+                            if let Some(vt) = &var_type {
+                                // It's a known variable - check if we need to convert TokenKind to operator types
+                                if let Some(eft) = &expected_field_type {
+                                    if vt == "TokenKind" && eft == "BinaryOperator" {
+                                        format!("TokenKind_to_BinaryOperator({})", var_name)
+                                    } else if vt == "TokenKind" && eft == "UnaryOperator" {
+                                        format!("TokenKind_to_UnaryOperator({})", var_name)
+                                    } else {
+                                        var_name
+                                    }
+                                } else {
+                                    var_name
+                                }
+                            } else if var_name == ident.name {
+                                // Not a known variable - try to qualify as enum variant with type hint
+                                self.qualify_identifier_with_hint(
+                                    &ident.name,
+                                    expected_field_type.as_deref(),
+                                )
+                            } else {
+                                // Mapped variable name
+                                var_name
+                            }
                         }
                     } else {
                         self.generate_expression(&arg.init, is_main)
@@ -2659,18 +3692,29 @@ impl CCodegen {
                     // Auto-unwrap Option types for struct fields that expect pointers
                     // If the field value has Option type but the field likely expects a pointer,
                     // append .value to unwrap
+                    // BUT: If the target field ALSO expects an Option, don't unwrap!
                     let field_type = self.infer_expr_type(&arg.init);
                     if field_type.starts_with("Option_") && !field_value.ends_with(".value") {
-                        // Check if the inner type is a struct (would be a pointer in C)
-                        let inner_type = field_type.strip_prefix("Option_").unwrap_or(&field_type);
-                        let inner_is_struct = self.seen_types.contains(inner_type)
-                            && !self.enum_types.contains(inner_type);
-                        let inner_is_tagged_union = self.tagged_union_types.contains(inner_type);
+                        // Check if the expected field type is also an Option - if so, don't unwrap
+                        let expected_is_option = expected_field_type
+                            .as_ref()
+                            .map(|t| t.starts_with("Option"))
+                            .unwrap_or(false);
 
-                        // For now, always unwrap Option types in constructor fields
-                        // This assumes the Blitz code is correct and Options are used where values are expected
-                        if inner_is_struct || inner_is_tagged_union {
-                            field_value = format!("{}.value", field_value);
+                        if !expected_is_option {
+                            // Check if the inner type is a struct (would be a pointer in C)
+                            let inner_type =
+                                field_type.strip_prefix("Option_").unwrap_or(&field_type);
+                            let inner_is_struct = self.seen_types.contains(inner_type)
+                                && !self.enum_types.contains(inner_type);
+                            let inner_is_tagged_union =
+                                self.tagged_union_types.contains(inner_type);
+
+                            // For now, always unwrap Option types in constructor fields
+                            // This assumes the Blitz code is correct and Options are used where values are expected
+                            if inner_is_struct || inner_is_tagged_union {
+                                field_value = format!("{}.value", field_value);
+                            }
                         }
                     }
 
@@ -2678,43 +3722,91 @@ impl CCodegen {
                 }
 
                 // Check if this is a variant of a tagged union (like Lit_Bool -> Expression)
-                // Note: a variant can belong to multiple unions, we pick the first one
-                if let Some(union_set) = self.variant_to_union.get(&type_name) {
-                    let union_name = union_set.iter().next().cloned().unwrap();
-                    // This is a tagged union variant - wrap in the union struct
-                    eprintln!(
-                        "DEBUG Constructor: type_name={} is variant of union {}, generating union wrapper",
-                        type_name, union_name
-                    );
-
-                    // Determine if this variant's field in the union is a pointer type
-                    // Non-parameterized types (like Index, Mut) that are registered structs become pointers
-                    // Parameterized types (like Lit_Bool) are stored as values
-                    let variant_is_pointer = self.seen_types.contains(&type_name)
-                        && !self.enum_types.contains(&type_name);
-
-                    let variant_literal = format!("({}){{{}}}", type_name, field_inits.join(", "));
-
-                    let variant_assignment = if variant_is_pointer {
-                        // Need to heap-allocate the variant data: memcpy(malloc(sizeof(T)), &T{...}, sizeof(T))
-                        format!(
-                            "memcpy(malloc(sizeof({})), &{}, sizeof({}))",
-                            type_name, variant_literal, type_name
-                        )
+                // BUT: if the return type directly expects this type (e.g., Option(Call) not Option(Expression)),
+                // we should NOT wrap it in the parent union - we want the bare struct.
+                let should_skip_union_wrapping = if let Some(ref return_type) =
+                    self.current_return_type
+                {
+                    // If return type is Option(X), check if X matches our type_name
+                    if return_type.name == "Option" && !return_type.params.is_empty() {
+                        // Get the inner type name
+                        let inner_type = &return_type.params[0];
+                        let inner_name = &inner_type.name;
+                        // If the inner type matches our constructor type, don't wrap in union
+                        if inner_name == &type_name || inner_name.as_str() == type_name.as_str() {
+                            eprintln!(
+                                "DEBUG Constructor: skipping union wrap because return type Option({}) matches type_name={}",
+                                inner_name, type_name
+                            );
+                            true
+                        } else {
+                            false
+                        }
                     } else {
-                        // Can use the variant literal directly (value type in union)
-                        variant_literal
-                    };
+                        false
+                    }
+                } else {
+                    false
+                };
 
-                    let union_literal = format!(
-                        "(({}){{.tag = {}_tag_{}, .data.as_{} = {}}})",
-                        union_name, union_name, type_name, type_name, variant_assignment
-                    );
+                // Note: a variant can belong to multiple unions, we pick the first one
+                // Also check the _1 suffixed version for types with collision (e.g., Assignment struct
+                // might be registered as Assignment_1 in the union due to collision with Assignment enum)
+                let variant_lookup_name = if self.variant_to_union.contains_key(&type_name) {
+                    type_name.clone()
+                } else {
+                    let suffixed = format!("{}_1", type_name);
+                    if self.variant_to_union.contains_key(&suffixed) {
+                        suffixed
+                    } else {
+                        type_name.clone() // Keep original, will fail the lookup below
+                    }
+                };
 
-                    return format!(
-                        "memcpy(malloc(sizeof({})), &{}, sizeof({}))",
-                        union_name, union_literal, union_name
-                    );
+                if !should_skip_union_wrapping {
+                    if let Some(union_set) = self.variant_to_union.get(&variant_lookup_name) {
+                        let union_name = union_set.iter().next().cloned().unwrap();
+                        // This is a tagged union variant - wrap in the union struct
+                        eprintln!(
+                            "DEBUG Constructor: type_name={} (lookup={}) is variant of union {}, generating union wrapper",
+                            type_name, variant_lookup_name, union_name
+                        );
+
+                        // Determine if this variant's field in the union is a pointer type
+                        // Non-parameterized types (like Index, Mut) that are registered structs become pointers
+                        // Parameterized types (like Lit_Bool) are stored as values
+                        let variant_is_pointer = self.seen_types.contains(&type_name)
+                            && !self.enum_types.contains(&type_name);
+
+                        let variant_literal =
+                            format!("({}){{{}}}", type_name, field_inits.join(", "));
+
+                        let variant_assignment = if variant_is_pointer {
+                            // Need to heap-allocate the variant data: memcpy(malloc(sizeof(T)), &T{...}, sizeof(T))
+                            format!(
+                                "memcpy(malloc(sizeof({})), &{}, sizeof({}))",
+                                type_name, variant_literal, type_name
+                            )
+                        } else {
+                            // Can use the variant literal directly (value type in union)
+                            variant_literal
+                        };
+
+                        // Use variant_lookup_name for tags/fields since that's how it's registered in the union
+                        let union_literal = format!(
+                            "(({}){{.tag = {}_tag_{}, .data.as_{} = {}}})",
+                            union_name,
+                            union_name,
+                            variant_lookup_name,
+                            variant_lookup_name,
+                            variant_assignment
+                        );
+
+                        return format!(
+                            "memcpy(malloc(sizeof({})), &{}, sizeof({}))",
+                            union_name, union_literal, union_name
+                        );
+                    }
                 }
 
                 // Check if we need to return a pointer to this struct
@@ -2752,6 +3844,17 @@ impl CCodegen {
                 // Just return the parent expression
                 if member_name == "mut" {
                     return parent_code;
+                }
+
+                // Special case: parse_def method call without parentheses
+                // In Blitz, `parser.mut.parse_def` is a method call, not a field access
+                // Parser doesn't have a parse_def field, so this must be a call
+                if member_name == "parse_def" {
+                    let parent_type = self.infer_expr_type(&member.parent);
+                    let base_type = parent_type.trim_end_matches('*');
+                    if base_type == "Parser" {
+                        return format!("parse_def({})", parent_code);
+                    }
                 }
 
                 // Special case: .span access on Expression/Statement tagged unions
@@ -2844,71 +3947,20 @@ impl CCodegen {
             parser::Expression::Index(idx) => {
                 // Generate array/list indexing
                 // For List(T) types, we need to access via .data[index]
-                // For plain arrays, we use direct indexing
+                // For plain arrays/strings, we use direct indexing
 
                 let target_expr = self.generate_expression(&idx.target, is_main);
                 let index_expr = self.generate_expression(&idx.index, is_main);
 
-                // Check if this is a member access on a List type
-                // For now, we'll generate the simple form and rely on the user
-                // to provide the correct syntax. A full implementation would need
-                // type inference to determine if target is a List type.
-                //
-                // Simple heuristic: if target is a member access that looks like it might
-                // be a List field, we need to add .data
-                //
-                // For List types: target.data[index]
-                // For arrays: target[index]
+                // Use type inference to determine if the target is a List type
+                let target_type = self.infer_expr_type(&idx.target);
 
-                // Check if the target is a Member expression accessing a List field
-                if let parser::Expression::Member(member) = &*idx.target {
-                    // This is something like lexer.source[i] or obj.field[index]
-                    // For List types, we need: lexer->source.data[i]
-                    // We'll use a simple heuristic: if the member name
-                    // suggests it's a list (like "source", "elems", "items"), add .data
-                    let member_name = &member.member;
-                    if member_name == "source"
-                        || member_name == "elems"
-                        || member_name == "items"
-                        || member_name == "data"
-                        || member_name.ends_with("List")
-                    {
-                        // Likely a List type field, add .data
-                        format!("{}.data[{}]", target_expr, index_expr)
-                    } else {
-                        // Regular array access
-                        format!("{}[{}]", target_expr, index_expr)
-                    }
+                // List types need .data accessor, strings/char* use direct indexing
+                if target_type.starts_with("List_") {
+                    format!("{}.data[{}]", target_expr, index_expr)
                 } else {
-                    // Also check if the target variable itself is a List type
-                    if let parser::Expression::Ident(ident) = &*idx.target {
-                        let var_type = if let Some(t) = self.variable_types.get(&ident.name) {
-                            t.clone()
-                        } else {
-                            self.get_variable_name(&ident.name)
-                                .split('_')
-                                .next()
-                                .unwrap_or("")
-                                .to_string()
-                        };
-
-                        if var_type.starts_with("List_")
-                            || var_type == "String"
-                            || var_type == "char*"
-                        {
-                            // List types and Strings are accessed differently
-                            if var_type == "String" || var_type == "char*" {
-                                format!("{}[{}]", target_expr, index_expr)
-                            } else {
-                                format!("{}.data[{}]", target_expr, index_expr)
-                            }
-                        } else {
-                            format!("{}[{}]", target_expr, index_expr)
-                        }
-                    } else {
-                        // Simple array or direct identifier indexing
-                        format!("{}[{}]", target_expr, index_expr)
-                    }
+                    // String, char*, arrays use direct indexing
+                    format!("{}[{}]", target_expr, index_expr)
                 }
             }
             parser::Expression::Assignment(assign) => {
@@ -2920,9 +3972,16 @@ impl CCodegen {
                         let parent_code = self.generate_expression(&member.parent, is_main);
                         let member_name = &member.member;
 
+                        // Infer the parent type to handle Option types
+                        let parent_type = self.infer_expr_type(&member.parent);
+
                         // Special case: .mut is a Blitz mutability marker
                         if member_name == "mut" {
                             parent_code
+                        } else if parent_type.starts_with("Option_") {
+                            // Option types need .value to access inner type's members
+                            // Since we're assigning, the inner type must be a pointer
+                            format!("{}.value->{}", parent_code, member_name)
                         } else if parent_code.starts_with('&') || parent_code.contains("->") {
                             format!("{}.{}", parent_code.trim_start_matches('&'), member_name)
                         } else if parent_code.starts_with('*') {
@@ -3083,20 +4142,71 @@ impl CCodegen {
                 format!("while ({}) {{\n{}    }}", cond, body_code)
             }
             parser::Expression::If(if_expr) => {
-                // Generate if expression/statement
-                // If can be used as expression (returns value) or statement
+                // Standalone if expression (no else)
+                // Check if this is used as a statement (body ends with control flow) or as an expression
                 let cond = self.generate_expression(&if_expr.cond, is_main);
 
-                // Generate body statements
-                let mut body_code = String::new();
-                for stmt in &if_expr.body {
-                    let stmt_code = self.generate_statement(stmt, is_main);
-                    body_code.push_str("        ");
-                    body_code.push_str(&stmt_code);
-                    body_code.push_str("\n");
-                }
+                // Check if body ends with control flow (return, break, continue)
+                let ends_with_control_flow = if let Some(last_stmt) = if_expr.body.last() {
+                    match last_stmt {
+                        parser::Statement::Expression(expr) => {
+                            let is_noreturn = matches!(expr, parser::Expression::Call(call) 
+                                if matches!(call.name.as_str(), "panic" | "todo" | "unreachable"));
+                            matches!(
+                                expr,
+                                parser::Expression::Return(_)
+                                    | parser::Expression::Continue
+                                    | parser::Expression::Break
+                            ) || is_noreturn
+                        }
+                        _ => false,
+                    }
+                } else {
+                    false
+                };
 
-                format!("if ({}) {{\n{}    }}", cond, body_code)
+                if ends_with_control_flow {
+                    // This is a statement-style if (control flow in body)
+                    // Generate simple if statement
+                    let mut body_code = String::new();
+                    for stmt in &if_expr.body {
+                        let stmt_code = self.generate_statement(stmt, is_main);
+                        body_code.push_str("        ");
+                        body_code.push_str(&stmt_code);
+                        body_code.push_str("\n");
+                    }
+                    format!("if ({}) {{\n{}    }}", cond, body_code)
+                } else {
+                    // This is an expression-style if - returns Option<T>
+                    // Infer the result type from the body
+                    let body_type = if let Some(parser::Statement::Expression(last_expr)) =
+                        if_expr.body.last()
+                    {
+                        self.infer_expr_type(last_expr)
+                    } else {
+                        "int64_t".to_string()
+                    };
+
+                    // Map to proper C type name
+                    let c_type = self.normalize_c_type(&body_type);
+
+                    // Wrap in Option type for the result
+                    let option_type = if c_type.starts_with("Option_") {
+                        c_type.clone()
+                    } else {
+                        format!("Option_{}", c_type.trim_end_matches('*'))
+                    };
+
+                    // Generate body with assignment to _if_result
+                    let body_code = self.generate_if_else_branch_body(&if_expr.body, is_main);
+
+                    // Generate statement expression:
+                    // ({ Option_T _if_result; if (cond) { ... _if_result = some(val); } else { _if_result = none; } _if_result; })
+                    format!(
+                        "({{ {} _if_result; if ({}) {{ {} }} else {{ _if_result = ({}){{.tag = {}_tag_none}}; }} _if_result; }})",
+                        option_type, cond, body_code, option_type, option_type
+                    )
+                }
             }
             parser::Expression::Switch(switch_expr) => self.generate_switch(switch_expr, is_main),
             parser::Expression::List(list) => {
@@ -3183,11 +4293,48 @@ impl CCodegen {
                                 code.push_str("        (void*){{}};\n");
                             }
                         } else {
-                            // Mixed/complex types - we can't infer the type properly
-                            // Just generate a stub for now
-                            code.push_str("        /* TODO: non-integer list literal requires type inference */\n");
-                            code.push_str(&format!("        void* _tmp = NULL;\n"));
-                            code.push_str("        (void*){{}};\n");
+                            // Check if all elements are constructors
+                            let all_constructors = list
+                                .elems
+                                .iter()
+                                .all(|e| matches!(e, parser::Expression::Constructor(_)));
+
+                            if all_constructors && !list.elems.is_empty() {
+                                // Infer element type from the first constructor
+                                if let parser::Expression::Constructor(first_ctor) = &list.elems[0]
+                                {
+                                    let elem_type = self.type_name_for_instance(&first_ctor.r#type);
+                                    let list_type = format!("List_{}", elem_type);
+
+                                    // Generate array of constructor results
+                                    code.push_str(&format!(
+                                        "        {}** _tmp = malloc(sizeof({}*) * {});\n",
+                                        elem_type, elem_type, len
+                                    ));
+                                    for (i, elem) in list.elems.iter().enumerate() {
+                                        let elem_code = self.generate_expression(elem, is_main);
+                                        code.push_str(&format!(
+                                            "        _tmp[{}] = {};\n",
+                                            i, elem_code
+                                        ));
+                                    }
+                                    code.push_str(&format!(
+                                        "        ({}){{.data = _tmp, .len = {}, .cap = {}}};\n",
+                                        list_type, len, len
+                                    ));
+                                } else {
+                                    // Fallback - shouldn't happen
+                                    code.push_str("        /* TODO: constructor list type inference failed */\n");
+                                    code.push_str(&format!("        void* _tmp = NULL;\n"));
+                                    code.push_str("        (void*){{}};\n");
+                                }
+                            } else {
+                                // Mixed/complex types - we can't infer the type properly
+                                // Just generate a stub for now
+                                code.push_str("        /* TODO: non-integer list literal requires type inference */\n");
+                                code.push_str(&format!("        void* _tmp = NULL;\n"));
+                                code.push_str("        (void*){{}};\n");
+                            }
                         }
                     }
 
@@ -3413,6 +4560,21 @@ impl CCodegen {
             return expr_code.to_string();
         }
 
+        // Handle noreturn/void functions (panic, todo, err) being used in expression context
+        // These functions never return, so we wrap them in a statement expression with a dummy value
+        if from_type == "void" && to_type != "void" {
+            // Check if expr_code is a call to a noreturn function
+            if expr_code.starts_with("panic(")
+                || expr_code.starts_with("todo(")
+                || expr_code.starts_with("err(")
+            {
+                // Wrap in statement expression: ({ panic("msg"); (T){{0}}; })
+                // Since panic/todo/err are noreturn or void, the dummy value is never reached
+                return format!("({{ {}; ({}){{{{0}}}}; }})", expr_code, to_type);
+            }
+            // For other void expressions, just return as-is (will be a type error)
+        }
+
         // Handle Option_X to Option_Y conversions where X is a variant of Y
         if from_type.starts_with("Option_") && to_type.starts_with("Option_") {
             let from_inner = &from_type[7..]; // e.g., "Call"
@@ -3482,7 +4644,12 @@ impl CCodegen {
             let to_inner = &to_type[7..]; // e.g., "Expression"
 
             // Direct case: X* to Option_X (same type, just wrap in Option)
-            if from_base == to_inner {
+            // Also handle enum types: X to Option_X where X is an enum
+            if from_base == to_inner || from_type == to_inner {
+                eprintln!(
+                    "DEBUG convert_expr_to_type: wrapping '{}' (type {}) in Option_{}",
+                    expr_code, from_type, to_inner
+                );
                 return format!(
                     "({}){{.tag = {}_tag_some, .value = {}}}",
                     to_type, to_type, expr_code
@@ -3538,6 +4705,22 @@ impl CCodegen {
         true
     }
 
+    /// Generate an if expression as a pure statement (no _if_result wrapper)
+    /// Used when an if without else is used as a statement, not an expression
+    fn generate_if_as_pure_statement(&mut self, if_expr: &parser::If, is_main: bool) -> String {
+        let cond = self.generate_expression(&if_expr.cond, is_main);
+
+        let mut body_code = String::new();
+        for stmt in &if_expr.body {
+            let stmt_code = self.generate_statement(stmt, is_main);
+            body_code.push_str("        ");
+            body_code.push_str(&stmt_code);
+            body_code.push_str("\n");
+        }
+
+        format!("if ({}) {{\n{}    }}", cond, body_code)
+    }
+
     /// Generate a switch as a pure statement (no _switch_result wrapper)
     fn generate_switch_as_pure_statement(
         &mut self,
@@ -3589,6 +4772,7 @@ impl CCodegen {
                         '\n' => "\\n".to_string(),
                         '\r' => "\\r".to_string(),
                         '\t' => "\\t".to_string(),
+                        '\0' => "\\0".to_string(),
                         c => c.to_string(),
                     };
                     code.push_str(&format!("        case '{}':\n", escaped));
@@ -3657,6 +4841,7 @@ impl CCodegen {
                             '\n' => "\\n".to_string(),
                             '\r' => "\\r".to_string(),
                             '\t' => "\\t".to_string(),
+                            '\0' => "\\0".to_string(),
                             c => c.to_string(),
                         };
                         format!("{} == '{}'", cond, escaped)
@@ -3749,7 +4934,7 @@ impl CCodegen {
         let cond_is_option = cond_type.starts_with("Option_");
 
         if can_use_c_switch && !is_option_switch && !cond_is_option {
-            self.generate_c_switch(&cond, &switch_expr.cases, is_main)
+            self.generate_c_switch(&cond, &cond_type, &switch_expr.cases, is_main)
         } else {
             self.generate_if_else_chain(&cond, &cond_type, &switch_expr.cases, is_main)
         }
@@ -3758,11 +4943,57 @@ impl CCodegen {
     fn generate_c_switch(
         &mut self,
         cond: &str,
+        cond_type: &str,
         cases: &[parser::SwitchCase],
         is_main: bool,
     ) -> String {
         // Infer the result type from the first non-control-flow case body
-        let result_type = self.infer_switch_result_type(cases);
+        let mut result_type = self.infer_switch_result_type(cases);
+
+        // If we have a function return type, use it when:
+        // 1. The inferred type is a simple enum type that might be wrong due to name collision
+        // 2. The function return type is an Option of that enum or a compatible type
+        if let Some(ref ret_ty) = self.current_return_type {
+            let mapped_return = self.map_type(ret_ty);
+            eprintln!(
+                "DEBUG generate_c_switch: inferred result_type='{}', function return='{}'",
+                result_type, mapped_return
+            );
+
+            // Check if the inferred type is an enum that's a variant inside an Option return type
+            if mapped_return.starts_with("Option_") {
+                let inner = &mapped_return[7..]; // e.g., "Assignment_1"
+                                                 // If the inferred type matches the inner type of the Option, use the Option type
+                if result_type == inner {
+                    eprintln!(
+                        "DEBUG generate_c_switch: using function return type '{}' instead of '{}'",
+                        mapped_return, result_type
+                    );
+                    result_type = mapped_return;
+                } else if self.enum_types.contains(&result_type) && self.enum_types.contains(inner)
+                {
+                    // Both are enums - check if they share variant names (collision case)
+                    // In this case, prefer the function's return type
+                    if let (Some(inferred_variants), Some(return_variants)) = (
+                        self.enum_variants.get(&result_type),
+                        self.enum_variants.get(inner),
+                    ) {
+                        // Check if the variants we're returning are actually from the return type's enum
+                        let has_collision = inferred_variants
+                            .intersection(return_variants)
+                            .next()
+                            .is_some();
+                        if has_collision {
+                            eprintln!(
+                                "DEBUG generate_c_switch: enum variant collision detected, using function return type '{}' instead of '{}'",
+                                mapped_return, result_type
+                            );
+                            result_type = mapped_return;
+                        }
+                    }
+                }
+            }
+        }
 
         // Wrap switch in a GCC statement expression so it can be used as an expression
         // Pattern: ({ T _switch_result; switch(...) { case: _switch_result = val; break; } _switch_result; })
@@ -3781,6 +5012,7 @@ impl CCodegen {
                         '\n' => "\\n".to_string(),
                         '\r' => "\\r".to_string(),
                         '\t' => "\\t".to_string(),
+                        '\0' => "\\0".to_string(),
                         c => c.to_string(),
                     };
                     code.push_str(&format!("        case '{}':\n", escaped));
@@ -3799,39 +5031,29 @@ impl CCodegen {
                     if ident.name == "else" {
                         code.push_str("        default:\n");
                     } else {
-                        // Enum variant - qualify it with enum type
-                        let qualified = self.qualify_identifier(&ident.name);
-
-                        // Handle bare enum variants like 'none', 'some', 'mut'
+                        // Enum variant - qualify it with the condition type as hint
+                        // This ensures that when switching on TokenKind, we use TokenKind_xxx prefixes
+                        eprintln!(
+                            "DEBUG generate_c_switch: ident='{}', cond_type='{}'",
+                            ident.name, cond_type
+                        );
                         let final_label = if ident.name == "none" {
-                            // Try to infer enum type from condition
-                            let cond_type = cond.split("->").next().unwrap_or("").trim();
-                            // This is a hacky way to guess the type, but sufficient for simple switches
-                            // A better way would be passing down type context
-                            if cond_type.contains("Option") {
-                                // Assume Option type - e.g. Option_Token_tag_none
+                            // Handle Option none variant
+                            if cond_type.starts_with("Option_") || cond_type.contains("Option") {
                                 format!("{}_tag_none", cond_type.replace("*", ""))
                             } else {
                                 "default".to_string()
                             }
-                        } else if ident.name == "mut_" {
-                            "TokenKind_mut_".to_string()
-                        } else if ident.name == "for_" {
-                            "TokenKind_for_".to_string()
                         } else if ident.name == "some" {
-                            // Try to infer enum type from condition
-                            let cond_type = cond.split("->").next().unwrap_or("").trim();
-                            if cond_type.contains("Option") {
-                                // Assume Option type - e.g. Option_Token_tag_some
+                            // Handle Option some variant
+                            if cond_type.starts_with("Option_") || cond_type.contains("Option") {
                                 format!("{}_tag_some", cond_type.replace("*", ""))
                             } else {
                                 "default".to_string()
                             }
-                        } else if ident.name.ends_with("_") {
-                            // Check if it's a TokenKind variant
-                            format!("TokenKind_{}", ident.name)
                         } else {
-                            qualified
+                            // Use the condition type as a hint for qualification
+                            self.qualify_identifier_with_hint(&ident.name, Some(cond_type))
                         };
 
                         if final_label == "default" {
@@ -3858,6 +5080,9 @@ impl CCodegen {
             // Generate case body with assignment to _switch_result for last expression
             code.push_str("        {\n");
 
+            // Track if we generated an early return (to skip break)
+            let mut generated_early_return = false;
+
             if !case.body.is_empty() {
                 let last_idx = case.body.len() - 1;
                 for (idx, stmt) in case.body.iter().enumerate() {
@@ -3865,6 +5090,36 @@ impl CCodegen {
                         // Last statement - assign to _switch_result if it's an expression
                         match stmt {
                             parser::Statement::Expression(expr) => {
+                                // Check if this is a `none` that should cause early return
+                                // When the enclosing function returns Option_T and a switch case
+                                // contains just `none`, it should return from the function, not assign
+                                if let parser::Expression::Ident(ident) = expr {
+                                    if ident.name == "none" {
+                                        eprintln!(
+                                            "DEBUG: Found 'none' in switch case, current_return_type={:?}",
+                                            self.current_return_type
+                                        );
+                                        if let Some(ref ret_ty) = self.current_return_type {
+                                            let mapped_ret = self.map_type(ret_ty);
+                                            eprintln!(
+                                                "DEBUG: mapped_ret='{}', starts_with Option_={}",
+                                                mapped_ret,
+                                                mapped_ret.starts_with("Option_")
+                                            );
+                                            if mapped_ret.starts_with("Option_") {
+                                                // Generate early return with none
+                                                code.push_str(&format!(
+                                                    "            return ({}){{.tag = {}_tag_none}};\n",
+                                                    mapped_ret, mapped_ret
+                                                ));
+                                                code.push_str("        }\n");
+                                                generated_early_return = true;
+                                                break; // Exit the statement loop
+                                            }
+                                        }
+                                    }
+                                }
+
                                 if matches!(
                                     expr,
                                     parser::Expression::Return(_)
@@ -3877,7 +5132,33 @@ impl CCodegen {
                                     code.push_str("\n");
                                 } else {
                                     let expr_code = self.generate_expression(expr, is_main);
-                                    let expr_type = self.infer_expr_type(expr);
+                                    let mut expr_type = self.infer_expr_type(expr);
+
+                                    // When the result type is Option_X and the expression is an identifier,
+                                    // check if that identifier is a variant in enum X. If so, use X as the type
+                                    // instead of whatever infer_expr_type returns (which might find a different enum first).
+                                    if result_type.starts_with("Option_") {
+                                        let expected_inner = &result_type[7..]; // e.g., "Assignment_1"
+                                        eprintln!(
+                                            "DEBUG switch Option: result_type={}, expected_inner={}, expr_type={}, expr_code={}",
+                                            result_type, expected_inner, expr_type, expr_code
+                                        );
+                                        if let parser::Expression::Ident(ident) = expr {
+                                            eprintln!(
+                                                "DEBUG switch Option ident: name={}, enum_variants.get({})={:?}",
+                                                ident.name, expected_inner, self.enum_variants.get(expected_inner)
+                                            );
+                                            if let Some(variants) =
+                                                self.enum_variants.get(expected_inner)
+                                            {
+                                                if variants.contains(&ident.name) {
+                                                    eprintln!("DEBUG switch Option: found variant, setting expr_type to {}", expected_inner);
+                                                    expr_type = expected_inner.to_string();
+                                                }
+                                            }
+                                        }
+                                    }
+
                                     let converted = self.convert_expr_to_type(
                                         &expr_code,
                                         &expr_type,
@@ -3919,6 +5200,11 @@ impl CCodegen {
             } else {
                 true
             };
+
+            // Skip break and closing brace if we already generated an early return
+            if generated_early_return {
+                continue;
+            }
 
             if needs_break {
                 code.push_str("            break;\n");
@@ -3966,6 +5252,7 @@ impl CCodegen {
                             '\n' => "\\n".to_string(),
                             '\r' => "\\r".to_string(),
                             '\t' => "\\t".to_string(),
+                            '\0' => "\\0".to_string(),
                             c => c.to_string(),
                         };
                         format!("{} == '{}'", cond, escaped)
@@ -4116,28 +5403,15 @@ impl CCodegen {
                 }
             }
 
-            // Add break unless the body ends with return/break/continue
-            let needs_break = if let Some(last_stmt) = case.body.last() {
-                match last_stmt {
-                    parser::Statement::Expression(expr) => !matches!(
-                        expr,
-                        parser::Expression::Return(_)
-                            | parser::Expression::Break
-                            | parser::Expression::Continue
-                    ),
-                    _ => true,
-                }
-            } else {
-                true
-            };
-
-            if needs_break {
-                code.push_str("            break;\n");
-            }
+            // Close the inner brace for the case body
+            // Note: NO break statement - this is an if-else chain, not a C switch
             code.push_str("        }\n");
+            // Close the if/else-if outer brace
+            code.push_str("    }");
         }
 
-        code.push_str("    }");
+        // Final closing: just the statement expression wrapper
+        code.push_str(" _switch_result; })");
         code
     }
 
@@ -4248,6 +5522,7 @@ impl CCodegen {
                         '\n' => "\\n".to_string(),
                         '\r' => "\\r".to_string(),
                         '\t' => "\\t".to_string(),
+                        '\0' => "\\0".to_string(),
                         c => c.to_string(),
                     };
                     code.push_str(&format!("        case '{}':\n", escaped));
@@ -4273,6 +5548,9 @@ impl CCodegen {
 
             code.push_str("        {\n");
 
+            // Track if we generated an early return (to skip break)
+            let mut generated_early_return = false;
+
             // Generate case body with assignment
             if !case.body.is_empty() {
                 let last_idx = case.body.len() - 1;
@@ -4281,6 +5559,27 @@ impl CCodegen {
                     if idx == last_idx {
                         match stmt {
                             parser::Statement::Expression(expr) => {
+                                // Check if this is a `none` that should cause early return
+                                // When the enclosing function returns Option_T and a switch case
+                                // contains just `none`, it should return from the function, not assign
+                                if let parser::Expression::Ident(ident) = expr {
+                                    if ident.name == "none" {
+                                        if let Some(ref ret_ty) = self.current_return_type {
+                                            let mapped_ret = self.map_type(ret_ty);
+                                            if mapped_ret.starts_with("Option_") {
+                                                // Generate early return with none
+                                                code.push_str(&format!(
+                                                    "            return ({}){{.tag = {}_tag_none}};\n",
+                                                    mapped_ret, mapped_ret
+                                                ));
+                                                code.push_str("        }\n");
+                                                generated_early_return = true;
+                                                break; // Exit the statement loop
+                                            }
+                                        }
+                                    }
+                                }
+
                                 if matches!(
                                     expr,
                                     parser::Expression::Return(_)
@@ -4293,22 +5592,76 @@ impl CCodegen {
                                     code.push_str("\n");
                                 } else {
                                     // For simple identifier expressions, use type hint for enum disambiguation
-                                    let expr_code = if let parser::Expression::Ident(ident) = expr {
-                                        // Use var_type as hint for enum variant disambiguation
-                                        let var_name_local = self.get_variable_name(&ident.name);
-                                        if var_name_local == ident.name {
-                                            // Try to qualify as enum variant with type hint
-                                            self.qualify_identifier_with_hint(
-                                                &ident.name,
-                                                Some(var_type),
-                                            )
+                                    let (expr_code, mut expr_type) =
+                                        if let parser::Expression::Ident(ident) = expr {
+                                            // First check if this is a label-only tagged union variant
+                                            let mut found_label_variant: Option<(String, String)> =
+                                                None;
+                                            for (union_name, labels) in &self.tagged_union_labels {
+                                                if labels.contains(&ident.name) {
+                                                    eprintln!(
+                                                    "DEBUG generate_c_switch_as_statement: found label-only variant '{}' in union '{}'",
+                                                    ident.name, union_name
+                                                );
+                                                    // Generate constructor for label-only variant
+                                                    let constructor = format!(
+                                                    "memcpy(malloc(sizeof({union})), &(({union}){{.tag = {union}_tag_{label}}}), sizeof({union}))",
+                                                    union = union_name,
+                                                    label = ident.name
+                                                );
+                                                    // The type is a pointer to the union
+                                                    let ptr_type = format!("{}*", union_name);
+                                                    found_label_variant =
+                                                        Some((constructor, ptr_type));
+                                                    break;
+                                                }
+                                            }
+
+                                            if let Some((constructor, label_type)) =
+                                                found_label_variant
+                                            {
+                                                (constructor, label_type)
+                                            } else {
+                                                // Use var_type as hint for enum variant disambiguation
+                                                let var_name_local =
+                                                    self.get_variable_name(&ident.name);
+                                                let code = if var_name_local == ident.name {
+                                                    // Try to qualify as enum variant with type hint
+                                                    self.qualify_identifier_with_hint(
+                                                        &ident.name,
+                                                        Some(var_type),
+                                                    )
+                                                } else {
+                                                    var_name_local
+                                                };
+                                                (code, self.infer_expr_type(expr))
+                                            }
                                         } else {
-                                            var_name_local
+                                            (
+                                                self.generate_expression(expr, is_main),
+                                                self.infer_expr_type(expr),
+                                            )
+                                        };
+
+                                    // When assigning to an Option type and the expression is an identifier,
+                                    // check if it's a variant of the Option's inner type
+                                    if var_type.starts_with("Option_") {
+                                        let expected_inner = &var_type[7..]; // e.g., "Assignment_1"
+                                        if let parser::Expression::Ident(ident) = expr {
+                                            if let Some(variants) =
+                                                self.enum_variants.get(expected_inner)
+                                            {
+                                                if variants.contains(&ident.name) {
+                                                    eprintln!(
+                                                        "DEBUG generate_c_switch_as_statement: correcting expr_type from '{}' to '{}' for ident '{}'",
+                                                        expr_type, expected_inner, ident.name
+                                                    );
+                                                    expr_type = expected_inner.to_string();
+                                                }
+                                            }
                                         }
-                                    } else {
-                                        self.generate_expression(expr, is_main)
-                                    };
-                                    let expr_type = self.infer_expr_type(expr);
+                                    }
+
                                     let converted =
                                         self.convert_expr_to_type(&expr_code, &expr_type, var_type);
                                     code.push_str(&format!(
@@ -4331,6 +5684,11 @@ impl CCodegen {
                         code.push_str("\n");
                     }
                 }
+            }
+
+            // Skip break and closing brace if we already generated an early return
+            if generated_early_return {
+                continue;
             }
 
             // Add break unless the body ends with return/break/continue
@@ -4390,6 +5748,7 @@ impl CCodegen {
                             '\n' => "\\n".to_string(),
                             '\r' => "\\r".to_string(),
                             '\t' => "\\t".to_string(),
+                            '\0' => "\\0".to_string(),
                             c => c.to_string(),
                         };
                         format!("{} == '{}'", cond, escaped)
@@ -4458,6 +5817,8 @@ impl CCodegen {
                     let inner_type = &cond_type[7..]; // e.g., "Assignment" from "Option_Assignment"
                     let c_inner_type = self.map_type_name(inner_type);
                     code.push_str(&format!("        {} it = {}.value;\n", c_inner_type, cond));
+                    self.variable_types
+                        .insert("it".to_string(), c_inner_type.clone());
                 }
             }
             // For Type patterns, 'it' is the matched value itself
@@ -4465,9 +5826,13 @@ impl CCodegen {
                 if ty.name == "UnaryOperator" {
                     // For TokenKind matching UnaryOperator, 'it' is the TokenKind value
                     code.push_str(&format!("        TokenKind it = {};\n", cond));
+                    self.variable_types
+                        .insert("it".to_string(), "TokenKind".to_string());
                 } else if ty.name == "Operator" || ty.name == "BinaryOperator" {
                     // For TokenKind matching BinaryOperator, 'it' is the TokenKind value
                     code.push_str(&format!("        TokenKind it = {};\n", cond));
+                    self.variable_types
+                        .insert("it".to_string(), "TokenKind".to_string());
                 }
             }
 
@@ -4799,6 +6164,10 @@ static inline String blitz_substring(List_Rune list, int64_t start, int64_t unti
     int: print_int, \
     bool: print_bool, \
     double: print_float, \
+    TokenKind: print_int, \
+    Operator: print_int, \
+    Assignment_1: print_int, \
+    UnaryOperator: print_int, \
     List_Rune: print_list_rune, \
     List_Definition: print_unknown, \
     default: print_unknown \
@@ -4896,6 +6265,46 @@ void todo(char* msg) __attribute__((noreturn));
             full_header.push_str(&self.enum_defs);
             full_header.push_str("\n");
         }
+
+        // Add TokenKind to BinaryOperator/UnaryOperator conversion functions
+        // These are needed because pattern matching on TokenKind with Operator type
+        // produces TokenKind values that need to be converted for use in BinaryOp/UnaryOp structs
+        full_header.push_str("// TokenKind to Operator conversion functions\n");
+        full_header
+            .push_str("static inline BinaryOperator TokenKind_to_BinaryOperator(TokenKind tk) {\n");
+        full_header.push_str("    switch (tk) {\n");
+        full_header.push_str("        case TokenKind_add: return BinaryOperator_add;\n");
+        full_header.push_str("        case TokenKind_sub: return BinaryOperator_sub;\n");
+        full_header.push_str("        case TokenKind_mul: return BinaryOperator_mul;\n");
+        full_header.push_str("        case TokenKind_div: return BinaryOperator_div;\n");
+        full_header.push_str("        case TokenKind_rem: return BinaryOperator_rem;\n");
+        full_header.push_str("        case TokenKind_concat: return BinaryOperator_concat;\n");
+        full_header.push_str("        case TokenKind_dot: return BinaryOperator_dot;\n");
+        full_header.push_str("        case TokenKind_eq: return BinaryOperator_eq;\n");
+        full_header.push_str("        case TokenKind_ne: return BinaryOperator_ne;\n");
+        full_header.push_str("        case TokenKind_gt: return BinaryOperator_gt;\n");
+        full_header.push_str("        case TokenKind_ge: return BinaryOperator_ge;\n");
+        full_header.push_str("        case TokenKind_lt: return BinaryOperator_lt;\n");
+        full_header.push_str("        case TokenKind_le: return BinaryOperator_le;\n");
+        full_header.push_str("        case TokenKind_and_: return BinaryOperator_and_;\n");
+        full_header.push_str("        case TokenKind_or_: return BinaryOperator_or_;\n");
+        full_header.push_str("        case TokenKind_else_: return BinaryOperator_else_;\n");
+        full_header.push_str("        default: return BinaryOperator_add; // fallback\n");
+        full_header.push_str("    }\n");
+        full_header.push_str("}\n\n");
+        full_header
+            .push_str("static inline UnaryOperator TokenKind_to_UnaryOperator(TokenKind tk) {\n");
+        full_header.push_str("    switch (tk) {\n");
+        full_header.push_str("        case TokenKind_not: return UnaryOperator_not;\n");
+        full_header.push_str(
+            "        case TokenKind_sub: return UnaryOperator_neg; // '-' prefix is negation\n",
+        );
+        full_header.push_str("        default: return UnaryOperator_not; // fallback\n");
+        full_header.push_str("    }\n");
+        full_header.push_str("}\n\n");
+
+        // Note: TokenKind_to_Operator function is added after struct definitions
+        // because it needs the full Operator struct definition (not just forward declaration)
 
         // Add generic type instantiations (must come before function forward declarations)
         if !self.generic_instances.is_empty() {
@@ -5059,8 +6468,54 @@ void todo(char* msg) __attribute__((noreturn));
             full_header.push_str("\n");
         }
 
+        // Add list append function declarations
+        if !self.list_append_needed.is_empty() {
+            full_header.push_str("// List append function declarations\n");
+            for elem_type in &self.list_append_needed {
+                let list_type = format!("List_{}", elem_type);
+                let elem_c_type = format!("{}*", elem_type);
+                full_header.push_str(&format!(
+                    "{} blitz_list_append_{}({} list, {} elem);\n",
+                    list_type, elem_type, list_type, elem_c_type
+                ));
+            }
+            full_header.push_str("\n");
+        }
+
+        // Add list concat function declarations
+        if !self.list_concat_needed.is_empty() {
+            full_header.push_str("// List concat function declarations\n");
+            for elem_type in &self.list_concat_needed {
+                let list_type = format!("List_{}", elem_type);
+                full_header.push_str(&format!(
+                    "{} blitz_list_concat_{}({} a, {} b);\n",
+                    list_type, elem_type, list_type, list_type
+                ));
+            }
+            full_header.push_str("\n");
+        }
+
         // Add type definitions
         full_header.push_str(&self.header);
+
+        // Add TokenKind_to_Operator function AFTER struct definitions
+        // This function needs the full Operator struct definition (not just forward declaration)
+        full_header.push_str("\n// TokenKind to Operator* conversion function\n");
+        full_header.push_str("static inline Operator* TokenKind_to_Operator(TokenKind tk) {\n");
+        full_header.push_str("    Operator* op = malloc(sizeof(Operator));\n");
+        full_header.push_str("    // Check if it's a unary operator\n");
+        full_header.push_str("    if (tk == TokenKind_not) {\n");
+        full_header.push_str("        op->tag = Operator_tag_UnaryOperator;\n");
+        full_header.push_str("        op->data.as_UnaryOperator = UnaryOperator_not;\n");
+        full_header.push_str("    } else {\n");
+        full_header.push_str("        // Default: treat as binary operator\n");
+        full_header.push_str("        op->tag = Operator_tag_BinaryOperator;\n");
+        full_header
+            .push_str("        op->data.as_BinaryOperator = TokenKind_to_BinaryOperator(tk);\n");
+        full_header.push_str("    }\n");
+        full_header.push_str("    return op;\n");
+        full_header.push_str("}\n");
+
         full_header.push_str("\n#endif // BLITZ_H\n");
 
         eprintln!(
@@ -5143,6 +6598,73 @@ void todo(char* msg) __attribute__((noreturn));
             }
         }
 
+        // Generate list append function implementations
+        if !self.list_append_needed.is_empty() {
+            full_impl.push_str("// List append function implementations\n");
+            full_impl.push_str(
+                "// These functions append an element to a list, returning a new list\n\n",
+            );
+
+            for elem_type in &self.list_append_needed {
+                let list_type = format!("List_{}", elem_type);
+                // Element is always a pointer to struct (T*)
+                let elem_c_type = format!("{}*", elem_type);
+
+                full_impl.push_str(&format!(
+                    "{} blitz_list_append_{}({} list, {} elem) {{\n",
+                    list_type, elem_type, list_type, elem_c_type
+                ));
+                full_impl.push_str("    if (list.len >= list.cap) {\n");
+                full_impl.push_str("        size_t new_cap = list.cap == 0 ? 4 : list.cap * 2;\n");
+                full_impl.push_str(&format!(
+                    "        {}* new_data = realloc(list.data, sizeof({}) * new_cap);\n",
+                    elem_c_type, elem_c_type
+                ));
+                full_impl.push_str("        list.data = new_data;\n");
+                full_impl.push_str("        list.cap = new_cap;\n");
+                full_impl.push_str("    }\n");
+                full_impl.push_str("    list.data[list.len++] = elem;\n");
+                full_impl.push_str("    return list;\n");
+                full_impl.push_str("}\n\n");
+            }
+        }
+
+        // Generate list concat function implementations
+        if !self.list_concat_needed.is_empty() {
+            full_impl.push_str("// List concat function implementations\n");
+            full_impl
+                .push_str("// These functions concatenate two lists, returning a new list\n\n");
+
+            for elem_type in &self.list_concat_needed {
+                let list_type = format!("List_{}", elem_type);
+                let elem_c_type = format!("{}*", elem_type);
+
+                full_impl.push_str(&format!(
+                    "{} blitz_list_concat_{}({} a, {} b) {{\n",
+                    list_type, elem_type, list_type, list_type
+                ));
+                full_impl.push_str("    size_t new_len = a.len + b.len;\n");
+                full_impl.push_str("    size_t new_cap = new_len;\n");
+                full_impl.push_str(&format!(
+                    "    {}* new_data = malloc(sizeof({}) * new_cap);\n",
+                    elem_c_type, elem_c_type
+                ));
+                full_impl.push_str(&format!(
+                    "    memcpy(new_data, a.data, sizeof({}) * a.len);\n",
+                    elem_c_type
+                ));
+                full_impl.push_str(&format!(
+                    "    memcpy(new_data + a.len, b.data, sizeof({}) * b.len);\n",
+                    elem_c_type
+                ));
+                full_impl.push_str(&format!(
+                    "    return ({}){{.data = new_data, .len = new_len, .cap = new_cap}};\n",
+                    list_type
+                ));
+                full_impl.push_str("}\n\n");
+            }
+        }
+
         full_impl.push_str(&self.impl_code);
 
         fs::write(&impl_path, full_impl)
@@ -5154,5 +6676,169 @@ void todo(char* msg) __attribute__((noreturn));
         println!("  - blitz.c");
 
         Ok(())
+    }
+
+    /// Generate if-else expression as a statement with returns in each branch
+    /// Used when an if-else is the final expression of a function
+    fn generate_if_else_with_returns(
+        &mut self,
+        left: &parser::Expression,
+        right: &parser::Expression,
+        ret_type: &str,
+        is_main: bool,
+    ) -> String {
+        // Left should be an If expression
+        if let parser::Expression::If(if_expr) = left {
+            let cond = self.generate_expression(&if_expr.cond, is_main);
+
+            // Generate then-body with return
+            let mut then_code = String::new();
+            let then_len = if_expr.body.len();
+            for (i, stmt) in if_expr.body.iter().enumerate() {
+                let is_last = i == then_len - 1;
+                if is_last {
+                    // Last statement should be returned
+                    match stmt {
+                        parser::Statement::Expression(expr) => {
+                            let mut expr_code = self.generate_expression(expr, is_main);
+                            // Auto-wrap if needed
+                            if ret_type.starts_with("Option_") {
+                                let expr_type = self.infer_expr_type(expr);
+                                if !expr_type.starts_with("Option_") && expr_code != "none" {
+                                    // Check for special 'none' identifier
+                                    if let parser::Expression::Ident(ident) = expr {
+                                        if ident.name == "none" {
+                                            expr_code = format!(
+                                                "({}){{.tag = {}_tag_none}}",
+                                                ret_type, ret_type
+                                            );
+                                        } else {
+                                            expr_code = format!(
+                                                "({}){{.tag = {}_tag_some, .value = {}}}",
+                                                ret_type, ret_type, expr_code
+                                            );
+                                        }
+                                    } else {
+                                        expr_code = format!(
+                                            "({}){{.tag = {}_tag_some, .value = {}}}",
+                                            ret_type, ret_type, expr_code
+                                        );
+                                    }
+                                }
+                            }
+                            then_code.push_str(&format!("        return {};\n", expr_code));
+                        }
+                        _ => {
+                            let stmt_code = self.generate_statement(stmt, is_main);
+                            then_code.push_str(&format!("        {}\n", stmt_code));
+                        }
+                    }
+                } else {
+                    let stmt_code = self.generate_statement(stmt, is_main);
+                    then_code.push_str(&format!("        {}\n", stmt_code));
+                }
+            }
+
+            // Generate else-body with return
+            let else_code = match right {
+                parser::Expression::Block(stmts) => {
+                    let mut code = String::new();
+                    let stmts_len = stmts.len();
+                    for (i, stmt) in stmts.iter().enumerate() {
+                        let is_last = i == stmts_len - 1;
+                        if is_last {
+                            match stmt {
+                                parser::Statement::Expression(expr) => {
+                                    let mut expr_code = self.generate_expression(expr, is_main);
+                                    if ret_type.starts_with("Option_") {
+                                        let expr_type = self.infer_expr_type(expr);
+                                        if !expr_type.starts_with("Option_") && expr_code != "none"
+                                        {
+                                            if let parser::Expression::Ident(ident) = expr {
+                                                if ident.name == "none" {
+                                                    expr_code = format!(
+                                                        "({}){{.tag = {}_tag_none}}",
+                                                        ret_type, ret_type
+                                                    );
+                                                } else {
+                                                    expr_code = format!(
+                                                        "({}){{.tag = {}_tag_some, .value = {}}}",
+                                                        ret_type, ret_type, expr_code
+                                                    );
+                                                }
+                                            } else {
+                                                expr_code = format!(
+                                                    "({}){{.tag = {}_tag_some, .value = {}}}",
+                                                    ret_type, ret_type, expr_code
+                                                );
+                                            }
+                                        }
+                                    }
+                                    code.push_str(&format!("        return {};\n", expr_code));
+                                }
+                                _ => {
+                                    let stmt_code = self.generate_statement(stmt, is_main);
+                                    code.push_str(&format!("        {}\n", stmt_code));
+                                }
+                            }
+                        } else {
+                            let stmt_code = self.generate_statement(stmt, is_main);
+                            code.push_str(&format!("        {}\n", stmt_code));
+                        }
+                    }
+                    code
+                }
+                parser::Expression::BinaryOp(binop)
+                    if matches!(binop.op, parser::Operator::Else)
+                        && matches!(&*binop.left, parser::Expression::If(_)) =>
+                {
+                    // Nested if-else (elif) - recursively generate
+                    self.generate_if_else_with_returns(&binop.left, &binop.right, ret_type, is_main)
+                }
+                _ => {
+                    // Single expression else body
+                    let mut expr_code = self.generate_expression(right, is_main);
+                    if ret_type.starts_with("Option_") {
+                        let expr_type = self.infer_expr_type(right);
+                        if !expr_type.starts_with("Option_") && expr_code != "none" {
+                            if let parser::Expression::Ident(ident) = right {
+                                if ident.name == "none" {
+                                    expr_code =
+                                        format!("({}){{.tag = {}_tag_none}}", ret_type, ret_type);
+                                } else {
+                                    expr_code = format!(
+                                        "({}){{.tag = {}_tag_some, .value = {}}}",
+                                        ret_type, ret_type, expr_code
+                                    );
+                                }
+                            } else {
+                                expr_code = format!(
+                                    "({}){{.tag = {}_tag_some, .value = {}}}",
+                                    ret_type, ret_type, expr_code
+                                );
+                            }
+                        }
+                    }
+                    format!("        return {};\n", expr_code)
+                }
+            };
+
+            // Check if this is elif or else
+            let is_elif = matches!(right, parser::Expression::BinaryOp(b) 
+                if matches!(b.op, parser::Operator::Else) && matches!(&*b.left, parser::Expression::If(_)));
+
+            if is_elif {
+                format!("if ({}) {{\n{}    }} else {}", cond, then_code, else_code)
+            } else {
+                format!(
+                    "if ({}) {{\n{}    }} else {{\n{}    }}",
+                    cond, then_code, else_code
+                )
+            }
+        } else {
+            // Not an if expression - shouldn't happen but handle gracefully
+            let expr_code = self.generate_expression(left, is_main);
+            format!("return {};", expr_code)
+        }
     }
 }
