@@ -18,12 +18,14 @@ fn get(reg Registry, ty TypeRef) TypeKind {
     reg.types[id]
 }
 
-fn push(mut reg Registry, mod Module) {
+fn push(mut reg Registry, mod Module) ModuleId {
     reg.mods ++= mod
+    ModuleId(id: reg.mods.len() - 1)
 }
 
-fn push(mut reg Registry, ty TypeKind) {
+fn push(mut reg Registry, ty TypeKind) TypeRef {
     reg.types ++= ty
+    TypeRef(id: reg.types.len() - 1)
 }
 
 union TypeKind {

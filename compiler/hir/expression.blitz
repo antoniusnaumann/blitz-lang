@@ -1,5 +1,18 @@
 struct HirBody {
-    expressions List(HirExpression)
+    expressions List(HirExpression) // index by ExpressionId
+}
+
+fn get(body HirBody, id ExpressionId) HirExpression {
+    body.expressions[id.id]
+}
+
+fn push(mut body HirBody, expr HirExpression) ExpressionId {
+    body.expressions ++= expr
+    ExpressionId(id: body.expressions.len() - 1)
+}
+
+struct ExpressionId {
+    id Int
 }
 
 struct HirExpression {
@@ -7,7 +20,7 @@ struct HirExpression {
     span Span
 }
 
-struct HirExpressionKind {
+union HirExpressionKind {
     HirLoop
     HirIf
     HirElse
@@ -15,7 +28,14 @@ struct HirExpressionKind {
     HirCall
     HirReturn
     HirBreak
-    HirContinue
     HirSwitch
     // ...
+}
+
+struct HirBreak {
+    loop ExpressionId
+}
+
+struct HirReturn {
+    expr ExpressionId
 }
