@@ -7,11 +7,6 @@ use crate::c_codegen_patch::{TypeKind, TypeNameRegistry};
 
 /// Main entry point for C transpilation
 pub fn transpile_to_c(asts: &[Ast], output_dir: &Path) -> Result<(), String> {
-    eprintln!("DEBUG: transpiling {} ASTs", asts.len());
-    for (i, ast) in asts.iter().enumerate() {
-        eprintln!("  AST {}: {} definitions", i, ast.defs.len());
-    }
-
     let mut codegen = CCodegen::new(output_dir);
 
     // First pass: collect all type definitions
@@ -57,7 +52,6 @@ pub fn transpile_to_c(asts: &[Ast], output_dir: &Path) -> Result<(), String> {
 
     // Then generate structs and tagged unions in topologically sorted order
     let ordered_types = codegen.topological_sort_types()?;
-    eprintln!("DEBUG: Type dependency order: {:?}", ordered_types);
 
     for type_name in ordered_types {
         // Clone the definition to avoid borrow checker issues
@@ -145,7 +139,15 @@ impl CCodegen {
             enum_types: HashSet::new(),
             tagged_union_types: HashSet::new(),
             generated_types: HashSet::new(),
-            generic_instances: HashMap::new(),
+            generic_instances: {
+                let mut instances = HashMap::new();
+                // Pre-populate List_Int since it's used for empty list literals and integer list literals
+                instances.insert(
+                    "List_Int".to_string(),
+                    ("List".to_string(), vec!["Int".to_string()]),
+                );
+                instances
+            },
             current_return_type: None,
             function_signatures: HashMap::new(),
             function_return_types: HashMap::new(),
@@ -167,7 +169,6 @@ impl CCodegen {
                 let c_name = self
                     .type_name_registry
                     .register_type(&s.sig.name, TypeKind::Struct);
-                eprintln!("DEBUG: Registering struct {} -> {}", s.sig.name, c_name);
                 self.seen_types.insert(c_name);
             }
             Definition::Union(u) => {
@@ -182,10 +183,6 @@ impl CCodegen {
                 };
 
                 let c_name = self.type_name_registry.register_type(&u.sig.name, kind);
-                eprintln!(
-                    "DEBUG: Registering union {} ({:?}) -> {}",
-                    u.sig.name, kind, c_name
-                );
                 self.seen_types.insert(c_name.clone());
 
                 if !has_typed_variants {
@@ -284,11 +281,6 @@ impl CCodegen {
                 }
 
                 self.type_dependencies.insert(c_name.clone(), deps);
-                eprintln!(
-                    "DEBUG: Type '{}' depends on: {:?}",
-                    c_name,
-                    self.type_dependencies.get(&c_name).unwrap()
-                );
             }
             Definition::Union(u) => {
                 let blitz_name = u.sig.name.clone();
@@ -1100,10 +1092,12 @@ impl CCodegen {
             // First generate the tag enum
             self.header.push_str(&format!("typedef enum {{\n"));
             for (i, case) in cases.iter().enumerate() {
+                // For variant names, use the full monomorphized name if the type has parameters
+                // e.g., Lit(Bool) -> Lit_Bool, not just Lit
                 let variant_name = if let Some(label) = &case.label {
                     label.clone()
                 } else if let Some(ty) = &case.r#type {
-                    ty.name.clone()
+                    self.type_name_for_instance(ty)
                 } else {
                     return Err(format!(
                         "Union {} has case {} without label or type",
@@ -1130,11 +1124,12 @@ impl CCodegen {
             if !typed_cases.is_empty() {
                 self.header.push_str("    union {\n");
                 for case in typed_cases {
-                    // For typed cases, if label is missing, use type name
+                    // For typed cases, use the full monomorphized name if the type has parameters
+                    // e.g., Lit(Bool) -> as_Lit_Bool, not just as_Lit
                     let variant_name = if let Some(label) = &case.label {
                         label.clone()
                     } else if let Some(ty) = &case.r#type {
-                        ty.name.clone()
+                        self.type_name_for_instance(ty)
                     } else {
                         // Should be unreachable given filter
                         "unknown".to_string()
@@ -1184,11 +1179,11 @@ impl CCodegen {
         code.push_str(&format!("    switch (expr->tag) {{\n"));
 
         for case in cases {
-            // Determine variant name
+            // Determine variant name - use full monomorphized name for types with parameters
             let variant_name = if let Some(label) = &case.label {
                 label.clone()
             } else if let Some(ty) = &case.r#type {
-                ty.name.clone()
+                self.type_name_for_instance(ty)
             } else {
                 continue; // Skip invalid cases
             };
@@ -1219,8 +1214,7 @@ impl CCodegen {
                         variant_name
                     ));
                 } else {
-                    // Hack for Lit - it stores value directly, but span is part of it?
-                    // Wait, Lit(T) struct has span. So if it's not a pointer, it's a struct value.
+                    // For Lit variants and other value types - they store struct values directly
                     code.push_str(&format!(
                         "            return &expr->data.as_{}.span;\n",
                         variant_name
@@ -1595,8 +1589,27 @@ impl CCodegen {
         // Check all enum types to see if this identifier is a variant
         for (enum_name, variants) in &self.enum_variants {
             if variants.contains(ident_name) {
+                eprintln!(
+                    "DEBUG qualify_identifier: '{}' found in enum '{}', returning '{}'",
+                    ident_name,
+                    enum_name,
+                    format!("{}_{}", enum_name, ident_name)
+                );
                 return format!("{}_{}", enum_name, ident_name);
             }
+        }
+
+        // Debug: print when identifier is NOT found in any enum
+        if ident_name == "int"
+            || ident_name == "float"
+            || ident_name == "char"
+            || ident_name == "ch"
+        {
+            eprintln!(
+                "DEBUG qualify_identifier: '{}' NOT FOUND in any enum. Enums available: {:?}",
+                ident_name,
+                self.enum_variants.keys().collect::<Vec<_>>()
+            );
         }
 
         // Check for special reserved identifier mappings for enum variants
@@ -1813,6 +1826,20 @@ impl CCodegen {
                     "parse_ident" => return "Option_Ident".to_string(),
                     "parse_expression" => return "Option_Expression".to_string(),
                     "parse_statement" => return "Option_Statement".to_string(),
+                    // Struct field types - these are pointer fields
+                    "range" => return "Range*".to_string(),
+                    "span" => return "Span*".to_string(),
+                    "path" => return "char*".to_string(),
+                    "name" => return "char*".to_string(),
+                    "value" => {
+                        // For Option types, return the inner type
+                        let parent_type = self.infer_expr_type(&member.parent);
+                        if parent_type.starts_with("Option_") {
+                            let inner = parent_type.trim_start_matches("Option_");
+                            return format!("{}*", inner);
+                        }
+                        return "void*".to_string();
+                    }
                     _ => {}
                 }
 
@@ -1831,6 +1858,52 @@ impl CCodegen {
                 }
                 // Default fallback for unknown identifiers
                 "int64_t".to_string()
+            }
+            parser::Expression::Switch(switch_expr) => {
+                // Infer type from the first non-else case body's last expression
+                for case in &switch_expr.cases {
+                    if !case.body.is_empty() {
+                        if let parser::Statement::Expression(last_expr) = case.body.last().unwrap()
+                        {
+                            let inferred = self.infer_expr_type(last_expr);
+                            // If we got a valid type (not the fallback), return it
+                            if inferred != "int64_t" {
+                                // Check if this is an Option of an Expression variant
+                                // Expression variants: For, While, If, Switch, Return, etc.
+                                let expression_variants = [
+                                    "Option_For",
+                                    "Option_While",
+                                    "Option_If",
+                                    "Option_Switch",
+                                    "Option_Return",
+                                    "Option_Continue",
+                                    "Option_Break",
+                                    "Option_Assert",
+                                    "Option_Block",
+                                    "Option_Ident",
+                                    "Option_Call",
+                                    "Option_Member",
+                                    "Option_Index",
+                                    "Option_BinaryOp",
+                                    "Option_UnaryOp",
+                                    "Option_Constructor",
+                                    "Option_Group",
+                                    "Option_List_",
+                                    "Option_Lit",
+                                    "Option_Mut",
+                                    "Option_Assignment",
+                                ];
+                                if expression_variants.iter().any(|v| inferred.starts_with(v)) {
+                                    // This is an expression variant, use Expression* as the common type
+                                    return "Expression*".to_string();
+                                }
+                                return inferred;
+                            }
+                        }
+                    }
+                }
+                // Fallback to Expression* since switch expressions often return expressions
+                "Expression*".to_string()
             }
             _ => "int64_t".to_string(), // Fallback for complex expressions
         }
@@ -2294,9 +2367,35 @@ impl CCodegen {
                 // Blitz: Lexer(source: source.chars(), index: 0)
                 // C: (Lexer){.source = source_chars(), .index = 0}
 
-                // For constructors, we need the raw struct name, not the pointer type
-                // that map_type would give us
-                let type_name = &ctor.r#type.name;
+                // For constructors, we need the monomorphized struct name (e.g., Lit_Bool not Lit)
+                // but not the pointer type that map_type would give us
+                let mut type_name = self.type_name_for_instance(&ctor.r#type);
+
+                // Special case: Lit(value: ...) without type parameter
+                // Infer the type parameter from the value argument
+                if type_name == "Lit" {
+                    // Find the 'value' argument and infer its type
+                    for arg in &ctor.args {
+                        if arg.label.name == "value" {
+                            let value_type = self.infer_expr_type(&arg.init);
+                            type_name = match value_type.as_str() {
+                                "bool" => "Lit_Bool".to_string(),
+                                "int64_t" => "Lit_Int".to_string(),
+                                "double" => "Lit_Float".to_string(),
+                                "char*" => "Lit_String".to_string(),
+                                "Rune" | "uint32_t" => "Lit_Rune".to_string(),
+                                _ => {
+                                    eprintln!(
+                                        "WARNING: Cannot infer Lit type from value type '{}'",
+                                        value_type
+                                    );
+                                    "Lit_Bool".to_string() // Default fallback
+                                }
+                            };
+                            break;
+                        }
+                    }
+                }
 
                 // Generate field initializers
                 let mut field_inits = Vec::new();
@@ -2309,7 +2408,7 @@ impl CCodegen {
                 // Check if we need to return a pointer to this struct
                 // This happens when the struct type is known and not an enum
                 let needs_pointer =
-                    self.seen_types.contains(type_name) && !self.enum_types.contains(type_name);
+                    self.seen_types.contains(&type_name) && !self.enum_types.contains(&type_name);
 
                 // Format as compound literal: (TypeName){.field1 = val1, .field2 = val2}
                 let compound_literal = format!("({}){{{}}}", type_name, field_inits.join(", "));
@@ -2366,15 +2465,27 @@ impl CCodegen {
                 // Since most structs are passed as pointers in our C codegen (see map_type),
                 // we should use '->' for struct types
 
-                // Simple heuristic: if parent_code starts with '&' or contains '->', use '.'
-                // Otherwise, use '->' for struct member access (assuming pointers)
-                let separator = if parent_code.starts_with('&')
-                    || parent_code.contains("->")
-                    || parent_is_option
-                    || parent_code.ends_with("]") // Array access returns value/struct
-                    || parent_code.ends_with(")")
-                // Function call returning struct (like unwrap)
-                {
+                // For C struct member access, we need to decide between '.' and '->'
+                // Use the inferred type to make this decision more reliably
+                let parent_is_pointer = parent_type.ends_with('*');
+
+                let separator = if parent_is_pointer {
+                    // Parent type is a pointer (like Token*), use ->
+                    "->"
+                } else if parent_code.starts_with('&') {
+                    // Taking address of something, result is pointer-like but accessed with .
+                    "."
+                } else if parent_code.contains("->") {
+                    // Already dereferenced a pointer, result is value, use .
+                    "."
+                } else if parent_is_option {
+                    // Option types are structs, use . to access .value
+                    "."
+                } else if parent_code.ends_with("]") {
+                    // Array access returns value/struct
+                    "."
+                } else if parent_code.ends_with(")") && !parent_is_pointer {
+                    // Function call returning struct (not pointer), use .
                     "."
                 } else if parent_code.starts_with('*') {
                     // Dereferenced pointer: (*ptr).field can be simplified to ptr->field
@@ -2695,7 +2806,11 @@ impl CCodegen {
         cases: &[parser::SwitchCase],
         is_main: bool,
     ) -> String {
-        let mut code = format!("switch ({}) {{\n", cond);
+        // Wrap switch in a GCC statement expression so it can be used as an expression
+        // Pattern: ({ int64_t _switch_result; switch(...) { case: _switch_result = val; break; } _switch_result; })
+        let mut code = String::from("({ int64_t _switch_result; switch (");
+        code.push_str(cond);
+        code.push_str(") {\n");
 
         for case in cases {
             // Generate case label
@@ -2782,13 +2897,48 @@ impl CCodegen {
                 }
             }
 
-            // Generate case body
+            // Generate case body with assignment to _switch_result for last expression
             code.push_str("        {\n");
-            for stmt in &case.body {
-                let stmt_code = self.generate_statement(stmt, is_main);
-                code.push_str("            ");
-                code.push_str(&stmt_code);
-                code.push_str("\n");
+
+            if !case.body.is_empty() {
+                let last_idx = case.body.len() - 1;
+                for (idx, stmt) in case.body.iter().enumerate() {
+                    if idx == last_idx {
+                        // Last statement - assign to _switch_result if it's an expression
+                        match stmt {
+                            parser::Statement::Expression(expr) => {
+                                if matches!(
+                                    expr,
+                                    parser::Expression::Return(_)
+                                        | parser::Expression::Break
+                                        | parser::Expression::Continue
+                                ) {
+                                    let stmt_code = self.generate_statement(stmt, is_main);
+                                    code.push_str("            ");
+                                    code.push_str(&stmt_code);
+                                    code.push_str("\n");
+                                } else {
+                                    let expr_code = self.generate_expression(expr, is_main);
+                                    code.push_str(&format!(
+                                        "            _switch_result = {};\n",
+                                        expr_code
+                                    ));
+                                }
+                            }
+                            parser::Statement::Declaration(_) => {
+                                let stmt_code = self.generate_statement(stmt, is_main);
+                                code.push_str("            ");
+                                code.push_str(&stmt_code);
+                                code.push_str("\n");
+                            }
+                        }
+                    } else {
+                        let stmt_code = self.generate_statement(stmt, is_main);
+                        code.push_str("            ");
+                        code.push_str(&stmt_code);
+                        code.push_str("\n");
+                    }
+                }
             }
 
             // Add break unless the body ends with return/break/continue
@@ -2812,7 +2962,7 @@ impl CCodegen {
             code.push_str("        }\n");
         }
 
-        code.push_str("    }");
+        code.push_str("    } _switch_result; })");
         code
     }
 
@@ -2822,7 +2972,8 @@ impl CCodegen {
         cases: &[parser::SwitchCase],
         is_main: bool,
     ) -> String {
-        let mut code = String::new();
+        // Wrap in a GCC statement expression so it can be used as an expression
+        let mut code = String::from("({ int64_t _switch_result; ");
         let mut first = true;
 
         for case in cases {
@@ -2886,16 +3037,51 @@ impl CCodegen {
                 }
             }
 
-            // Generate case body
-            for stmt in &case.body {
-                let stmt_code = self.generate_statement(stmt, is_main);
-                code.push_str("        ");
-                code.push_str(&stmt_code);
-                code.push_str("\n");
+            // Generate case body with assignment to _switch_result for last expression
+            if !case.body.is_empty() {
+                let last_idx = case.body.len() - 1;
+                for (idx, stmt) in case.body.iter().enumerate() {
+                    if idx == last_idx {
+                        // Last statement - assign to _switch_result if it's an expression
+                        match stmt {
+                            parser::Statement::Expression(expr) => {
+                                if matches!(
+                                    expr,
+                                    parser::Expression::Return(_)
+                                        | parser::Expression::Break
+                                        | parser::Expression::Continue
+                                ) {
+                                    let stmt_code = self.generate_statement(stmt, is_main);
+                                    code.push_str("        ");
+                                    code.push_str(&stmt_code);
+                                    code.push_str("\n");
+                                } else {
+                                    let expr_code = self.generate_expression(expr, is_main);
+                                    code.push_str(&format!(
+                                        "        _switch_result = {};\n",
+                                        expr_code
+                                    ));
+                                }
+                            }
+                            parser::Statement::Declaration(_) => {
+                                let stmt_code = self.generate_statement(stmt, is_main);
+                                code.push_str("        ");
+                                code.push_str(&stmt_code);
+                                code.push_str("\n");
+                            }
+                        }
+                    } else {
+                        let stmt_code = self.generate_statement(stmt, is_main);
+                        code.push_str("        ");
+                        code.push_str(&stmt_code);
+                        code.push_str("\n");
+                    }
+                }
             }
             code.push_str("    }");
         }
 
+        code.push_str(" _switch_result; })");
         code
     }
 
@@ -3154,7 +3340,9 @@ impl CCodegen {
                         )
                     }
                     parser::SwitchLabel::Ident(ident) => {
-                        format!("{} == {}", cond, ident.name)
+                        // Qualify enum variants
+                        let qualified = self.qualify_identifier(&ident.name);
+                        format!("{} == {}", cond, qualified)
                     }
                     parser::SwitchLabel::Type(ty) => {
                         format!("{}->tag == {}_tag_{}", cond, ty.name, ty.name)
@@ -3480,6 +3668,12 @@ char* read_to_string(const char* path);
 int64_t blitz_time(void);
 Option_String blitz_read(char* path);  // Returns Option(String)
 
+// String concatenation - creates a new string from two input strings
+char* blitz_string_concat(char* a, char* b);
+
+// Todo function - marks unimplemented code, panics at runtime
+void todo(char* msg) __attribute__((noreturn));
+
 #endif // BLITZ_TYPES_H
 "#;
 
@@ -3687,6 +3881,35 @@ Option_String blitz_read(char* path);  // Returns Option(String)
         let impl_path = self.output_dir.join("blitz.c");
         let mut full_impl = String::new();
         full_impl.push_str("#include \"blitz.h\"\n\n");
+
+        // Built-in runtime function stub implementations
+        full_impl.push_str(
+            "// ============================================================================\n",
+        );
+        full_impl.push_str("// Built-in runtime function implementations\n");
+        full_impl.push_str(
+            "// ============================================================================\n\n",
+        );
+
+        // blitz_string_concat implementation
+        full_impl.push_str("char* blitz_string_concat(char* a, char* b) {\n");
+        full_impl.push_str("    if (!a && !b) return strdup(\"\");\n");
+        full_impl.push_str("    if (!a) return strdup(b);\n");
+        full_impl.push_str("    if (!b) return strdup(a);\n");
+        full_impl.push_str("    size_t len_a = strlen(a);\n");
+        full_impl.push_str("    size_t len_b = strlen(b);\n");
+        full_impl.push_str("    char* result = (char*)malloc(len_a + len_b + 1);\n");
+        full_impl.push_str("    memcpy(result, a, len_a);\n");
+        full_impl.push_str("    memcpy(result + len_a, b, len_b + 1);\n");
+        full_impl.push_str("    return result;\n");
+        full_impl.push_str("}\n\n");
+
+        // todo implementation
+        full_impl.push_str("void todo(char* msg) {\n");
+        full_impl
+            .push_str("    fprintf(stderr, \"TODO: %s\\n\", msg ? msg : \"not implemented\");\n");
+        full_impl.push_str("    abort();\n");
+        full_impl.push_str("}\n\n");
 
         // Generate unwrap function implementations for all Option types that are used
         if !self.unwrap_needed.is_empty() {

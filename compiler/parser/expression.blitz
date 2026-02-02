@@ -80,7 +80,7 @@ fn parse_expression_bp(mut parser Parser, min_prec Int) Option(Expression) {
             parser.mut.tok()
             let peek = parser.peek()
             let span = token.span
-            let emtpy_return = Return(expr: Block(statements: [], span:), span:)
+            let empty_return = Return(expr: Block(statements: [], span:), span:)
             switch peek.kind {
                 mut_ { empty_return }
                 let_ { empty_return }
@@ -118,7 +118,7 @@ fn parse_expression_bp(mut parser Parser, min_prec Int) Option(Expression) {
         lbracket { parser.mut.parse_list() }
         lparen { parser.mut.parse_group() }
         str { parser.mut.parse_string_lit() }
-        ch { parser.mut.parse_char_lit() }
+        char { parser.mut.parse_char_lit() }
         int { parser.mut.parse_int_lit() }
         float { parser.mut.parse_float_lit() }
         true_ {
