@@ -4149,6 +4149,18 @@ impl CCodegen {
                                 args[0], args[1], args[2]
                             );
                         }
+                        "print" if args.len() == 1 => {
+                            // obj.print() - print method on various types
+                            // Check if the receiver is a list type that needs special handling
+                            let receiver_type = self.infer_expr_type(&call.args[0].init);
+                            if receiver_type.starts_with("List_") {
+                                // For List types, print a placeholder since we can't easily iterate
+                                // in an expression context
+                                return format!("printf(\"<{}>\\n\")", receiver_type);
+                            }
+                            // For other types, use the print macro
+                            return format!("print({})", args[0]);
+                        }
                         "precedence" if args.len() == 1 => {
                             // op.precedence() where op is TokenKind but precedence() expects Operator*
                             // Check if the receiver is TokenKind
@@ -4208,6 +4220,26 @@ impl CCodegen {
                             // Fallback for generic types - cast to void* (not ideal but prevents invalid C)
                             eprintln!("WARNING: Cannot monomorphize unwrap for generic type parameter '{}'", inner_type);
                         }
+                    }
+
+                    // Special handling for print() - handle types not covered by _Generic macro
+                    if func_name == "print" && args.len() == 1 {
+                        let arg_type = self.infer_expr_type(&call.args[0].init);
+                        // Check if this is a type not handled by the print macro
+                        if arg_type == "TokenKind" {
+                            return format!("printf(\"TokenKind(%d)\\n\", (int)({}))", args[0]);
+                        } else if arg_type == "Statement" || arg_type == "Statement*" {
+                            return format!("printf(\"<Statement>\\n\")");
+                        } else if arg_type.starts_with("List_") && arg_type != "List_Rune" {
+                            return format!("printf(\"<{}>\\n\")", arg_type);
+                        } else if self.tagged_union_types.contains(&arg_type)
+                            || self
+                                .tagged_union_types
+                                .contains(&arg_type.trim_end_matches('*').to_string())
+                        {
+                            return format!("printf(\"<{}>\\n\")", arg_type);
+                        }
+                        // Otherwise, let the print macro handle it
                     }
 
                     // Regular function call - try to guess argument types for overload resolution
@@ -7318,27 +7350,24 @@ static inline String blitz_substring(List_Rune list, int64_t start, int64_t unti
 
 // Print functions - overloaded in Blitz, mapped to _Generic macro in C
 // Usage: print(x) expands to the appropriate function based on type
+// Note: Complex types (TokenKind, Operator, etc.) are handled via code generation
+// to print appropriate placeholders. This macro handles basic built-in types.
 #define print(x) _Generic((x), \
     char*: print_str, \
     const char*: print_str, \
     int64_t: print_int, \
-    int: print_int, \
+    int: print_int_from_int, \
     bool: print_bool, \
     double: print_float, \
-    TokenKind: print_int, \
-    Operator: print_int, \
-    BinaryOperator: print_int, \
-    UnaryOperator: print_int, \
-    List_Rune: print_list_rune, \
-    default: print_unknown \
+    List_Rune: print_list_rune \
 )(x)
 
 void print_str(const char* str);
 void print_int(int64_t val);
+void print_int_from_int(int val);
 void print_bool(bool val);
 void print_float(double val);
 void print_list_rune(List_Rune list);
-void print_unknown(void* ptr);
 
 // Panic function - terminates the program with an error message
 // Used for unrecoverable errors
@@ -7772,8 +7801,8 @@ void todo(char* msg) __attribute__((noreturn));
         full_impl.push_str("    printf(\"List_Rune[len=%zu]\\n\", list.len);\n");
         full_impl.push_str("}\n\n");
 
-        full_impl.push_str("void print_unknown(void* ptr) {\n");
-        full_impl.push_str("    printf(\"<unknown: %p>\\n\", ptr);\n");
+        full_impl.push_str("void print_int_from_int(int val) {\n");
+        full_impl.push_str("    printf(\"%d\\n\", val);\n");
         full_impl.push_str("}\n\n");
 
         // blitz_time implementation
