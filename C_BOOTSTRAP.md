@@ -15,7 +15,15 @@ Build a minimal C transpiler for the Blitz self-hosted compiler (~1676 lines in 
 
 ---
 
-## Current Status (Updated: Feb 2, 2026)
+## Current Status (Updated: Feb 2, 2025)
+
+### ✅ MILESTONE: C Code Compiles and Links
+
+| Stage | Status | Details |
+|-------|--------|---------|
+| Compilation | ✅ **PASS** | 0 errors, 29 warnings |
+| Linking | ✅ **PASS** | Executable created |
+| Runtime | ⚠️ **INCOMPLETE** | Program runs but hangs (likely infinite loop or missing logic) |
 
 ### Quick Start
 
@@ -28,307 +36,140 @@ cargo build --release --bin interpreter
 # Transpile Blitz to C
 cargo run --release --bin interpreter -- --transpile-c ../../compiler/**/*.blitz
 
-# Test compilation
-gcc -std=c11 -ferror-limit=1000 -I c-out -c c-out/blitz.c 2>&1 | grep "error:" | wc -l
-# Result: 19 errors
+# Compile to executable (0 errors)
+gcc -std=c11 -I c-out -o c-out/blitz c-out/blitz.c
 
-# Categorize errors
-gcc -std=c11 -ferror-limit=1000 -I c-out -c c-out/blitz.c 2>&1 | grep "error:" | \
-  sed 's/blitz.c:[0-9]*:[0-9]*:/blitz.c:XXX:/' | sort | uniq -c | sort -rn
+# Run (from compiler directory to find source files)
+cd ../../compiler && ../bootstrap/interpreter/c-out/blitz
+# Note: Currently hangs - likely infinite loop or runtime bug
 ```
 
-### Compilation Results
+### What Works
 
-| Target | Status | Errors |
-|--------|--------|--------|
-| Header (`blitz.h`) | **WORKING** | 0 |
-| Implementation (`blitz.c`) | Failing | 19 |
+- ✅ All Blitz source files transpile to C
+- ✅ Generated C compiles without errors
+- ✅ Generated C links into executable
+- ✅ Executable starts and runs initial code
 
-### Error Summary (19 errors)
+### What's Broken
+
+- ❌ Runtime hangs (infinite loop suspected)
+- ⚠️ 29 compiler warnings (mostly harmless but some indicate real issues)
+- ⚠️ Some type mismatches (Ident* vs Expression* in parse_args)
+
+---
+
+## Remaining Warnings Analysis (29 total)
+
+### Likely Harmless (cosmetic)
+- Extraneous parentheses in equality comparisons (3)
+- Braces around scalar initializers (4)
+- Expression result unused in error-handling code (7)
+
+### May Indicate Bugs
+- **Incompatible pointer types** (4): `Ident*` vs `Expression*` in parse_args - this is a type system issue where the generated code assigns wrong pointer types
+- **Missing return in non-void function** (1): `parse_float` doesn't return a value on all paths
+- **Switch case values not in enumerated type** (8): Assignment_1 switch uses TokenKind values
+
+### Specific Issues
 
 ```
-2 - returning 'List_Int' from function with incompatible result type 'List_Type'
-2 - initializing 'Option_Ident_Tag' with expression of incompatible type 'Option_For'
-1 - use of undeclared identifier 'none'
-1 - unknown type name 'Option_void'
-1 - statement requires expression of integer type ('Operator *' invalid)
-1 - passing 'List_Definition' to parameter of incompatible type 'void *'
-1 - initializing 'Statement **' with expression of incompatible type 'List_Int'
-1 - initializing 'List_Type *' with expression of incompatible type 'List_Type'
-1 - initializing 'List_CallArg *' with expression of incompatible type 'List_Int'
-1 - initializing 'CallArg **' with expression of incompatible type 'Option_List_CallArg'
-1 - initializing 'Arg **' with expression of incompatible type 'List_Int'
-1 - incompatible pointer to integer conversion initializing 'Option_Ident_Tag' with 'Ident *'
-1 - incompatible pointer to integer conversion assigning to 'Int' from 'Int *'
-1 - assigning to 'Option_Type' from incompatible type 'Type *'
-1 - assigning to 'Option_For' from incompatible type 'Option_Ident'
-1 - assigning to 'List_Type' from incompatible type 'List_Int'
-1 - assigning to 'int64_t' from incompatible type 'void'
+c-out/blitz.c:737: incompatible pointer types assigning to 'Ident *' from 'Expression *'
+c-out/blitz.c:741: incompatible pointer types initializing 'Expression *' with 'Ident *'
+c-out/blitz.c:754: incompatible pointer types initializing 'Ident *' with 'Expression *'
+c-out/blitz.c:755: incompatible pointer types initializing 'Expression *' with 'Ident *'
+c-out/blitz.c:1437: non-void function does not return a value
 ```
 
 ---
 
-## Remaining Issues (Prioritized)
+## Recent Fixes (This Session)
 
-### 1. Operator Switch Statement (1 error)
+### 1. Fixed void-returning functions in if-else expressions
+**Problem**: Functions like `skip_newlines(parser)` return void, but were used as the last expression in if-else bodies, causing `_if_result = skip_newlines(parser)` which is invalid C.
 
-**Problem**: The `precedence(Operator* operator)` function has:
-```c
-switch (operator) {  // ERROR: can't switch on Operator* (pointer to tagged union)
-    case TokenKind_else_:  // WRONG: should be Operator variant, not TokenKind
-```
+**Solution**:
+- Added `void_functions: HashSet<String>` to track functions without return types
+- Updated `infer_expr_type` to check `void_functions` and return "void"  
+- When if-else result type is void, generate plain if-else statement instead of expression wrapper
 
-**Root Cause**:
-- `Operator` is a tagged union (struct with tag + data), passed as pointer `Operator*`
-- C `switch` requires an integer type, not a pointer to a struct
-- Case labels are `TokenKind_` prefixed when they should use `BinaryOperator` or `Operator` variants
+### 2. Fixed print(List_Definition) type mismatch
+**Problem**: The `print` macro mapped `List_Definition` to `print_unknown(void*)` but passed the struct by value.
 
-**Blitz Source** (`compiler/parser/precedence.blitz`):
-```blitz
-fn precedence(operator Operator) Precedence {
-    switch operator {
-        else_ { Precedence(left: 2, right: 2) }
-        or_ { Precedence(left: 7, right: 8) }
-        ...
-    }
-}
-```
+**Solution**:
+- Added forward declaration for `List_Definition` in `blitz_types.h`
+- Added `print_list_definition(List_Definition)` function
+- Updated `_Generic` macro to route `List_Definition` to proper function
 
-**Fix Needed**: 
-- Detect when switch condition is a tagged union type
-- Generate if-else chain checking `.tag` instead of C switch, OR
-- Switch on `operator->tag` with proper `Operator_Tag_*` values
-- Fix `qualify_identifier` to use correct enum prefix for Operator variants
-
-### 2. Empty List Type Inference (6 errors)
-
-**Problem**: Empty lists `[]` default to `List_Int` but context requires different types.
-
-**Examples**:
-- `Statement **` expects list of statements, gets `List_Int`
-- `List_Type` expected, gets `List_Int`
-- `Arg **` expected, gets `List_Int`
-
-**Root Cause**: `preanalyze_empty_lists` doesn't have enough context to infer the correct element type in all cases.
-
-**Fix Needed**: Improve context propagation for:
-- Function parameters
-- Return statements
-- Variable declarations with explicit type annotations
-
-### 3. Option Type Issues (5 errors)
-
-**Problems**:
-1. `Option_void` type name generated but doesn't exist
-2. `none` identifier used but not qualified
-3. `Option_For` vs `Option_Ident` type confusion
-4. `Option_Ident_Tag` initialized with wrong types
-
-**Specific Issue at line 1715**:
-```c
-Option_void label = none;  // Option_void doesn't exist, 'none' not qualified
-```
-
-**Root Cause**: 
-- When Blitz has `Option(Ident)` but the variable is named `label`, the codegen looks for `Option_label` or similar
-- The identifier `none` needs to be qualified as `Option_T_tag_none` for the specific type
-
-**Fix Needed**:
-- Track Option type instantiations properly
-- Qualify `none`/`some` identifiers with correct type prefix
-- Fix Option type detection in variable declarations
-
-### 4. Pointer vs Value Confusion (3 errors)
-
-**Problems**:
-- `Int *` assigned to `Int` (line 62: `blitz_list_append` return)
-- `Type *` assigned to `Option_Type` (missing Option wrapper)
-- `List_Type` (value) assigned to `List_Type *` (pointer)
-
-**Root Cause**: Inconsistent handling of when types should be values vs pointers.
-
-### 5. print() Macro (1 error)
-
-**Problem**: `print(List_Definition)` doesn't match `void*` parameter.
-
-**Fix**: Add `List_Definition` and other List types to `_Generic` macro in `blitz_types.h`.
+### 3. Added runtime function implementations
+Added missing functions in generated C:
+- `panic(const char*)` - prints error and aborts
+- `print_str/int/bool/float/list_rune/list_definition/unknown()` - all print variants
+- `blitz_time()` - returns milliseconds since epoch
+- `blitz_read(char* path)` - reads file into `Option_String`
 
 ---
 
-## Key Data Structures in c_codegen.rs
-
-```rust
-struct CCodegen {
-    // Type tracking
-    enum_variants: HashMap<String, HashSet<String>>,      // EnumName -> {variant1, ...}
-    variant_to_union: HashMap<String, HashSet<String>>,   // VariantType -> {ParentUnion, ...}
-    tagged_union_labels: HashMap<String, HashSet<String>>, // UnionName -> {label1, ...}
-    enum_types: HashSet<String>,                          // Simple enums (no data)
-    tagged_union_types: HashSet<String>,                  // Tagged unions (have data)
-    struct_field_types: HashMap<String, HashMap<String, String>>,
-    
-    // Context tracking
-    current_return_type: Option<Type>,
-    variable_types: HashMap<String, String>,              // VarName -> CType
-    variable_name_mappings: HashMap<String, String>,      // OriginalName -> MangledName
-    function_signatures: HashMap<String, Vec<(Vec<String>, String)>>,
-    function_return_types: HashMap<String, Type>,
-    // ... more fields
-}
-```
-
-## Blitz Type Mappings
-
-| Blitz Type | C Type | Notes |
-|------------|--------|-------|
-| `Int` | `int64_t` | |
-| `Bool` | `bool` | |
-| `String` | `char*` | Leaked, no management |
-| `List(T)` | `List_T` struct | `.data`, `.len`, `.cap` fields |
-| `Option(T)` | `Option_T` struct | `.tag`, `.value` fields |
-| `Box(T)` | `T*` | Simple pointer alias |
-| Simple union | C enum | e.g., `BinaryOperator` |
-| Tagged union | C struct | Tag enum + data union |
-| Struct | C struct | Passed as pointers |
-
----
-
-## What Works
-
-### Type System (Complete)
-- Struct transpilation with all field types
-- Empty structs with dummy field
-- Simple unions as C enums
-- Tagged unions with enum + data union
-- Generic type monomorphization (Box, List, Option, Lit)
-- Forward declarations for recursive types
-- Topological sort for type ordering
-- Type collision resolution (counter-based naming)
-
-### Functions (Complete)
-- Function signatures with parameters
-- Return types mapped correctly
-- Function bodies generated
-- Function overloading via name mangling
-- UFCS method calls
-
-### Expressions (Complete)
-- All literals (Int, Bool, Float, String, Rune)
-- Binary and unary operations
-- Function calls (simple, nested)
-- Member access with proper -> vs .
-- Index operations with .data accessor
-- Constructor calls with C99 compound literals
-- Control flow (if, while)
-- Switch expressions (C switch or if-else chains)
-- Assignments
-
-### Statements (Complete)
-- Variable declarations
-- Assignments
-- Return statements
-- Expression statements
-- Break/continue
-
----
-
-## What's Broken
-
-### Critical Issues
-1. **Tagged union switch** - Can't use C switch on `Operator*`
-2. **Empty list inference** - Defaults to `List_Int` without context
-3. **Option type handling** - `Option_void`, unqualified `none`
-
-### Known Technical Debt
-1. HashMap iteration order for enum variants (non-deterministic)
-2. Hardcoded handling of keywords (`for_`, `if_`, `switch_`)
-3. String heuristics for type detection
-4. Inconsistent Option unwrapping
-
----
-
-## Estimated Remaining Work
-
-| Task | Effort | Complexity |
-|------|--------|------------|
-| Fix Operator switch (tagged union) | 2-3 hours | High |
-| Fix empty list type inference | 2-3 hours | Medium |
-| Fix Option type issues | 2-3 hours | Medium |
-| Fix pointer/value confusion | 1-2 hours | Low |
-| Fix print() macro | 0.5 hours | Low |
-
-**Total to compiling C: 8-12 hours**
-
----
-
-## File Structure
+## Key Files
 
 ```
-bootstrap/
-  interpreter/
-    src/
-      c_codegen.rs         # Main C code generation (~7000+ lines)
-      c_codegen_patch.rs   # Type name collision registry
-      main.rs              # --transpile-c flag handling
-      lib.rs               # Module exports
-    c-out/                 # Generated C files
-      blitz_types.h        # Runtime type definitions
-      blitz.h              # Generated types + function declarations
-      blitz.c              # Function implementations
+bootstrap/interpreter/
+  src/
+    c_codegen.rs         # Main transpiler (~7500 lines)
+    c_codegen_patch.rs   # Type name collision registry
+    main.rs              # CLI and --transpile-c flag
+  c-out/                 # Generated output
+    blitz_types.h        # Runtime types (List_Rune, Option_String, etc.)
+    blitz.h              # Generated type declarations
+    blitz.c              # Generated function implementations
 ```
 
 ---
 
-## LLM Agent Instructions
+## Next Steps (Prioritized)
 
-### Progress Updates
-- Be completely honest about what works and what doesn't
-- Never claim something compiles if you haven't verified it
-- Report errors immediately and accurately
-- Mark tasks completed ONLY when verified working
+1. **Debug runtime hang** - Add debug prints or run in debugger to find where it loops
+2. **Fix Ident*/Expression* type confusion** - In parse_args, wrong types are being assigned
+3. **Fix parse_float missing return** - Add return statement for all code paths
+4. **Clean up switch/enum warnings** - Use correct enum values
 
-### Testing
+---
+
+## Testing Commands
+
 ```bash
-# Always run these after changes:
+# Full test cycle
+cd /Users/anaumann/Development/blitz-lang/bootstrap/interpreter
 cargo build --release --bin interpreter
 cargo run --release --bin interpreter -- --transpile-c ../../compiler/**/*.blitz
-gcc -std=c11 -ferror-limit=1000 -I c-out -c c-out/blitz.c 2>&1 | grep "error:" | wc -l
-```
+gcc -std=c11 -I c-out -o c-out/blitz c-out/blitz.c
 
-### Key Files to Understand
-1. `c_codegen.rs` - Main transpiler (~7000 lines)
-2. `blitz_types.h` - Runtime type definitions
-3. `compiler/ast/*.blitz` - Blitz AST type definitions
-4. `compiler/parser/*.blitz` - Parser implementation
+# Count errors (should be 0)
+gcc -std=c11 -I c-out -c c-out/blitz.c 2>&1 | grep -c "error:"
 
-### Common Pitfalls
-1. Don't assume C switch works on tagged unions
-2. Empty lists need type context from surrounding code
-3. Option types need qualified identifiers for `none`/`some`
-4. HashMap iteration order is non-deterministic
-
----
-
-## Commit History (Recent)
-
-```
-2c7ad33 Fix C codegen: List type inference, type collision for Option, enum disambiguation
-68dfd55 Fix C codegen: enum qualification, pointer semantics, type inference
-40f0f98 Fix C codegen: tagged union pointers, enum qualification, and Option unwrapping
-61c9b13 Improve C codegen: type inference, union span helpers, and Option wrapping
-1a0215a Fix C codegen: Add union span helpers, enforce pointer types for AST nodes
-bb8ef7e Fix C codegen: Option type unwrapping, pointer semantics, and enum qualification
+# List warnings by type
+gcc -std=c11 -I c-out -c c-out/blitz.c 2>&1 | grep "warning:" | sed 's/blitz.c:[0-9]*:[0-9]*://' | sort | uniq -c | sort -rn
 ```
 
 ---
 
 ## Success Criteria
 
-All files in `compiler/` transpile to valid C code that compiles:
-```bash
-cargo run --bin interpreter -- --transpile-c compiler/**/*.blitz
-gcc -c -I c-out c-out/*.c
-# 0 errors
-```
+**Current Goal (ACHIEVED)**: Generate C code that compiles without errors.
 
-That's it. Valid C code that compiles is success.
+**Next Goal**: Generate C code that runs correctly (parses Blitz source files).
+
+---
+
+## LLM Agent Notes
+
+### Honesty Policy
+- Report actual error/warning counts after testing
+- Don't claim "it works" without running it
+- Document what's broken, not just what's fixed
+
+### Key Patterns in c_codegen.rs
+- `void_functions` HashSet tracks functions returning void
+- `infer_expr_type()` determines C type of expressions
+- `generate_if_else_branch_body_with_type()` handles if-else branch code generation
+- When result_type is "void", generate plain statement instead of expression wrapper
