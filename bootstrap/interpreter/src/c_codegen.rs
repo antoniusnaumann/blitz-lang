@@ -2645,18 +2645,18 @@ impl CCodegen {
                     "parse_switch_label" => return "Option_SwitchLabel".to_string(),
                     "parse_member_call" => return "Option_Expression".to_string(),
 
-                    // Parser literal functions
-                    "parse_int_lit" => return "Option_Lit_Int".to_string(),
-                    "parse_float_lit" => return "Option_Lit_Float".to_string(),
-                    "parse_string_lit" => return "Option_Lit_String".to_string(),
-                    "parse_char_lit" => return "Option_Lit_Rune".to_string(),
+                    // Parser literal functions - these return Expression variants, not standalone types
+                    "parse_int_lit" => return "Option_Expression".to_string(),
+                    "parse_float_lit" => return "Option_Expression".to_string(),
+                    "parse_string_lit" => return "Option_Expression".to_string(),
+                    "parse_char_lit" => return "Option_Expression".to_string(),
 
-                    // Parser call/constructor functions
-                    "parse_call" => return "Option_Call".to_string(),
-                    "parse_member_call" => return "Option_Call".to_string(),
-                    "parse_constructor" => return "Option_Constructor".to_string(),
+                    // Parser call/constructor functions - these return Expression variants
+                    "parse_call" => return "Option_Expression".to_string(),
+                    "parse_member_call" => return "Option_Expression".to_string(),
+                    "parse_constructor" => return "Option_Expression".to_string(),
                     "parse_group" => return "Option_Expression".to_string(),
-                    "parse_list" => return "Option_List_".to_string(),
+                    "parse_list" => return "Option_Expression".to_string(),
                     "parse_precedence" => return "Option_Expression".to_string(),
 
                     // Lexer functions
@@ -4290,7 +4290,12 @@ impl CCodegen {
                             // - Inner type is a tagged union
                             // - Inner type is a List type
                             if inner_is_struct || inner_is_tagged_union || inner_is_list {
-                                field_value = format!("{}.value", field_value);
+                                // Generate a safe unwrap that panics if none
+                                // Pattern: ({ OptionType _tmp = val; if (_tmp.tag == ..._tag_none) panic("Unwrap failed"); _tmp.value; })
+                                field_value = format!(
+                                    "({{ {} _unwrap_tmp = {}; if (_unwrap_tmp.tag == {}_tag_none) panic(\"Implicit unwrap failed on '{}' for field '{}'\"); _unwrap_tmp.value; }})",
+                                    field_type, field_value, field_type, field_value, field_name
+                                );
                             }
                         }
                     }
@@ -4330,14 +4335,17 @@ impl CCodegen {
                 {
                     // If return type is Option(X), check if X matches our type_name
                     if return_type.name == "Option" && !return_type.params.is_empty() {
-                        // Get the inner type name
+                        // Get the inner type name, monomorphized if it has params
+                        // e.g., Lit(Int) -> Lit_Int
                         let inner_type = &return_type.params[0];
-                        let inner_name = &inner_type.name;
+                        let inner_monomorphized = self.type_name_for_instance(inner_type);
                         // If the inner type matches our constructor type, don't wrap in union
-                        if inner_name == &type_name || inner_name.as_str() == type_name.as_str() {
+                        if inner_monomorphized == type_name
+                            || inner_monomorphized.as_str() == type_name.as_str()
+                        {
                             eprintln!(
                                 "DEBUG Constructor: skipping union wrap because return type Option({}) matches type_name={}",
-                                inner_name, type_name
+                                inner_monomorphized, type_name
                             );
                             true
                         } else {
@@ -4411,16 +4419,20 @@ impl CCodegen {
                 }
 
                 // Check if we need to return a pointer to this struct
-                // This happens when the struct type is known and not an enum
-                let needs_pointer =
-                    self.seen_types.contains(&type_name) && !self.enum_types.contains(&type_name);
+                // This happens when:
+                // 1. The struct type is known and not an enum, OR
+                // 2. The return type is Option(X) and we're returning X - Option.value is always a pointer
+                let needs_pointer = (self.seen_types.contains(&type_name)
+                    && !self.enum_types.contains(&type_name))
+                    || should_skip_union_wrapping; // When returning into Option.value, we need a pointer
 
                 eprintln!(
-                    "DEBUG Constructor: type_name={}, seen_types.contains={}, enum_types.contains={}, needs_pointer={}",
+                    "DEBUG Constructor: type_name={}, seen_types.contains={}, enum_types.contains={}, needs_pointer={}, should_skip_union_wrapping={}",
                     type_name,
                     self.seen_types.contains(&type_name),
                     self.enum_types.contains(&type_name),
-                    needs_pointer
+                    needs_pointer,
+                    should_skip_union_wrapping
                 );
 
                 // Format as compound literal: (TypeName){.field1 = val1, .field2 = val2}
@@ -4472,9 +4484,13 @@ impl CCodegen {
 
                     if base_type == "Expression" || base_type == "Statement" {
                         // Use helper function: Expression_span(expr)
-                        // If parent_type is Option, we need to unwrap/access value first
+                        // If parent_type is Option, we need to unwrap/access value first with a safety check
                         if parent_type.starts_with("Option_") {
-                            return format!("{}_span({}.value)", base_type, parent_code);
+                            // Generate a safe unwrap that panics if none
+                            return format!(
+                                "{}_span(({{ {} _unwrap_tmp = {}; if (_unwrap_tmp.tag == {}_tag_none) panic(\"Implicit unwrap failed accessing .span\"); _unwrap_tmp.value; }}))",
+                                base_type, parent_type, parent_code, parent_type
+                            );
                         }
                         return format!("{}_span({})", base_type, parent_code);
                     }
@@ -4533,11 +4549,17 @@ impl CCodegen {
                     // If inner type is List, .value is List_T (struct). So .value.field
                     // If inner type is Expression*, .value is Expression*. So .value->field
 
+                    // Generate a safe unwrap that panics if none
+                    let safe_unwrap = format!(
+                        "({{ {} _unwrap_tmp = {}; if (_unwrap_tmp.tag == {}_tag_none) panic(\"Implicit unwrap failed accessing .{}\"); _unwrap_tmp.value; }})",
+                        parent_type, parent_code, parent_type, member_name
+                    );
+
                     if parent_type.contains("List_") || parent_type.contains("Range") {
-                        format!("{}.value.{}", parent_code, member_name)
+                        format!("{}.{}", safe_unwrap, member_name)
                     } else {
                         // Assume pointer for other user types
-                        format!("{}.value->{}", parent_code, member_name)
+                        format!("{}->{}", safe_unwrap, member_name)
                     }
                 } else if parent_code.starts_with('*') {
                     format!("{}->{}", parent_code.trim_start_matches('*'), member_name)
@@ -4732,13 +4754,66 @@ impl CCodegen {
                     }
                 }
 
-                // Fallback: generate a TODO comment for non-Range iterations
+                // Check if the iterator is a List type - generate index-based for loop
+                let iter_type = self.infer_expr_type(&for_loop.iter);
+                if iter_type.starts_with("List_") {
+                    let iter_code = self.generate_expression(&for_loop.iter, is_main);
+
+                    // Extract the element type from List_ElementType
+                    let elem_type = &iter_type[5..]; // Remove "List_" prefix
+
+                    // Determine if the element type is a struct/union (needs pointer) or value type (enum/primitive)
+                    // Check if the element type is in our seen_types (structs) or tagged_union_types
+                    let is_struct_type = self.seen_types.contains(elem_type)
+                        || self.tagged_union_types.contains(elem_type);
+                    let is_enum_type = self.enum_types.contains(elem_type);
+
+                    // For structs and tagged unions, elements are pointers (List has Type**)
+                    // For enums and primitives, elements are values (List has Type*)
+                    let c_elem_type = if is_struct_type && !is_enum_type {
+                        format!("{}*", elem_type)
+                    } else {
+                        self.normalize_c_type(elem_type)
+                    };
+
+                    // Create a unique loop label for break statements to target
+                    let loop_label = format!("_loop_exit_{}", self.loop_label_counter);
+                    self.loop_label_counter += 1;
+                    self.loop_label_stack.push(loop_label.clone());
+
+                    // Register the element variable type for use in the body
+                    self.variable_types
+                        .insert(elem_name.clone(), c_elem_type.clone());
+
+                    // Generate body statements
+                    let mut body_code = String::new();
+                    for stmt in &for_loop.body {
+                        let stmt_code = self.generate_statement(stmt, is_main);
+                        body_code.push_str("            ");
+                        body_code.push_str(&stmt_code);
+                        body_code.push_str("\n");
+                    }
+
+                    // Pop the loop label
+                    self.loop_label_stack.pop();
+
+                    // Generate C for-loop over list elements
+                    // Pattern: for (int64_t _i = 0; _i < list.len; _i++) { ElemType elem = list.data[_i]; ... }
+                    return format!(
+                        "for (int64_t _idx_{} = 0; _idx_{} < ({}).len; _idx_{}++) {{\n        {} {} = ({}).data[_idx_{}];\n{}}}\n    {}:;",
+                        elem_name, elem_name, iter_code, elem_name,
+                        c_elem_type, elem_name, iter_code, elem_name,
+                        body_code, loop_label
+                    );
+                }
+
+                // Fallback: generate a TODO comment for unknown iteration types
                 // DO NOT emit the loop body since the iterator variable is not declared
                 let iter_code = self.generate_expression(&for_loop.iter, is_main);
 
                 format!(
-                    "// TODO: For loop over non-Range/non-List: for {} in {} {{ ... }}",
-                    elem_name, iter_code
+                    "// TODO: For loop over unknown type '{}': for {} in {} {{ ... }}",
+                    iter_type, elem_name, iter_code
                 )
             }
             parser::Expression::While(while_loop) => {
@@ -5483,6 +5558,7 @@ impl CCodegen {
     ) -> String {
         let mut code = String::new();
         let mut first = true;
+        let cond_base_type = cond_type.trim_end_matches('*').trim();
 
         for case in cases {
             let is_default = matches!(case.label, parser::SwitchLabel::Else(_))
@@ -5522,7 +5598,6 @@ impl CCodegen {
                             format!("{}.tag == {}_tag_none", cond, cond_type)
                         } else {
                             // Check if we're switching on a tagged union (e.g., Operator*)
-                            let cond_base_type = cond_type.trim_end_matches('*').trim();
                             if self.tagged_union_types.contains(cond_base_type) {
                                 // For tagged unions, we need to check the tag and the inner data
                                 let variant_name = &ident.name;
@@ -5589,7 +5664,9 @@ impl CCodegen {
                         } else if ty.name == "UnaryOperator" {
                             format!("{} == TokenKind_not || {} == TokenKind_sub", cond, cond)
                         } else {
-                            format!("{}->tag == {}_tag_{}", cond, ty.name, ty.name)
+                            // Use cond_base_type for the tag enum, and ty.name for the variant
+                            // e.g., switch on Definition* with case Fn -> item->tag == Definition_tag_Fn
+                            format!("{}->tag == {}_tag_{}", cond, cond_base_type, ty.name)
                         }
                     }
                     _ => continue,
@@ -5603,6 +5680,33 @@ impl CCodegen {
                 }
             }
 
+            // For Type case labels on tagged unions, shadow the variable with the inner typed value
+            // e.g., switch item { Fn { ... } } -> Fn* item = _outer_item->data.as_Fn; inside the Fn case
+            // We use a nested scope and rename the outer variable to avoid conflicts
+            let mut shadow_var: Option<(String, String)> = None; // (var_name, old_type)
+
+            if let parser::SwitchLabel::Type(ty) = &case.label {
+                if self.tagged_union_types.contains(cond_base_type) {
+                    // The condition is a simple variable name that we'll shadow
+                    // We need to save the old type and temporarily set the new type
+                    let variant_type = format!("{}*", ty.name);
+                    let old_type = self.variable_types.get(cond).cloned();
+                    shadow_var = Some((cond.to_string(), old_type.unwrap_or_default()));
+                    self.variable_types
+                        .insert(cond.to_string(), variant_type.clone());
+                    // Generate the shadowing assignment using a temp for the outer value
+                    // First save the outer pointer, then shadow with the inner value
+                    code.push_str(&format!(
+                        "        {}* _outer_{} = {};\n",
+                        cond_base_type, cond, cond
+                    ));
+                    code.push_str(&format!(
+                        "        {}* {} = _outer_{}->data.as_{};\n",
+                        ty.name, cond, cond, ty.name
+                    ));
+                }
+            }
+
             // Generate case body
             for stmt in &case.body {
                 let stmt_code = self.generate_statement(stmt, is_main);
@@ -5610,6 +5714,16 @@ impl CCodegen {
                 code.push_str(&stmt_code);
                 code.push_str("\n");
             }
+
+            // Restore the old type if we shadowed
+            if let Some((var_name, old_type)) = shadow_var {
+                if old_type.is_empty() {
+                    self.variable_types.remove(&var_name);
+                } else {
+                    self.variable_types.insert(var_name, old_type);
+                }
+            }
+
             code.push_str("    }");
         }
 
