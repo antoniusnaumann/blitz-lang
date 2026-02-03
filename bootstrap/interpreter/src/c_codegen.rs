@@ -1,13 +1,23 @@
-use parser::{Ast, Definition, Type};
+use parser::{Ast, Definition, Test, Type};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
 use crate::c_codegen_patch::{TypeKind, TypeNameRegistry};
 
-/// Main entry point for C transpilation
+/// Main entry point for C transpilation (without tests)
 pub fn transpile_to_c(asts: &[Ast], output_dir: &Path) -> Result<(), String> {
-    let mut codegen = CCodegen::new(output_dir);
+    transpile_to_c_impl(asts, output_dir, false)
+}
+
+/// Transpile to C with test support - generates test functions and a test runner main
+pub fn transpile_to_c_with_tests(asts: &[Ast], output_dir: &Path) -> Result<(), String> {
+    transpile_to_c_impl(asts, output_dir, true)
+}
+
+/// Implementation for C transpilation with optional test support
+fn transpile_to_c_impl(asts: &[Ast], output_dir: &Path, include_tests: bool) -> Result<(), String> {
+    let mut codegen = CCodegen::new(output_dir, include_tests);
 
     // First pass: collect all type definitions
     for ast in asts {
@@ -85,7 +95,18 @@ pub fn transpile_to_c(asts: &[Ast], output_dir: &Path) -> Result<(), String> {
         }
     }
 
-    // Write output files
+    // Generate test functions if in test mode
+    if include_tests {
+        for ast in asts {
+            for def in &ast.defs {
+                if let Definition::Test(_) = def {
+                    codegen.generate_definition(def)?;
+                }
+            }
+        }
+    }
+
+    // Write output files (test mode writes test runner main instead of user main)
     codegen.write_files()?;
 
     Ok(())
@@ -157,10 +178,14 @@ struct CCodegen {
     loop_label_counter: usize,
     /// Track if we're currently inside a switch statement (for break semantics)
     in_switch_depth: usize,
+    /// Whether to include test code generation
+    include_tests: bool,
+    /// Collected test definitions for test mode
+    test_definitions: Vec<Test>,
 }
 
 impl CCodegen {
-    fn new(output_dir: &Path) -> Self {
+    fn new(output_dir: &Path, include_tests: bool) -> Self {
         Self {
             output_dir: output_dir.to_path_buf(),
             forward_decls: String::new(),
@@ -201,6 +226,8 @@ impl CCodegen {
             loop_label_stack: Vec::new(),
             loop_label_counter: 0,
             in_switch_depth: 0,
+            include_tests,
+            test_definitions: Vec::new(),
         }
     }
 
@@ -278,8 +305,11 @@ impl CCodegen {
             Definition::Pub(p) => {
                 self.collect_definition(&p.item)?;
             }
-            Definition::Test(_) => {
-                // Skip tests entirely
+            Definition::Test(test) => {
+                // Collect tests if in test mode
+                if self.include_tests {
+                    self.test_definitions.push(test.clone());
+                }
             }
             _ => {}
         }
@@ -378,8 +408,13 @@ impl CCodegen {
             Definition::Pub(p) => {
                 self.analyze_definition(&p.item)?;
             }
-            Definition::Test(_) => {
-                // Skip tests
+            Definition::Test(test) => {
+                // Analyze types in test body if in test mode
+                if self.include_tests {
+                    for stmt in &test.body {
+                        self.analyze_statement(stmt);
+                    }
+                }
             }
             _ => {}
         }
@@ -1128,8 +1163,11 @@ impl CCodegen {
             Definition::Pub(p) => {
                 self.generate_definition(&p.item)?;
             }
-            Definition::Test(_) => {
-                // Skip tests entirely
+            Definition::Test(test) => {
+                // Generate test function if in test mode
+                if self.include_tests {
+                    self.generate_test_function(test)?;
+                }
             }
             Definition::Alias(_) | Definition::Actor(_) => {
                 // Not implemented yet
@@ -1434,6 +1472,13 @@ impl CCodegen {
 
         // Special case: main function must return int in C
         let is_main = func.name == "main";
+
+        // Skip main function when in test mode (test runner provides its own main)
+        if is_main && self.include_tests {
+            eprintln!("Skipping main function (test mode generates test runner main)");
+            return Ok(());
+        }
+
         if is_main {
             // main() in C must always return int
             return_type = "int".to_string();
@@ -1666,6 +1711,48 @@ impl CCodegen {
                     let default_return = self.generate_default_return_value(&return_type);
                     self.impl_code
                         .push_str(&format!("    return {}; // unreachable\n", default_return));
+                }
+            }
+        }
+
+        self.impl_code.push_str("}\n\n");
+
+        Ok(())
+    }
+
+    /// Generate a test function from a Blitz test block
+    fn generate_test_function(&mut self, test: &Test) -> Result<(), String> {
+        // Clear variable name mappings and types for new test scope
+        self.variable_name_mappings.clear();
+        self.variable_types.clear();
+
+        // Generate a safe function name from the test name
+        // Replace spaces and special chars with underscores
+        let safe_name: String = test
+            .name
+            .chars()
+            .map(|c| if c.is_alphanumeric() { c } else { '_' })
+            .collect();
+        let c_func_name = format!("blitz_test_{}", safe_name);
+
+        // Store return type (tests have no return type, so void)
+        self.current_return_type = None;
+
+        // Add forward declaration for the test function
+        let func_signature = format!("void {}(void);", c_func_name);
+        self.all_functions
+            .push((c_func_name.clone(), func_signature));
+
+        // Generate function definition
+        self.impl_code
+            .push_str(&format!("void {}(void) {{\n", c_func_name));
+
+        // Generate statements in the test body
+        for stmt in &test.body {
+            let stmt_code = self.generate_statement(stmt, false);
+            for line in stmt_code.lines() {
+                if !line.is_empty() {
+                    self.impl_code.push_str(&format!("    {}\n", line));
                 }
             }
         }
@@ -7714,6 +7801,11 @@ void todo(char* msg) __attribute__((noreturn));
 
         full_impl.push_str(&self.impl_code);
 
+        // Generate test runner main if in test mode
+        if self.include_tests && !self.test_definitions.is_empty() {
+            full_impl.push_str(self.generate_test_runner_main().as_str());
+        }
+
         fs::write(&impl_path, full_impl)
             .map_err(|e| format!("Failed to write {}: {}", impl_path.display(), e))?;
 
@@ -7721,8 +7813,109 @@ void todo(char* msg) __attribute__((noreturn));
         println!("  - blitz_types.h");
         println!("  - blitz.h");
         println!("  - blitz.c");
+        if self.include_tests && !self.test_definitions.is_empty() {
+            println!(
+                "  - {} test function(s) included",
+                self.test_definitions.len()
+            );
+        }
 
         Ok(())
+    }
+
+    /// Generate a test runner main function that runs all tests with setjmp/longjmp for panic recovery
+    fn generate_test_runner_main(&self) -> String {
+        let mut code = String::new();
+
+        // Add setjmp include and global variables for panic recovery
+        code.push_str(
+            "\n// ============================================================================\n",
+        );
+        code.push_str("// Test runner infrastructure\n");
+        code.push_str(
+            "// ============================================================================\n\n",
+        );
+        code.push_str("#include <setjmp.h>\n\n");
+        code.push_str("static jmp_buf blitz_test_panic_buf;\n");
+        code.push_str("static char* blitz_test_panic_msg = NULL;\n");
+        code.push_str("static int blitz_in_test = 0;\n\n");
+
+        // Override panic for test mode
+        code.push_str("// Test-mode panic that uses longjmp instead of abort\n");
+        code.push_str("void blitz_test_panic(const char* message) {\n");
+        code.push_str("    if (blitz_in_test) {\n");
+        code.push_str("        blitz_test_panic_msg = strdup(message);\n");
+        code.push_str("        longjmp(blitz_test_panic_buf, 1);\n");
+        code.push_str("    } else {\n");
+        code.push_str("        fprintf(stderr, \"PANIC: %s\\n\", message);\n");
+        code.push_str("        abort();\n");
+        code.push_str("    }\n");
+        code.push_str("}\n\n");
+
+        // Redefine panic macro to use test panic
+        code.push_str("#undef panic\n");
+        code.push_str("#define panic(msg) blitz_test_panic(msg)\n\n");
+
+        // Generate main function
+        code.push_str("int main(int argc, char** argv) {\n");
+        code.push_str("    int passed = 0;\n");
+        code.push_str("    int failed = 0;\n\n");
+
+        code.push_str(&format!("    printf(\"--- TEST OUTPUT ---\\n\\n\");\n"));
+        code.push_str(&format!(
+            "    printf(\"Running {} test(s)...\\n\\n\", {});\n\n",
+            self.test_definitions.len(),
+            self.test_definitions.len()
+        ));
+
+        // Generate test invocations
+        for test in &self.test_definitions {
+            // Generate safe function name (same as in generate_test_function)
+            let safe_name: String = test
+                .name
+                .chars()
+                .map(|c| if c.is_alphanumeric() { c } else { '_' })
+                .collect();
+            let c_func_name = format!("blitz_test_{}", safe_name);
+
+            // Escape the test name for C string literal
+            let escaped_name = test.name.replace("\\", "\\\\").replace("\"", "\\\"");
+
+            code.push_str("    // Test: ");
+            code.push_str(&test.name);
+            code.push_str("\n");
+            code.push_str("    blitz_in_test = 1;\n");
+            code.push_str("    if (setjmp(blitz_test_panic_buf) == 0) {\n");
+            code.push_str(&format!("        {}();\n", c_func_name));
+            code.push_str("        printf(\"\\x1b[92mPASS\\x1b[0m ... \\\"%s\\\"\\n\", \"");
+            code.push_str(&escaped_name);
+            code.push_str("\");\n");
+            code.push_str("        passed++;\n");
+            code.push_str("    } else {\n");
+            code.push_str("        printf(\"\\x1b[91mFAIL\\x1b[0m ... \\\"%s\\\"\\n\", \"");
+            code.push_str(&escaped_name);
+            code.push_str("\");\n");
+            code.push_str("        if (blitz_test_panic_msg) {\n");
+            code.push_str("            printf(\"  -> %s\\n\", blitz_test_panic_msg);\n");
+            code.push_str("            free(blitz_test_panic_msg);\n");
+            code.push_str("            blitz_test_panic_msg = NULL;\n");
+            code.push_str("        }\n");
+            code.push_str("        failed++;\n");
+            code.push_str("    }\n");
+            code.push_str("    blitz_in_test = 0;\n\n");
+        }
+
+        // Summary
+        code.push_str("    printf(\"\\n\");\n");
+        code.push_str("    if (failed == 0) {\n");
+        code.push_str("        printf(\"test result: \\x1b[92mok\\x1b[0m. %d passed; %d failed\\n\\n\", passed, failed);\n");
+        code.push_str("    } else {\n");
+        code.push_str("        printf(\"test result: \\x1b[91mFAILED\\x1b[0m. %d passed; %d failed\\n\\n\", passed, failed);\n");
+        code.push_str("    }\n\n");
+        code.push_str("    return failed > 0 ? 1 : 0;\n");
+        code.push_str("}\n");
+
+        code
     }
 
     /// Generate if-else expression as a statement with returns in each branch

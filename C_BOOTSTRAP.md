@@ -10,7 +10,6 @@ Build a minimal C transpiler for the Blitz self-hosted compiler (`compiler/` dir
 
 **Constraints**:
 - Leak all memory (no memory management)
-- Skip test blocks entirely
 - Only support features actually used by the compiler
 - Assume well-formed input (no error handling)
 - Transpiler only runs on the self-hosted compiler (not a general-purpose tool)
@@ -74,6 +73,39 @@ cd ../../compiler && ../bootstrap/interpreter/c-out/blitz main.blitz
 
 ---
 
+## Test Runner Status
+
+### Interpreter Test Runner (Working)
+The interpreter-based test runner works correctly:
+```bash
+cargo run --release --bin interpreter -- test ../../compiler
+```
+
+### C Test Runner (In Progress)
+A C-based test runner has been implemented with `--test-c` flag:
+```bash
+cargo run --release --bin interpreter -- --test-c ../../compiler
+```
+
+**Current Status**: ❌ **NOT WORKING** - C compilation fails
+
+**Blockers**:
+1. **List equality comparison** - The tests use `assert tokens == [...]` which compares lists. C doesn't support operator overloading, so `List_T == List_T` fails. Needs generated equality functions for each list type.
+2. **Pattern matching in switch** - Some pattern matching constructs generate invalid C code
+
+**What was implemented**:
+- `--test-c` flag added to interpreter CLI
+- `transpile_to_c_with_tests()` function generates test functions from `test "name" { ... }` blocks
+- Test runner main with `setjmp`/`longjmp` for panic recovery
+- Output format matches interpreter test runner (PASS/FAIL with colors, summary)
+
+**What needs to be done**:
+1. Generate `blitz_list_eq_T(List_T a, List_T b)` functions for each list type used in tests
+2. Translate `a == b` on lists to `blitz_list_eq_T(a, b)` calls
+3. Fix various pattern matching edge cases in test code
+
+---
+
 ## Architecture
 
 ```
@@ -85,9 +117,9 @@ compiler/                    # Blitz source (INPUT - do not modify)
 
 bootstrap/interpreter/       # C backend transpiler (THIS IS WHAT WE WORK ON)
   ├── src/
-  │   ├── c_codegen.rs       # Main transpiler (~7900 lines)
+  │   ├── c_codegen.rs       # Main transpiler (~8100 lines)
   │   ├── c_codegen_patch.rs # Type name collision registry
-  │   └── main.rs            # CLI with --transpile-c flag
+  │   └── main.rs            # CLI with --transpile-c and --test-c flags
   └── c-out/                 # Generated output
       ├── blitz_types.h      # Runtime types
       ├── blitz.h            # Generated type declarations
@@ -125,12 +157,19 @@ bootstrap/interpreter/       # C backend transpiler (THIS IS WHAT WE WORK ON)
 1. Compare monomorphized type names when deciding to skip union wrapping
 2. Always heap-allocate when returning into Option.value (pointer field)
 
+### 6. Added C Test Runner Infrastructure (Feb 3, 2025)
+**Added**: `--test-c` flag and test function generation
+
+**Problem**: Test runner generates test functions but C compilation fails on list comparisons.
+
+**Status**: Infrastructure in place, but blocked by missing list equality functions.
+
 ---
 
 ## Testing Commands
 
 ```bash
-# Full test cycle
+# Full test cycle (main transpiler)
 cd /Users/anaumann/Development/blitz-lang/bootstrap/interpreter
 cargo build --release --bin interpreter
 cargo run --release --bin interpreter -- --transpile-c ../../compiler/**/*.blitz
@@ -144,6 +183,12 @@ gcc -std=c11 -I c-out -c c-out/blitz.c 2>&1 | grep -c "warning:"
 
 # Run and check exit code
 cd ../../compiler && ../bootstrap/interpreter/c-out/blitz main.blitz; echo "Exit code: $?"
+
+# Run interpreter tests (working)
+cargo run --release --bin interpreter -- test ../../compiler
+
+# Run C tests (NOT WORKING - compilation fails)
+cargo run --release --bin interpreter -- --test-c ../../compiler
 ```
 
 ---
@@ -152,12 +197,15 @@ cd ../../compiler && ../bootstrap/interpreter/c-out/blitz main.blitz; echo "Exit
 
 **Ultimate Goal**: The C-compiled binary behaves identically to the Rust interpreter running the same Blitz code.
 
-**Current Status**: ✅ Achieved for lexer + parser functionality
+**Current Status**: ✅ Achieved for lexer + parser functionality (main code path)
+
+**Test Runner Status**: ❌ Not yet working (blocked by list equality)
 
 **What "done" looks like**:
-- C backend transpiles all Blitz compiler source
-- Generated C compiles without errors
-- Resulting binary executes the same logic as the Rust interpreter
+- C backend transpiles all Blitz compiler source ✅
+- Generated C compiles without errors ✅
+- Resulting binary executes the same logic as the Rust interpreter ✅
+- C test runner passes all tests that interpreter passes ❌ (in progress)
 - As the Blitz compiler gains more features (code gen, etc.), the C backend supports them
 
 ---
@@ -178,3 +226,5 @@ cd ../../compiler && ../bootstrap/interpreter/c-out/blitz main.blitz; echo "Exit
 - `loop_label_stack` + `in_switch_depth` handle break semantics
 - `variant_to_union` maps variant types to their parent unions
 - When generating constructors, check if return type matches to skip unnecessary union wrapping
+- `include_tests` flag controls whether test functions are generated
+- `test_definitions` stores collected tests for test runner generation

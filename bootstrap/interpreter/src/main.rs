@@ -3,6 +3,7 @@ use std::env::args;
 use std::fs;
 use std::panic;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Arc;
 use std::sync::RwLock;
 
@@ -52,12 +53,35 @@ fn main() {
         }
     }
 
+    // Check for --test-c flag (run tests via C transpiler)
+    let test_c = args.len() > 2 && args[1] == "--test-c";
+
+    if test_c {
+        args.remove(1); // remove --test-c
+
+        if args.len() < 2 {
+            eprintln!("Usage: interpreter --test-c <file-or-directory> [...]");
+            std::process::exit(1);
+        }
+
+        let input_paths: Vec<PathBuf> = args[1..].iter().map(|s| PathBuf::from(s)).collect();
+        let mut all_asts = Vec::new();
+
+        for input_path in input_paths {
+            let asts = collect_definitions(&input_path);
+            all_asts.extend(asts);
+        }
+
+        // Run the C-based test runner
+        std::process::exit(run_c_test_suite(&all_asts));
+    }
+
     let (run_tests, path) = if args.len() > 2 && args[1] == "test" {
         (true, args[2].clone())
     } else if args.len() > 1 {
         (false, args[1].clone())
     } else {
-        eprintln!("Usage: interpreter [--transpile-c] [test] <file-or-directory>");
+        eprintln!("Usage: interpreter [--transpile-c|--test-c|test] <file-or-directory>");
         std::process::exit(1);
     };
 
@@ -186,6 +210,73 @@ fn run_test_suite(reg: &Registry) {
 
     if failed > 0 {
         std::process::exit(1);
+    }
+}
+
+/// Run tests via the C transpiler backend
+/// 1. Transpile Blitz code to C with tests
+/// 2. Compile the generated C code
+/// 3. Run the test binary and capture output
+fn run_c_test_suite(asts: &[Ast]) -> i32 {
+    let output_dir = Path::new("c-out");
+
+    // Step 1: Transpile to C with test support
+    eprintln!("Transpiling to C with test support...");
+    match interpreter::c_codegen::transpile_to_c_with_tests(asts, output_dir) {
+        Ok(()) => {}
+        Err(e) => {
+            eprintln!("\x1b[91mTranspilation failed: {}\x1b[0m", e);
+            return 1;
+        }
+    }
+
+    // Step 2: Compile the generated C code
+    eprintln!("Compiling C code...");
+    let compile_result = Command::new("gcc")
+        .args([
+            "-std=c11",
+            "-I",
+            "c-out",
+            "-o",
+            "c-out/blitz_tests",
+            "c-out/blitz.c",
+        ])
+        .output();
+
+    match compile_result {
+        Ok(output) => {
+            if !output.status.success() {
+                eprintln!("\x1b[91mC compilation failed:\x1b[0m");
+                eprintln!("{}", String::from_utf8_lossy(&output.stderr));
+                return 1;
+            }
+        }
+        Err(e) => {
+            eprintln!("\x1b[91mFailed to run gcc: {}\x1b[0m", e);
+            eprintln!("Make sure gcc is installed and in your PATH.");
+            return 1;
+        }
+    }
+
+    // Step 3: Run the test binary
+    eprintln!("Running C tests...\n");
+    let run_result = Command::new("./c-out/blitz_tests").output();
+
+    match run_result {
+        Ok(output) => {
+            // Print the test output (stdout contains the test results)
+            print!("{}", String::from_utf8_lossy(&output.stdout));
+            if !output.stderr.is_empty() {
+                eprint!("{}", String::from_utf8_lossy(&output.stderr));
+            }
+
+            // Return the exit code from the test binary
+            output.status.code().unwrap_or(1)
+        }
+        Err(e) => {
+            eprintln!("\x1b[91mFailed to run test binary: {}\x1b[0m", e);
+            1
+        }
     }
 }
 
