@@ -67,13 +67,24 @@ fn main() {
         let input_paths: Vec<PathBuf> = args[1..].iter().map(|s| PathBuf::from(s)).collect();
         let mut all_asts = Vec::new();
 
+        // Determine the base directory for running tests
+        // Use the first input path's parent, or the input path itself if it's a directory
+        let base_dir = if input_paths[0].is_dir() {
+            input_paths[0].clone()
+        } else {
+            input_paths[0]
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| PathBuf::from("."))
+        };
+
         for input_path in input_paths {
             let asts = collect_definitions(&input_path);
             all_asts.extend(asts);
         }
 
         // Run the C-based test runner
-        std::process::exit(run_c_test_suite(&all_asts));
+        std::process::exit(run_c_test_suite(&all_asts, &base_dir));
     }
 
     let (run_tests, path) = if args.len() > 2 && args[1] == "test" {
@@ -217,7 +228,7 @@ fn run_test_suite(reg: &Registry) {
 /// 1. Transpile Blitz code to C with tests
 /// 2. Compile the generated C code
 /// 3. Run the test binary and capture output
-fn run_c_test_suite(asts: &[Ast]) -> i32 {
+fn run_c_test_suite(asts: &[Ast], base_dir: &Path) -> i32 {
     let output_dir = Path::new("c-out");
 
     // Step 1: Transpile to C with test support
@@ -258,9 +269,16 @@ fn run_c_test_suite(asts: &[Ast]) -> i32 {
         }
     }
 
-    // Step 3: Run the test binary
-    eprintln!("Running C tests...\n");
-    let run_result = Command::new("./c-out/blitz_tests").output();
+    // Step 3: Run the test binary from the source directory
+    // This ensures relative file paths in tests work correctly
+    eprintln!("Running C tests from {:?}...\n", base_dir);
+
+    // Get the absolute path to the test binary since we'll be changing directories
+    let test_binary = std::env::current_dir()
+        .map(|cwd| cwd.join("c-out/blitz_tests"))
+        .unwrap_or_else(|_| PathBuf::from("./c-out/blitz_tests"));
+
+    let run_result = Command::new(&test_binary).current_dir(base_dir).output();
 
     match run_result {
         Ok(output) => {

@@ -1060,20 +1060,36 @@ impl CCodegen {
                 s.trim_end_matches('*').trim_end_matches("Ptr")
             }
 
+            // Helper to normalize type names for comparison
+            fn normalize_type(s: &str) -> &str {
+                match s.trim_end_matches('*') {
+                    "char" | "String" => "String",
+                    "int64_t" | "Int" => "Int",
+                    "bool" | "Bool" => "Bool",
+                    "double" | "Float" => "Float",
+                    "uint32_t" | "Rune" => "Rune",
+                    other => other,
+                }
+            }
+
             // If there's only one signature, no mangling needed
             if signatures.len() == 1 {
                 return func_name.to_string();
             }
 
-            // Multiple signatures - try to match by argument types (ignoring pointer notation)
+            // Multiple signatures - try to match by argument types (using normalized comparison)
             for (param_types, _) in signatures {
                 if param_types.len() == arg_types.len() {
                     let matches = param_types
                         .iter()
                         .zip(arg_types.iter())
-                        .all(|(p, a)| strip_ptr(p) == strip_ptr(a));
+                        .all(|(p, a)| normalize_type(p) == normalize_type(a));
                     if matches {
                         // Found match - return mangled name
+                        eprintln!(
+                            "DEBUG: Exact match for function '{}' (param types: {:?}, arg types: {:?})",
+                            func_name, param_types, arg_types
+                        );
                         return self.mangle_function_name(func_name, param_types);
                     }
                 }
@@ -4216,26 +4232,27 @@ impl CCodegen {
                 // but not the pointer type that map_type would give us
                 let mut type_name = self.type_name_for_instance(&ctor.r#type);
 
-                // When there's a name collision between struct and enum (e.g., Assignment struct and
-                // Assignment enum -> Assignment_1), check if the constructor has named field arguments.
-                // If so, we need the struct version, not the enum.
-                if type_name.ends_with("_1") {
-                    // Check if the non-suffixed name is a struct with fields
-                    let base_name = &type_name[..type_name.len() - 2];
-                    if let Some(struct_fields) = self.struct_field_types.get(base_name) {
-                        // Check if the constructor args match the struct fields
-                        let arg_names: std::collections::HashSet<_> =
-                            ctor.args.iter().map(|a| a.label.name.as_str()).collect();
-                        let field_names: std::collections::HashSet<_> =
-                            struct_fields.keys().map(|s| s.as_str()).collect();
-
-                        // If there's overlap between arg names and struct field names, use the struct
-                        if !arg_names.is_disjoint(&field_names) {
+                // Handle type name collisions between struct and enum (e.g., Assignment struct and
+                // Assignment enum). If this is a struct constructor (has field arguments), we need
+                // to use the correct C name from the registry.
+                //
+                // The registry maps original Blitz names to C names, handling collisions:
+                // - If struct is registered first: struct gets "Assignment", enum gets "Assignment_1"
+                // - If enum is registered first: enum gets "Assignment", struct gets "Assignment_1"
+                //
+                // For constructors with named fields, we always want the struct version.
+                if !ctor.args.is_empty() {
+                    // This constructor has field arguments, so it must be a struct
+                    // Look up the struct's C name from the registry
+                    if let Some(struct_c_name) =
+                        self.type_name_registry.get_struct_c_name(&type_name)
+                    {
+                        if struct_c_name != type_name {
                             eprintln!(
-                                "DEBUG Constructor: using struct '{}' instead of enum '{}' (has matching fields)",
-                                base_name, type_name
+                                "DEBUG Constructor: resolving struct '{}' to C name '{}' (collision detected)",
+                                type_name, struct_c_name
                             );
-                            type_name = base_name.to_string();
+                            type_name = struct_c_name;
                         }
                     }
                 }
@@ -5864,22 +5881,31 @@ impl CCodegen {
 
             if let parser::SwitchLabel::Type(ty) = &case.label {
                 if self.tagged_union_types.contains(cond_base_type) {
-                    // The condition is a simple variable name that we'll shadow
-                    // We need to save the old type and temporarily set the new type
+                    // The condition might be a complex expression (like defs.data[0])
+                    // We need to use a safe variable name for the temp and shadow
+                    let safe_var_name = if cond.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                        cond.to_string()
+                    } else {
+                        // Generate a unique temp name for complex expressions
+                        format!("_switch_val_{}", self.loop_label_counter)
+                    };
+                    self.loop_label_counter += 1;
+
                     let variant_type = format!("{}*", ty.name);
-                    let old_type = self.variable_types.get(cond).cloned();
-                    shadow_var = Some((cond.to_string(), old_type.unwrap_or_default()));
+                    let old_type = self.variable_types.get(&safe_var_name).cloned();
+                    shadow_var = Some((safe_var_name.clone(), old_type.unwrap_or_default()));
                     self.variable_types
-                        .insert(cond.to_string(), variant_type.clone());
+                        .insert(safe_var_name.clone(), variant_type.clone());
+
                     // Generate the shadowing assignment using a temp for the outer value
-                    // First save the outer pointer, then shadow with the inner value
+                    // First save the outer pointer, then create the inner typed value
                     code.push_str(&format!(
                         "        {}* _outer_{} = {};\n",
-                        cond_base_type, cond, cond
+                        cond_base_type, safe_var_name, cond
                     ));
                     code.push_str(&format!(
                         "        {}* {} = _outer_{}->data.as_{};\n",
-                        ty.name, cond, cond, ty.name
+                        ty.name, safe_var_name, safe_var_name, ty.name
                     ));
                 }
             }
@@ -7135,25 +7161,27 @@ impl CCodegen {
             _ => {
                 // Generic or user-defined type
                 if ty.params.is_empty() {
-                    // Look up the C name for this type (handles collision resolution)
-                    // Check if this type has been registered
-                    let c_name = if self.seen_types.contains(&ty.name) {
-                        // Use the registered C name
-                        // Note: get_c_name returns the first registered instance
-                        // This is a limitation but works for simple cases
-                        ty.name.clone() // For now, use original name as we stored C names in seen_types
-                    } else {
-                        ty.name.clone()
-                    };
+                    // Look up the C name for this type using the registry
+                    // This handles collision resolution (e.g., Assignment struct vs Assignment enum)
 
-                    // Check if this is a known struct type or tagged union (not enum) - if so, use pointer for forward-declaration safety
-                    if (self.seen_types.contains(&c_name) && !self.enum_types.contains(&c_name))
-                        || self.tagged_union_types.contains(&c_name)
+                    // First, check if this is a struct type (gets pointer treatment)
+                    if let Some(struct_c_name) = self.type_name_registry.get_struct_c_name(&ty.name)
                     {
-                        format!("{}*", c_name)
-                    } else {
-                        c_name
+                        // It's a registered struct - use the C name with pointer
+                        return format!("{}*", struct_c_name);
                     }
+
+                    // Check if it's a tagged union type (also gets pointer treatment)
+                    if let Some(union_c_name) =
+                        self.type_name_registry.get_tagged_union_c_name(&ty.name)
+                    {
+                        return format!("{}*", union_c_name);
+                    }
+
+                    // For enums or unregistered types, use the original name
+                    // (enums are value types, not pointers)
+                    let c_name = self.type_name_registry.get_c_name(&ty.name);
+                    c_name
                 } else {
                     // Monomorphize: Option(Type) -> Option_Type, Lit(Bool) -> Lit_Bool
                     let mono_name = format!(

@@ -87,6 +87,31 @@ impl TypeNameRegistry {
     pub fn get_instances(&self, original_name: &str) -> Option<&[(String, TypeKind)]> {
         self.type_instances.get(original_name).map(|v| v.as_slice())
     }
+
+    /// Get the C name for a type with a specific kind
+    /// This is used when we need to disambiguate between colliding type names
+    pub fn get_c_name_for_kind(&self, original_name: &str, kind: TypeKind) -> Option<String> {
+        if let Some(instances) = self.type_instances.get(original_name) {
+            instances
+                .iter()
+                .find(|(_, k)| *k == kind)
+                .map(|(name, _)| name.clone())
+        } else {
+            None
+        }
+    }
+
+    /// Get the C name for a struct type (convenience method for map_type)
+    /// Returns None if this type is not registered as a struct
+    pub fn get_struct_c_name(&self, original_name: &str) -> Option<String> {
+        self.get_c_name_for_kind(original_name, TypeKind::Struct)
+    }
+
+    /// Get the C name for a tagged union type (convenience method for map_type)
+    /// Returns None if this type is not registered as a tagged union
+    pub fn get_tagged_union_c_name(&self, original_name: &str) -> Option<String> {
+        self.get_c_name_for_kind(original_name, TypeKind::TaggedUnion)
+    }
 }
 
 #[cfg(test)]
