@@ -17,13 +17,15 @@ Build a minimal C transpiler for the Blitz self-hosted compiler (~1676 lines in 
 
 ## Current Status (Updated: Feb 2, 2025)
 
-### ✅ MILESTONE: C Code Compiles and Links
+### ✅ MILESTONE: Lexer and Parser Partially Working
 
 | Stage | Status | Details |
 |-------|--------|---------|
-| Compilation | ✅ **PASS** | 0 errors, 29 warnings |
+| Compilation | ✅ **PASS** | 0 errors, 25 warnings |
 | Linking | ✅ **PASS** | Executable created |
-| Runtime | ⚠️ **INCOMPLETE** | Program runs but hangs (likely infinite loop or missing logic) |
+| Lexing | ✅ **PASS** | Successfully lexes 297 tokens from main.blitz |
+| Parsing (first file) | ✅ **PASS** | Successfully parses main.blitz, prints AST |
+| Parsing (second file) | ❌ **FAIL** | Panics with "Unexpected token!" on parser/parser.blitz |
 
 ### Quick Start
 
@@ -40,73 +42,64 @@ cargo run --release --bin interpreter -- --transpile-c ../../compiler/**/*.blitz
 gcc -std=c11 -I c-out -o c-out/blitz c-out/blitz.c
 
 # Run (from compiler directory to find source files)
-cd ../../compiler && ../bootstrap/interpreter/c-out/blitz
-# Note: Currently hangs - likely infinite loop or runtime bug
+cd ../../compiler && ../bootstrap/interpreter/c-out/blitz main.blitz
+# Output: Lexes and parses first file, then panics on second file
 ```
 
 ### What Works
 
 - ✅ All Blitz source files transpile to C
-- ✅ Generated C compiles without errors
+- ✅ Generated C compiles without errors (0 errors)
 - ✅ Generated C links into executable
-- ✅ Executable starts and runs initial code
+- ✅ Executable reads files successfully
+- ✅ Lexer works correctly (297 tokens from main.blitz)
+- ✅ Parser works for simple files (main.blitz parsed successfully)
+- ✅ AST is printed correctly
 
 ### What's Broken
 
-- ❌ Runtime hangs (infinite loop suspected)
-- ⚠️ 29 compiler warnings (mostly harmless but some indicate real issues)
-- ⚠️ Some type mismatches (Ident* vs Expression* in parse_args)
-
----
-
-## Remaining Warnings Analysis (29 total)
-
-### Likely Harmless (cosmetic)
-- Extraneous parentheses in equality comparisons (3)
-- Braces around scalar initializers (4)
-- Expression result unused in error-handling code (7)
-
-### May Indicate Bugs
-- **Incompatible pointer types** (4): `Ident*` vs `Expression*` in parse_args - this is a type system issue where the generated code assigns wrong pointer types
-- **Missing return in non-void function** (1): `parse_float` doesn't return a value on all paths
-- **Switch case values not in enumerated type** (8): Assignment_1 switch uses TokenKind values
-
-### Specific Issues
-
-```
-c-out/blitz.c:737: incompatible pointer types assigning to 'Ident *' from 'Expression *'
-c-out/blitz.c:741: incompatible pointer types initializing 'Expression *' with 'Ident *'
-c-out/blitz.c:754: incompatible pointer types initializing 'Ident *' with 'Expression *'
-c-out/blitz.c:755: incompatible pointer types initializing 'Expression *' with 'Ident *'
-c-out/blitz.c:1437: non-void function does not return a value
-```
+- ❌ Parsing complex files fails with "Unexpected token!" (expected token 60, got token 4)
+- ⚠️ 25 compiler warnings (mostly harmless)
 
 ---
 
 ## Recent Fixes (This Session)
 
-### 1. Fixed void-returning functions in if-else expressions
-**Problem**: Functions like `skip_newlines(parser)` return void, but were used as the last expression in if-else bodies, causing `_if_result = skip_newlines(parser)` which is invalid C.
+### 1. Fixed break semantics in switch inside while loops (CRITICAL)
+**Problem**: In Blitz, `break` inside a `switch` that's inside a `while` loop should break the while loop. In C, `break` only exits the switch statement. This caused infinite loops in `skip_str`, `skip_ch`, etc.
 
 **Solution**:
-- Added `void_functions: HashSet<String>` to track functions without return types
-- Updated `infer_expr_type` to check `void_functions` and return "void"  
-- When if-else result type is void, generate plain if-else statement instead of expression wrapper
+- Added `loop_label_stack: Vec<String>` to track current loop labels
+- Added `in_switch_depth: usize` to track if we're inside a switch
+- When generating `break` inside a switch inside a loop, generate `goto _loop_exit_N` instead
+- Added loop exit labels after while/for loops: `_loop_exit_N:;`
 
-### 2. Fixed print(List_Definition) type mismatch
-**Problem**: The `print` macro mapped `List_Definition` to `print_unknown(void*)` but passed the struct by value.
+### 2. Fixed Ident*/Expression* type confusion in parse_args
+**Problem**: Variables were declared as `Ident*` but assigned `Expression*` values.
 
-**Solution**:
-- Added forward declaration for `List_Definition` in `blitz_types.h`
-- Added `print_list_definition(List_Definition)` function
-- Updated `_Generic` macro to route `List_Definition` to proper function
+**Solution**: Updated type inference to correctly identify when variables should be `Expression*`.
 
-### 3. Added runtime function implementations
-Added missing functions in generated C:
-- `panic(const char*)` - prints error and aborts
-- `print_str/int/bool/float/list_rune/list_definition/unknown()` - all print variants
-- `blitz_time()` - returns milliseconds since epoch
-- `blitz_read(char* path)` - reads file into `Option_String`
+### 3. Fixed missing return in infinite while loops
+**Problem**: Functions ending with `while true { ... }` had no return statement after the loop, causing compiler warnings.
+
+**Solution**: Added unreachable return statements after detected infinite while loops.
+
+### 4. Fixed void-returning functions in if-else expressions
+**Problem**: Functions like `skip_newlines(parser)` return void, but were used as the last expression in if-else bodies.
+
+**Solution**: Track void functions and generate plain if-else statements instead of expression wrappers.
+
+---
+
+## Remaining Warnings Analysis (25 total)
+
+### Likely Harmless (cosmetic)
+- Extraneous parentheses in equality comparisons (2)
+- Braces around scalar initializers (3)
+- Expression result unused in error-handling code (6)
+
+### May Indicate Bugs
+- **Switch case values not in enumerated type** (8): Assignment_1 switch uses TokenKind values - this is a known issue where the generated code switches on an enum but uses values from a different enum
 
 ---
 
@@ -115,7 +108,7 @@ Added missing functions in generated C:
 ```
 bootstrap/interpreter/
   src/
-    c_codegen.rs         # Main transpiler (~7500 lines)
+    c_codegen.rs         # Main transpiler (~7700 lines)
     c_codegen_patch.rs   # Type name collision registry
     main.rs              # CLI and --transpile-c flag
   c-out/                 # Generated output
@@ -128,10 +121,9 @@ bootstrap/interpreter/
 
 ## Next Steps (Prioritized)
 
-1. **Debug runtime hang** - Add debug prints or run in debugger to find where it loops
-2. **Fix Ident*/Expression* type confusion** - In parse_args, wrong types are being assigned
-3. **Fix parse_float missing return** - Add return statement for all code paths
-4. **Clean up switch/enum warnings** - Use correct enum values
+1. **Debug parsing error** - Token kind 60 expected vs 4 received. Need to understand what tokens these are and why parsing fails.
+2. **Clean up switch/enum warnings** - Use correct enum values in switch statements
+3. **Test more complex Blitz source files** - Ensure the transpiler handles all language features
 
 ---
 
@@ -147,17 +139,26 @@ gcc -std=c11 -I c-out -o c-out/blitz c-out/blitz.c
 # Count errors (should be 0)
 gcc -std=c11 -I c-out -c c-out/blitz.c 2>&1 | grep -c "error:"
 
-# List warnings by type
-gcc -std=c11 -I c-out -c c-out/blitz.c 2>&1 | grep "warning:" | sed 's/blitz.c:[0-9]*:[0-9]*://' | sort | uniq -c | sort -rn
+# Count warnings
+gcc -std=c11 -I c-out -c c-out/blitz.c 2>&1 | grep -c "warning:"
+
+# Run and see output
+cd ../../compiler && ../bootstrap/interpreter/c-out/blitz main.blitz
 ```
 
 ---
 
 ## Success Criteria
 
-**Current Goal (ACHIEVED)**: Generate C code that compiles without errors.
+**Current Goal (IN PROGRESS)**: Generate C code that runs correctly (parses all Blitz source files).
 
-**Next Goal**: Generate C code that runs correctly (parses Blitz source files).
+**Achieved**:
+- ✅ C code compiles without errors
+- ✅ Lexer works correctly
+- ✅ Parser works for simple files
+
+**Not Yet Achieved**:
+- ❌ Parser works for all files
 
 ---
 
@@ -170,6 +171,7 @@ gcc -std=c11 -I c-out -c c-out/blitz.c 2>&1 | grep "warning:" | sed 's/blitz.c:[
 
 ### Key Patterns in c_codegen.rs
 - `void_functions` HashSet tracks functions returning void
+- `loop_label_stack` tracks current loop labels for break semantics
+- `in_switch_depth` tracks if we're inside a switch for break semantics
 - `infer_expr_type()` determines C type of expressions
-- `generate_if_else_branch_body_with_type()` handles if-else branch code generation
-- When result_type is "void", generate plain statement instead of expression wrapper
+- When generating `break` inside switch inside loop, use `goto` instead

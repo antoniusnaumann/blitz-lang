@@ -150,6 +150,13 @@ struct CCodegen {
     tagged_union_labels: HashMap<String, HashSet<String>>,
     /// Track functions that return void (no return type in Blitz source)
     void_functions: HashSet<String>,
+    /// Stack of loop labels for break statements - when inside a switch inside a loop,
+    /// break should goto the loop exit label, not break the switch
+    loop_label_stack: Vec<String>,
+    /// Counter for generating unique loop labels
+    loop_label_counter: usize,
+    /// Track if we're currently inside a switch statement (for break semantics)
+    in_switch_depth: usize,
 }
 
 impl CCodegen {
@@ -191,6 +198,9 @@ impl CCodegen {
             struct_field_types: HashMap::new(),
             tagged_union_labels: HashMap::new(),
             void_functions: HashSet::new(),
+            loop_label_stack: Vec::new(),
+            loop_label_counter: 0,
+            in_switch_depth: 0,
         }
     }
 
@@ -1647,9 +1657,53 @@ impl CCodegen {
             self.impl_code.push_str("\n");
         }
 
+        // Check if the last statement is a `while true` loop in a non-void function.
+        // If so, add an unreachable return to silence "non-void function does not return a value" warnings.
+        if !is_main && func.r#type.is_some() {
+            if let Some(last_stmt) = func.body.last() {
+                if Self::is_infinite_while_loop(last_stmt) {
+                    // Add unreachable return with default value for the return type
+                    let default_return = self.generate_default_return_value(&return_type);
+                    self.impl_code
+                        .push_str(&format!("    return {}; // unreachable\n", default_return));
+                }
+            }
+        }
+
         self.impl_code.push_str("}\n\n");
 
         Ok(())
+    }
+
+    /// Check if a statement is an infinite while loop (while true { ... })
+    fn is_infinite_while_loop(stmt: &parser::Statement) -> bool {
+        if let parser::Statement::Expression(expr) = stmt {
+            if let parser::Expression::While(while_loop) = expr {
+                // Check if the condition is a boolean literal `true`
+                if let parser::Expression::BoolLit(bool_lit) = &*while_loop.cond {
+                    return bool_lit.value;
+                }
+            }
+        }
+        false
+    }
+
+    /// Generate a default return value for a given C type.
+    /// This is used for unreachable code paths to silence compiler warnings.
+    fn generate_default_return_value(&self, c_type: &str) -> String {
+        match c_type {
+            "void" => String::new(),
+            "int" | "int64_t" | "int32_t" | "int16_t" | "int8_t" => "0".to_string(),
+            "uint64_t" | "uint32_t" | "uint16_t" | "uint8_t" | "size_t" => "0".to_string(),
+            "bool" => "false".to_string(),
+            "double" | "float" => "0.0".to_string(),
+            "char*" => "NULL".to_string(),
+            _ if c_type.ends_with("*") => "NULL".to_string(),
+            // For enum types, use the first variant (tag 0)
+            _ if self.enum_types.contains(c_type) => format!("({})0", c_type),
+            // For struct/tagged union types, return a zeroed value
+            _ => format!("({}){{0}}", c_type),
+        }
     }
 
     fn generate_statement(&mut self, stmt: &parser::Statement, is_main: bool) -> String {
@@ -2836,6 +2890,49 @@ impl CCodegen {
                                 if definition_variants.iter().any(|v| inferred == *v) {
                                     // This is an Option of a definition variant, unify to Option_Definition
                                     return "Option_Definition".to_string();
+                                }
+
+                                // Check if this is a pointer to an Expression variant
+                                // Expression variants: For, While, If, Switch, Return, etc.
+                                let expression_ptr_variants = [
+                                    "For*",
+                                    "While*",
+                                    "If*",
+                                    "Switch*",
+                                    "Return*",
+                                    "Continue*",
+                                    "Break*",
+                                    "Assert*",
+                                    "Block*",
+                                    "Ident*",
+                                    "Call*",
+                                    "Member*",
+                                    "Index*",
+                                    "BinaryOp*",
+                                    "UnaryOp*",
+                                    "Constructor*",
+                                    "Group*",
+                                    "List_*",
+                                    "Lit_Bool*",
+                                    "Lit_String*",
+                                    "Lit_Rune*",
+                                    "Lit_Float*",
+                                    "Lit_Int*",
+                                    "Mut*",
+                                    "Assignment*",
+                                ];
+                                if expression_ptr_variants.iter().any(|v| inferred == *v) {
+                                    // This is a pointer to an expression variant, unify to Expression*
+                                    return "Expression*".to_string();
+                                }
+
+                                // Check if this is a pointer to a Definition variant
+                                let definition_ptr_variants = [
+                                    "Struct*", "Union*", "Actor*", "Alias*", "Fn*", "Test*", "Pub*",
+                                ];
+                                if definition_ptr_variants.iter().any(|v| inferred == *v) {
+                                    // This is a pointer to a definition variant, unify to Definition*
+                                    return "Definition*".to_string();
                                 }
 
                                 return inferred;
@@ -4601,6 +4698,11 @@ impl CCodegen {
                         }
 
                         if let (Some(begin), Some(until)) = (begin_expr, until_expr) {
+                            // Create a unique loop label for break statements to target
+                            let loop_label = format!("_loop_exit_{}", self.loop_label_counter);
+                            self.loop_label_counter += 1;
+                            self.loop_label_stack.push(loop_label.clone());
+
                             // Generate body statements
                             let mut body_code = String::new();
                             for stmt in &for_loop.body {
@@ -4610,10 +4712,19 @@ impl CCodegen {
                                 body_code.push_str("\n");
                             }
 
+                            // Pop the loop label
+                            self.loop_label_stack.pop();
+
                             // Generate C for-loop with proper iterator variable declaration
                             return format!(
-                                "for (int64_t {} = {}; {} < {}; {}++) {{\n{}    }}",
-                                elem_name, begin, elem_name, until, elem_name, body_code
+                                "for (int64_t {} = {}; {} < {}; {}++) {{\n{}    }}\n    {}:;",
+                                elem_name,
+                                begin,
+                                elem_name,
+                                until,
+                                elem_name,
+                                body_code,
+                                loop_label
                             );
                         }
                     }
@@ -4632,6 +4743,11 @@ impl CCodegen {
                 // Generate while loop: while (condition) { body }
                 let cond = self.generate_expression(&while_loop.cond, is_main);
 
+                // Create a unique loop label for break statements to target
+                let loop_label = format!("_loop_exit_{}", self.loop_label_counter);
+                self.loop_label_counter += 1;
+                self.loop_label_stack.push(loop_label.clone());
+
                 // Generate body statements
                 let mut body_code = String::new();
                 for stmt in &while_loop.body {
@@ -4641,7 +4757,14 @@ impl CCodegen {
                     body_code.push_str("\n");
                 }
 
-                format!("while ({}) {{\n{}    }}", cond, body_code)
+                // Pop the loop label
+                self.loop_label_stack.pop();
+
+                // If there's a break that needs to escape a switch, add the label after the loop
+                format!(
+                    "while ({}) {{\n{}    }}\n    {}:;",
+                    cond, body_code, loop_label
+                )
             }
             parser::Expression::If(if_expr) => {
                 // Standalone if expression (no else)
@@ -4877,7 +5000,16 @@ impl CCodegen {
                 block_code
             }
             parser::Expression::Continue => "continue".to_string(),
-            parser::Expression::Break => "break".to_string(),
+            parser::Expression::Break => {
+                // If we're inside a switch (in_switch_depth > 0) that's inside a loop,
+                // we need to use goto to break out of the loop, not just the switch
+                if self.in_switch_depth > 0 && !self.loop_label_stack.is_empty() {
+                    let loop_label = self.loop_label_stack.last().unwrap();
+                    format!("goto {}", loop_label)
+                } else {
+                    "break".to_string()
+                }
+            }
         }
     }
 
@@ -5282,6 +5414,9 @@ impl CCodegen {
         cases: &[parser::SwitchCase],
         is_main: bool,
     ) -> String {
+        // Track that we're inside a switch for break semantics
+        self.in_switch_depth += 1;
+
         let mut code = format!("switch ({}) {{\n", cond);
 
         for case in cases {
@@ -5329,6 +5464,10 @@ impl CCodegen {
         }
 
         code.push_str("    }");
+
+        // Done with this switch
+        self.in_switch_depth -= 1;
+
         code
     }
 
@@ -5523,6 +5662,9 @@ impl CCodegen {
         cases: &[parser::SwitchCase],
         is_main: bool,
     ) -> String {
+        // Track that we're inside a switch for break semantics
+        self.in_switch_depth += 1;
+
         // Infer the result type from the first non-control-flow case body
         let mut result_type = self.infer_switch_result_type(cases);
 
@@ -5789,6 +5931,10 @@ impl CCodegen {
         }
 
         code.push_str("    } _switch_result; })");
+
+        // Done with this switch
+        self.in_switch_depth -= 1;
+
         code
     }
 
@@ -6147,6 +6293,9 @@ impl CCodegen {
         var_name: &str,
         var_type: &str,
     ) -> String {
+        // Track that we're inside a switch for break semantics
+        self.in_switch_depth += 1;
+
         let mut code = format!("switch ({}) {{\n", cond);
 
         for case in cases {
@@ -6350,6 +6499,10 @@ impl CCodegen {
         }
 
         code.push_str("    }");
+
+        // Done with this switch
+        self.in_switch_depth -= 1;
+
         code
     }
 
