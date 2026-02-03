@@ -182,6 +182,10 @@ struct CCodegen {
     include_tests: bool,
     /// Collected test definitions for test mode
     test_definitions: Vec<Test>,
+    /// Track which list equality functions need to be generated (element_type_name)
+    list_eq_needed: HashSet<String>,
+    /// Expected list element type for list literal generation (used in comparisons)
+    expected_list_elem_type: Option<String>,
 }
 
 impl CCodegen {
@@ -228,6 +232,8 @@ impl CCodegen {
             in_switch_depth: 0,
             include_tests,
             test_definitions: Vec::new(),
+            list_eq_needed: HashSet::new(),
+            expected_list_elem_type: None,
         }
     }
 
@@ -3888,6 +3894,36 @@ impl CCodegen {
                             }
                         }
 
+                        // Special handling for list equality comparisons
+                        // C doesn't support operator overloading, so we use a helper function
+                        // We must check BEFORE generating the right expression so we can
+                        // set the expected element type for list literal generation
+                        if matches!(binop.op, parser::Operator::Eq | parser::Operator::Ne) {
+                            let left_type = self.infer_expr_type(&binop.left);
+                            if left_type.starts_with("List_") {
+                                let elem_type = left_type
+                                    .strip_prefix("List_")
+                                    .unwrap_or("void")
+                                    .to_string();
+
+                                // Set expected element type before generating right expression
+                                self.expected_list_elem_type = Some(elem_type.clone());
+                                let right = self.generate_expression(&binop.right, is_main);
+                                self.expected_list_elem_type = None;
+
+                                self.list_eq_needed.insert(elem_type.clone());
+                                let eq_call = format!(
+                                    "blitz_list_eq_{}({}, {})",
+                                    elem_type, left_expr, right
+                                );
+                                return if matches!(binop.op, parser::Operator::Ne) {
+                                    format!("(!{})", eq_call)
+                                } else {
+                                    eq_call
+                                };
+                            }
+                        }
+
                         let right = self.generate_expression(&binop.right, is_main);
 
                         // Generate with parentheses for proper precedence
@@ -5056,44 +5092,48 @@ impl CCodegen {
                             .all(|e| matches!(e, parser::Expression::Ident(_)));
 
                         if all_idents {
-                            // Try to infer the enum type from the first element
-                            if let parser::Expression::Ident(first_ident) = &list.elems[0] {
-                                // Find which enum this identifier belongs to
-                                let mut enum_type: Option<String> = None;
+                            // Try to use expected element type from context first (e.g., list comparison)
+                            // This ensures we use the correct enum type when multiple enums share variant names
+                            let enum_type: Option<String> = if let Some(ref expected) =
+                                self.expected_list_elem_type
+                            {
+                                Some(expected.clone())
+                            } else if let parser::Expression::Ident(first_ident) = &list.elems[0] {
+                                // Fall back to inferring from first element
+                                let mut found_type: Option<String> = None;
                                 for (enum_name, variants) in &self.enum_variants {
                                     if variants.contains(&first_ident.name) {
-                                        enum_type = Some(enum_name.clone());
+                                        found_type = Some(enum_name.clone());
                                         break;
                                     }
                                 }
-
-                                if let Some(enum_name) = enum_type {
-                                    // Generate array of enum values
-                                    code.push_str(&format!(
-                                        "        {}* _tmp = malloc(sizeof({}) * {});\n",
-                                        enum_name, enum_name, len
-                                    ));
-                                    for (i, elem) in list.elems.iter().enumerate() {
-                                        let elem_code = self.generate_expression(elem, is_main);
-                                        code.push_str(&format!(
-                                            "        _tmp[{}] = {};\n",
-                                            i, elem_code
-                                        ));
-                                    }
-                                    code.push_str(&format!(
-                                        "        (List_{}){{.data = _tmp, .len = {}, .cap = {}}};\n",
-                                        enum_name, len, len
-                                    ));
-                                } else {
-                                    // Fall back to stub
-                                    code.push_str("        /* TODO: non-integer list literal requires type inference */\n");
-                                    code.push_str(&format!("        void* _tmp = NULL;\n"));
-                                    code.push_str("        (void*){{}};\n");
-                                }
+                                found_type
                             } else {
-                                code.push_str("        /* TODO: non-integer list literal requires type inference */\n");
-                                code.push_str(&format!("        void* _tmp = NULL;\n"));
-                                code.push_str("        (void*){{}};\n");
+                                None
+                            };
+
+                            if let Some(enum_name) = enum_type {
+                                // Generate array of enum values
+                                code.push_str(&format!(
+                                    "            {}* _tmp = malloc(sizeof({}) * {});\n",
+                                    enum_name, enum_name, len
+                                ));
+                                for (i, elem) in list.elems.iter().enumerate() {
+                                    let elem_code = self.generate_expression(elem, is_main);
+                                    code.push_str(&format!(
+                                        "            _tmp[{}] = {};\n",
+                                        i, elem_code
+                                    ));
+                                }
+                                code.push_str(&format!(
+                                    "            (List_{}){{.data = _tmp, .len = {}, .cap = {}}};\n",
+                                    enum_name, len, len
+                                ));
+                            } else {
+                                // Fall back to stub
+                                code.push_str("            /* TODO: non-integer list literal requires type inference */\n");
+                                code.push_str(&format!("            void* _tmp = NULL;\n"));
+                                code.push_str("            (void*){{}};\n");
                             }
                         } else {
                             // Check if all elements are constructors
@@ -7554,6 +7594,19 @@ void todo(char* msg) __attribute__((noreturn));
             full_header.push_str("\n");
         }
 
+        // Add list equality function declarations
+        if !self.list_eq_needed.is_empty() {
+            full_header.push_str("// List equality function declarations\n");
+            for elem_type in &self.list_eq_needed {
+                let list_type = format!("List_{}", elem_type);
+                full_header.push_str(&format!(
+                    "bool blitz_list_eq_{}({} a, {} b);\n",
+                    elem_type, list_type, list_type
+                ));
+            }
+            full_header.push_str("\n");
+        }
+
         // Add type definitions
         full_header.push_str(&self.header);
 
@@ -7795,6 +7848,49 @@ void todo(char* msg) __attribute__((noreturn));
                     "    return ({}){{.data = new_data, .len = new_len, .cap = new_cap}};\n",
                     list_type
                 ));
+                full_impl.push_str("}\n\n");
+            }
+        }
+
+        // Generate list equality function implementations
+        if !self.list_eq_needed.is_empty() {
+            full_impl.push_str("// List equality function implementations\n");
+            full_impl.push_str("// These functions compare two lists for equality\n\n");
+
+            for elem_type in &self.list_eq_needed {
+                let list_type = format!("List_{}", elem_type);
+                // For primitive types, element is the value itself (T)
+                // For struct types, element is a pointer (T*)
+                let is_primitive = self.is_primitive_type(elem_type);
+
+                full_impl.push_str(&format!(
+                    "bool blitz_list_eq_{}({} a, {} b) {{\n",
+                    elem_type, list_type, list_type
+                ));
+                full_impl.push_str("    if (a.len != b.len) return false;\n");
+                full_impl.push_str("    for (size_t i = 0; i < a.len; i++) {\n");
+
+                if is_primitive {
+                    // For primitives, direct comparison
+                    full_impl.push_str("        if (a.data[i] != b.data[i]) return false;\n");
+                } else if elem_type == "char" || elem_type.ends_with("*") {
+                    // For strings/pointers, use strcmp or pointer comparison
+                    if elem_type == "char" {
+                        full_impl.push_str(
+                            "        if (strcmp(a.data[i], b.data[i]) != 0) return false;\n",
+                        );
+                    } else {
+                        full_impl.push_str("        if (a.data[i] != b.data[i]) return false;\n");
+                    }
+                } else {
+                    // For enum types (like TokenKind), direct comparison works
+                    // For struct types that are stored as pointers, compare pointers
+                    // TODO: For proper deep equality, we'd need per-type eq functions
+                    full_impl.push_str("        if (a.data[i] != b.data[i]) return false;\n");
+                }
+
+                full_impl.push_str("    }\n");
+                full_impl.push_str("    return true;\n");
                 full_impl.push_str("}\n\n");
             }
         }
