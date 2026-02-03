@@ -9,140 +9,173 @@ use std::sync::RwLock;
 
 use interpreter::DEBUG;
 use interpreter::{run_checked, Body, Builtin, Registry, ROOT};
-use parser::{Ast, Definition, Parser};
+use parser::{Ast, Parser};
+
+#[derive(Debug, Clone, PartialEq)]
+enum Backend {
+    Interpreter,
+    C,
+}
+
+#[derive(Debug, Clone)]
+enum Subcommand {
+    Run,
+    Test,
+    Build,
+}
+
+fn print_usage() {
+    eprintln!("Usage: interpreter <command> [options] <file-or-directory>");
+    eprintln!();
+    eprintln!("Commands:");
+    eprintln!("  run     Run the program");
+    eprintln!("  test    Run tests");
+    eprintln!("  build   Build (compile) the program");
+    eprintln!();
+    eprintln!("Options:");
+    eprintln!("  -c      Use the C backend instead of the interpreter");
+    eprintln!();
+    eprintln!("Examples:");
+    eprintln!("  interpreter run main.blitz");
+    eprintln!("  interpreter test -c ./compiler");
+    eprintln!("  interpreter build -c ./compiler");
+}
 
 fn main() {
     let mut args: Vec<String> = args().collect();
-    if args.len() > 2 && args[1] == "debug" {
+
+    // Handle debug flag
+    if args.len() > 1 && args[1] == "debug" {
         assert!(DEBUG.get_or_init(|| true));
         args.remove(1);
     } else {
         assert!(!DEBUG.get_or_init(|| false));
     }
 
-    // Check for --transpile-c flag
-    let transpile_c = args.len() > 2 && args[1] == "--transpile-c";
-
-    if transpile_c {
-        args.remove(1); // remove --transpile-c
-
-        // For transpilation, collect all remaining args as input paths
-        if args.len() < 2 {
-            eprintln!("Usage: interpreter --transpile-c <file-or-directory> [...]");
-            std::process::exit(1);
-        }
-
-        let input_paths: Vec<PathBuf> = args[1..].iter().map(|s| PathBuf::from(s)).collect();
-        let mut all_asts = Vec::new();
-
-        for input_path in input_paths {
-            let asts = collect_definitions(&input_path);
-            all_asts.extend(asts);
-        }
-
-        let output_path = Path::new("c-out");
-        match interpreter::c_codegen::transpile_to_c(&all_asts, output_path) {
-            Ok(()) => {
-                println!("Successfully transpiled to C in c-out/");
-                std::process::exit(0);
-            }
-            Err(e) => {
-                eprintln!("Transpilation failed: {}", e);
-                std::process::exit(1);
-            }
-        }
-    }
-
-    // Check for --test-c flag (run tests via C transpiler)
-    let test_c = args.len() > 2 && args[1] == "--test-c";
-
-    if test_c {
-        args.remove(1); // remove --test-c
-
-        if args.len() < 2 {
-            eprintln!("Usage: interpreter --test-c <file-or-directory> [...]");
-            std::process::exit(1);
-        }
-
-        let input_paths: Vec<PathBuf> = args[1..].iter().map(|s| PathBuf::from(s)).collect();
-        let mut all_asts = Vec::new();
-
-        // Determine the base directory for running tests
-        // Use the first input path's parent, or the input path itself if it's a directory
-        let base_dir = if input_paths[0].is_dir() {
-            input_paths[0].clone()
-        } else {
-            input_paths[0]
-                .parent()
-                .map(|p| p.to_path_buf())
-                .unwrap_or_else(|| PathBuf::from("."))
-        };
-
-        for input_path in input_paths {
-            let asts = collect_definitions(&input_path);
-            all_asts.extend(asts);
-        }
-
-        // Run the C-based test runner
-        std::process::exit(run_c_test_suite(&all_asts, &base_dir));
-    }
-
-    let (run_tests, path) = if args.len() > 2 && args[1] == "test" {
-        (true, args[2].clone())
-    } else if args.len() > 1 {
-        (false, args[1].clone())
-    } else {
-        eprintln!("Usage: interpreter [--transpile-c|--test-c|test] <file-or-directory>");
+    if args.len() < 2 {
+        print_usage();
         std::process::exit(1);
+    }
+
+    // Handle help flag
+    if args[1] == "--help" || args[1] == "-h" {
+        print_usage();
+        std::process::exit(0);
+    }
+
+    // Parse subcommand
+    let subcommand = match args[1].as_str() {
+        "run" => Subcommand::Run,
+        "test" => Subcommand::Test,
+        "build" => Subcommand::Build,
+        // Legacy support: if first arg is a path, assume "run"
+        path if Path::new(path).exists() || path.ends_with(".blitz") => {
+            // Insert "run" as the subcommand
+            args.insert(1, "run".to_string());
+            Subcommand::Run
+        }
+        _ => {
+            eprintln!("Unknown command: {}", args[1]);
+            print_usage();
+            std::process::exit(1);
+        }
     };
 
-    let path = Path::new(&path);
-    assert_eq!(path, ROOT.get_or_init(|| path.into()));
+    // Remove subcommand from args
+    args.remove(1);
 
-    let asts = collect_definitions(path);
+    // Parse backend flag (-c)
+    let backend = if args.len() > 1 && args[1] == "-c" {
+        args.remove(1);
+        Backend::C
+    } else {
+        Backend::Interpreter
+    };
 
-    // If transpiling to C, do that and exit (handled above)
-
-    for ast in &asts {
-        // println!("DEBUG: Collected {} definitions", ast.defs.len());
-        for def in &ast.defs {
-            match def {
-                Definition::Fn(_f) => {
-                    // println!(
-                    //     "{}({})",
-                    //     f.name,
-                    //     f.args.print().trim().trim_end_matches("()")
-                    // );
-                }
-                _ => {}
-            }
-        }
+    // Remaining args are input paths
+    if args.len() < 2 {
+        eprintln!("Error: No input file or directory specified");
+        print_usage();
+        std::process::exit(1);
     }
 
-    let mut reg = Registry::from(asts);
-    reg.add_builtins();
+    let input_paths: Vec<PathBuf> = args[1..].iter().map(|s| PathBuf::from(s)).collect();
 
-    if run_tests {
-        run_test_suite(&reg);
+    // Determine the base directory for running tests/programs
+    let base_dir = if input_paths[0].is_dir() {
+        input_paths[0].clone()
     } else {
-        let main = reg.func("main").expect("Did not find main function");
-        assert_eq!(main.len(), 1);
-        let main = &main[0];
-        let mut vars = HashMap::new();
+        input_paths[0]
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("."))
+    };
 
-        let Body::Defined(statements) = &main.body else {
-            unreachable!()
-        };
+    // Collect all ASTs from input paths
+    let mut all_asts = Vec::new();
+    for input_path in &input_paths {
+        let asts = collect_definitions(input_path);
+        all_asts.extend(asts);
+    }
 
-        println!("--- PROGRAM OUTPUT ---\n");
-        install_panic_hook();
-        for s in statements {
-            run_checked(s, &mut vars, &reg);
+    // Execute based on subcommand and backend
+    match (subcommand, backend) {
+        (Subcommand::Run, Backend::Interpreter) => {
+            run_interpreter(all_asts, &input_paths[0]);
+        }
+        (Subcommand::Run, Backend::C) => {
+            std::process::exit(run_c(&all_asts, &base_dir));
+        }
+        (Subcommand::Test, Backend::Interpreter) => {
+            run_test_suite_interpreter(all_asts, &input_paths[0]);
+        }
+        (Subcommand::Test, Backend::C) => {
+            std::process::exit(run_c_tests(&all_asts, &base_dir));
+        }
+        (Subcommand::Build, Backend::Interpreter) => {
+            eprintln!("Note: 'build' with interpreter backend just validates the code.");
+            // The interpreter doesn't need a separate build step
+            // Just validate that the code parses and type-checks
+            eprintln!("Parsed {} file(s) successfully.", all_asts.len());
+        }
+        (Subcommand::Build, Backend::C) => {
+            std::process::exit(build_c(&all_asts));
         }
     }
 }
 
-fn run_test_suite(reg: &Registry) {
+/// Run the program using the interpreter
+fn run_interpreter(asts: Vec<Ast>, path: &Path) {
+    // Set ROOT for the interpreter
+    assert_eq!(path, ROOT.get_or_init(|| path.into()));
+
+    let mut reg = Registry::from(asts);
+    reg.add_builtins();
+
+    let main = reg.func("main").expect("Did not find main function");
+    assert_eq!(main.len(), 1);
+    let main = &main[0];
+    let mut vars = HashMap::new();
+
+    let Body::Defined(statements) = &main.body else {
+        unreachable!()
+    };
+
+    println!("--- PROGRAM OUTPUT ---\n");
+    install_panic_hook();
+    for s in statements {
+        run_checked(s, &mut vars, &reg);
+    }
+}
+
+/// Run tests using the interpreter
+fn run_test_suite_interpreter(asts: Vec<Ast>, path: &Path) {
+    // Set ROOT for the interpreter
+    assert_eq!(path, ROOT.get_or_init(|| path.into()));
+
+    let mut reg = Registry::from(asts);
+    reg.add_builtins();
+
     let tests = &reg.tests;
 
     if tests.is_empty() {
@@ -187,7 +220,7 @@ fn run_test_suite(reg: &Registry) {
         // Run the test and catch panics
         let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
             for statement in &test.body {
-                run_checked(statement, &mut vars, reg);
+                run_checked(statement, &mut vars, &reg);
             }
         }));
         // Restore original panic hook
@@ -224,11 +257,88 @@ fn run_test_suite(reg: &Registry) {
     }
 }
 
-/// Run tests via the C transpiler backend
-/// 1. Transpile Blitz code to C with tests
-/// 2. Compile the generated C code
-/// 3. Run the test binary and capture output
-fn run_c_test_suite(asts: &[Ast], base_dir: &Path) -> i32 {
+/// Build (transpile and compile) using the C backend
+fn build_c(asts: &[Ast]) -> i32 {
+    let output_dir = Path::new("c-out");
+
+    // Step 1: Transpile to C
+    eprintln!("Transpiling to C...");
+    match interpreter::c_codegen::transpile_to_c(asts, output_dir) {
+        Ok(()) => {}
+        Err(e) => {
+            eprintln!("\x1b[91mTranspilation failed: {}\x1b[0m", e);
+            return 1;
+        }
+    }
+
+    // Step 2: Compile the generated C code
+    eprintln!("Compiling C code...");
+    let compile_result = Command::new("gcc")
+        .args([
+            "-std=c11",
+            "-O2",
+            "-I",
+            "c-out",
+            "-o",
+            "c-out/blitz",
+            "c-out/blitz.c",
+        ])
+        .output();
+
+    match compile_result {
+        Ok(output) => {
+            if !output.status.success() {
+                eprintln!("\x1b[91mC compilation failed:\x1b[0m");
+                eprintln!("{}", String::from_utf8_lossy(&output.stderr));
+                return 1;
+            }
+        }
+        Err(e) => {
+            eprintln!("\x1b[91mFailed to run gcc: {}\x1b[0m", e);
+            eprintln!("Make sure gcc is installed and in your PATH.");
+            return 1;
+        }
+    }
+
+    eprintln!("\x1b[92mBuild successful:\x1b[0m c-out/blitz");
+    0
+}
+
+/// Run the program using the C backend
+fn run_c(asts: &[Ast], base_dir: &Path) -> i32 {
+    // First build
+    let build_result = build_c(asts);
+    if build_result != 0 {
+        return build_result;
+    }
+
+    // Then run
+    eprintln!("Running...\n");
+
+    // Get the absolute path to the binary since we'll be changing directories
+    let binary = std::env::current_dir()
+        .map(|cwd| cwd.join("c-out/blitz"))
+        .unwrap_or_else(|_| PathBuf::from("./c-out/blitz"));
+
+    let run_result = Command::new(&binary).current_dir(base_dir).output();
+
+    match run_result {
+        Ok(output) => {
+            print!("{}", String::from_utf8_lossy(&output.stdout));
+            if !output.stderr.is_empty() {
+                eprint!("{}", String::from_utf8_lossy(&output.stderr));
+            }
+            output.status.code().unwrap_or(1)
+        }
+        Err(e) => {
+            eprintln!("\x1b[91mFailed to run binary: {}\x1b[0m", e);
+            1
+        }
+    }
+}
+
+/// Run tests using the C backend
+fn run_c_tests(asts: &[Ast], base_dir: &Path) -> i32 {
     let output_dir = Path::new("c-out");
 
     // Step 1: Transpile to C with test support
@@ -270,7 +380,6 @@ fn run_c_test_suite(asts: &[Ast], base_dir: &Path) -> i32 {
     }
 
     // Step 3: Run the test binary from the source directory
-    // This ensures relative file paths in tests work correctly
     eprintln!("Running C tests from {:?}...\n", base_dir);
 
     // Get the absolute path to the test binary since we'll be changing directories
@@ -282,13 +391,10 @@ fn run_c_test_suite(asts: &[Ast], base_dir: &Path) -> i32 {
 
     match run_result {
         Ok(output) => {
-            // Print the test output (stdout contains the test results)
             print!("{}", String::from_utf8_lossy(&output.stdout));
             if !output.stderr.is_empty() {
                 eprint!("{}", String::from_utf8_lossy(&output.stderr));
             }
-
-            // Return the exit code from the test binary
             output.status.code().unwrap_or(1)
         }
         Err(e) => {
@@ -345,30 +451,25 @@ fn collect_definitions(path: &Path) -> Vec<Ast> {
             }
         }
     } else {
-        eprintln!(
-            "Path does not exist or is neither a file nor directory: {}",
-            path.display()
-        );
+        eprintln!("Path does not exist: {}", path.display());
     }
 
     all_definitions
 }
 
 fn find_blitz_files(dir: &Path) -> Vec<PathBuf> {
-    let mut blitz_files = Vec::new();
+    let mut files = Vec::new();
 
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-
             if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("blitz") {
-                blitz_files.push(path);
+                files.push(path);
             } else if path.is_dir() {
-                // Recursively search subdirectories
-                blitz_files.extend(find_blitz_files(&path));
+                files.extend(find_blitz_files(&path));
             }
         }
     }
 
-    blitz_files
+    files
 }
