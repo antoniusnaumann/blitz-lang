@@ -17,15 +17,15 @@ Build a minimal C transpiler for the Blitz self-hosted compiler (~1676 lines in 
 
 ## Current Status (Updated: Feb 2, 2025)
 
-### ✅ MILESTONE: Lexer and Parser Partially Working
+### ✅ MILESTONE: Parser Working for Simple Files
 
 | Stage | Status | Details |
 |-------|--------|---------|
 | Compilation | ✅ **PASS** | 0 errors, 25 warnings |
 | Linking | ✅ **PASS** | Executable created |
-| Lexing | ✅ **PASS** | Successfully lexes 297 tokens from main.blitz |
-| Parsing (first file) | ✅ **PASS** | Successfully parses main.blitz, prints AST |
-| Parsing (second file) | ❌ **FAIL** | Panics with "Unexpected token!" on parser/parser.blitz |
+| Lexing | ✅ **PASS** | Successfully lexes all source files |
+| Parsing simple files | ✅ **PASS** | main.blitz parses successfully, AST printed |
+| Parsing complex files | ❌ **FAIL** | Fails on `++=` (concat_assign) operator |
 
 ### Quick Start
 
@@ -43,7 +43,6 @@ gcc -std=c11 -I c-out -o c-out/blitz c-out/blitz.c
 
 # Run (from compiler directory to find source files)
 cd ../../compiler && ../bootstrap/interpreter/c-out/blitz main.blitz
-# Output: Lexes and parses first file, then panics on second file
 ```
 
 ### What Works
@@ -52,13 +51,15 @@ cd ../../compiler && ../bootstrap/interpreter/c-out/blitz main.blitz
 - ✅ Generated C compiles without errors (0 errors)
 - ✅ Generated C links into executable
 - ✅ Executable reads files successfully
-- ✅ Lexer works correctly (297 tokens from main.blitz)
-- ✅ Parser works for simple files (main.blitz parsed successfully)
+- ✅ Lexer works correctly for all files
+- ✅ Parser works for main.blitz (struct definitions, function definitions)
 - ✅ AST is printed correctly
+- ✅ Break semantics in switch inside while loops (uses goto)
 
 ### What's Broken
 
-- ❌ Parsing complex files fails with "Unexpected token!" (expected token 60, got token 4)
+- ❌ `++=` operator not handled in expression parser (prints token 44, then aborts)
+- ⚠️ For loops over Lists not implemented (only Range iteration works)
 - ⚠️ 25 compiler warnings (mostly harmless)
 
 ---
@@ -74,20 +75,20 @@ cd ../../compiler && ../bootstrap/interpreter/c-out/blitz main.blitz
 - When generating `break` inside a switch inside a loop, generate `goto _loop_exit_N` instead
 - Added loop exit labels after while/for loops: `_loop_exit_N:;`
 
-### 2. Fixed Ident*/Expression* type confusion in parse_args
+### 2. Fixed double evaluation of expressions in `else return` pattern
+**Problem**: Code like `let fields = parser.parse_fields() else return none` was calling `parse_fields()` twice - once for the check and once for the result.
+
+**Solution**: Store the expression result in a temp variable `_else_tmp` before checking and use that for both the check and the result.
+
+### 3. Fixed Ident*/Expression* type confusion in parse_args
 **Problem**: Variables were declared as `Ident*` but assigned `Expression*` values.
 
 **Solution**: Updated type inference to correctly identify when variables should be `Expression*`.
 
-### 3. Fixed missing return in infinite while loops
-**Problem**: Functions ending with `while true { ... }` had no return statement after the loop, causing compiler warnings.
+### 4. Fixed missing return in infinite while loops
+**Problem**: Functions ending with `while true { ... }` had no return statement after the loop.
 
 **Solution**: Added unreachable return statements after detected infinite while loops.
-
-### 4. Fixed void-returning functions in if-else expressions
-**Problem**: Functions like `skip_newlines(parser)` return void, but were used as the last expression in if-else bodies.
-
-**Solution**: Track void functions and generate plain if-else statements instead of expression wrappers.
 
 ---
 
@@ -95,11 +96,11 @@ cd ../../compiler && ../bootstrap/interpreter/c-out/blitz main.blitz
 
 ### Likely Harmless (cosmetic)
 - Extraneous parentheses in equality comparisons (2)
-- Braces around scalar initializers (3)
+- Braces around scalar initializer (3)
 - Expression result unused in error-handling code (6)
 
 ### May Indicate Bugs
-- **Switch case values not in enumerated type** (8): Assignment_1 switch uses TokenKind values - this is a known issue where the generated code switches on an enum but uses values from a different enum
+- **Switch case values not in enumerated type** (8): Assignment_1 switch uses TokenKind values
 
 ---
 
@@ -121,9 +122,9 @@ bootstrap/interpreter/
 
 ## Next Steps (Prioritized)
 
-1. **Debug parsing error** - Token kind 60 expected vs 4 received. Need to understand what tokens these are and why parsing fails.
-2. **Clean up switch/enum warnings** - Use correct enum values in switch statements
-3. **Test more complex Blitz source files** - Ensure the transpiler handles all language features
+1. **Fix concat_assign handling** - The `++=` operator needs to be recognized in expression context
+2. **Implement for loops over Lists** - Currently only Range iteration works
+3. **Clean up switch/enum warnings** - Use correct enum values in switch statements
 
 ---
 
@@ -155,10 +156,11 @@ cd ../../compiler && ../bootstrap/interpreter/c-out/blitz main.blitz
 **Achieved**:
 - ✅ C code compiles without errors
 - ✅ Lexer works correctly
-- ✅ Parser works for simple files
+- ✅ Parser works for simple files (main.blitz)
 
 **Not Yet Achieved**:
-- ❌ Parser works for all files
+- ❌ Parser works for all files (fails on concat_assign)
+- ❌ For loops over Lists
 
 ---
 
@@ -175,3 +177,4 @@ cd ../../compiler && ../bootstrap/interpreter/c-out/blitz main.blitz
 - `in_switch_depth` tracks if we're inside a switch for break semantics
 - `infer_expr_type()` determines C type of expressions
 - When generating `break` inside switch inside loop, use `goto` instead
+- For non-Option `else` expressions, use temp variable `_else_tmp` to avoid double evaluation

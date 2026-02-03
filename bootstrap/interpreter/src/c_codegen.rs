@@ -3708,30 +3708,32 @@ impl CCodegen {
                             // For List types, check len == 0
                             // For pointer types, check == NULL
                             // For int types, check == 0
+                            let left = self.generate_expression(&binop.left, is_main);
+
+                            // Store result in a temp variable to avoid double evaluation
                             let check_expr = if left_type.starts_with("List_") {
-                                format!("({}).len == 0", "LEFT_EXPR")
+                                "_else_tmp.len == 0".to_string()
                             } else if left_type.ends_with("*") || left_type == "char*" {
-                                format!("({}) == NULL", "LEFT_EXPR")
+                                "_else_tmp == NULL".to_string()
                             } else if left_type == "int64_t" || left_type == "bool" {
-                                format!("!({})", "LEFT_EXPR")
+                                "!_else_tmp".to_string()
                             } else {
                                 // Unknown type - assume pointer
-                                format!("({}) == NULL", "LEFT_EXPR")
+                                "_else_tmp == NULL".to_string()
                             };
-
-                            let left = self.generate_expression(&binop.left, is_main);
 
                             if is_right_control_flow || is_right_void {
                                 let right = self.generate_expression(&binop.right, is_main);
-                                let check = check_expr.replace("LEFT_EXPR", &left);
                                 return format!(
-                                    "({{ if ({}) {{ {}; }} ({}); }})",
-                                    check, right, left
+                                    "({{ {} _else_tmp = {}; if ({}) {{ {}; }} _else_tmp; }})",
+                                    left_type, left, check_expr, right
                                 );
                             } else {
                                 let right = self.generate_expression(&binop.right, is_main);
-                                let check = check_expr.replace("LEFT_EXPR", &left);
-                                return format!("({} ? ({}) : ({}))", check, right, left);
+                                return format!(
+                                    "({{ {} _else_tmp = {}; {} ? ({}) : _else_tmp; }})",
+                                    left_type, left, check_expr, right
+                                );
                             }
                         }
                     }
