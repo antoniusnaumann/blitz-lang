@@ -1657,12 +1657,25 @@ impl CCodegen {
                                 if matches!(call.name.as_str(), "todo" | "panic" | "unreachable" | "assert"));
 
                             // Check if it's a control flow expression that shouldn't be wrapped in return
+                            // For-expressions that collect values ARE expressions and should be returned
+                            let is_for_expression = if let parser::Expression::For(for_expr) = expr
+                            {
+                                // Check if it's a for-expression (collects values) vs for-statement
+                                for_expr.body.len() == 1
+                                    && matches!(&for_expr.body[0], parser::Statement::Expression(e)
+                                    if {
+                                        let expr_type = self.infer_expr_type(e);
+                                        expr_type != "void"
+                                    })
+                            } else {
+                                false
+                            };
+
                             let is_control_flow = matches!(
                                 expr,
-                                parser::Expression::While(_)
-                                    | parser::Expression::For(_)
-                                    | parser::Expression::If(_)
-                            );
+                                parser::Expression::While(_) | parser::Expression::If(_)
+                            ) || (matches!(expr, parser::Expression::For(_))
+                                && !is_for_expression);
 
                             if is_noreturn_call || is_control_flow {
                                 // For noreturn functions and control flow, just generate without return
@@ -4908,7 +4921,44 @@ impl CCodegen {
                     self.variable_types
                         .insert(elem_name.clone(), c_elem_type.clone());
 
-                    // Generate body statements
+                    // Check if this is a for-expression (returns a list of values)
+                    // A for-expression has a single expression statement as its body
+                    let is_for_expression = for_loop.body.len() == 1
+                        && matches!(&for_loop.body[0], parser::Statement::Expression(_));
+
+                    if is_for_expression {
+                        // This is a for-expression that collects values into a list
+                        if let parser::Statement::Expression(body_expr) = &for_loop.body[0] {
+                            // Infer the result element type from the body expression
+                            let result_elem_type = self.infer_expr_type(body_expr);
+
+                            // Skip void expressions (side-effect-only for loops)
+                            if result_elem_type != "void" {
+                                let result_list_type = format!("List_{}", result_elem_type);
+
+                                // Generate the body expression
+                                let body_code = self.generate_expression(body_expr, is_main);
+
+                                // Register that we need the list_append function for this element type
+                                self.list_append_needed.insert(result_elem_type.clone());
+
+                                // Pop the loop label
+                                self.loop_label_stack.pop();
+
+                                // Generate a for-expression that collects values:
+                                // ({ List_T _result = {0}; for (...) { _result = blitz_list_append_T(_result, expr); } _result; })
+                                return format!(
+                                    "({{ {} _result = {{0}}; for (int64_t _idx_{} = 0; _idx_{} < ({}).len; _idx_{}++) {{ {} {} = ({}).data[_idx_{}]; _result = blitz_list_append_{}(_result, {}); }} _result; }})",
+                                    result_list_type,
+                                    elem_name, elem_name, iter_code, elem_name,
+                                    c_elem_type, elem_name, iter_code, elem_name,
+                                    result_elem_type, body_code
+                                );
+                            }
+                        }
+                    }
+
+                    // Generate body statements (for statement-style for loops)
                     let mut body_code = String::new();
                     for stmt in &for_loop.body {
                         let stmt_code = self.generate_statement(stmt, is_main);
@@ -7174,10 +7224,6 @@ typedef struct List_Rune {
     size_t cap;
 } List_Rune;
 
-// Forward declaration for List_Definition (defined in blitz.h)
-struct List_Definition;
-typedef struct List_Definition List_Definition;
-
 // Option type for String (used by blitz_read)
 typedef enum {
     Option_String_tag_none,
@@ -7253,10 +7299,9 @@ static inline String blitz_substring(List_Rune list, int64_t start, int64_t unti
     double: print_float, \
     TokenKind: print_int, \
     Operator: print_int, \
-    Assignment_1: print_int, \
+    BinaryOperator: print_int, \
     UnaryOperator: print_int, \
     List_Rune: print_list_rune, \
-    List_Definition: print_list_definition, \
     default: print_unknown \
 )(x)
 
@@ -7265,7 +7310,6 @@ void print_int(int64_t val);
 void print_bool(bool val);
 void print_float(double val);
 void print_list_rune(List_Rune list);
-void print_list_definition(List_Definition list);
 void print_unknown(void* ptr);
 
 // Panic function - terminates the program with an error message
@@ -7698,10 +7742,6 @@ void todo(char* msg) __attribute__((noreturn));
 
         full_impl.push_str("void print_list_rune(List_Rune list) {\n");
         full_impl.push_str("    printf(\"List_Rune[len=%zu]\\n\", list.len);\n");
-        full_impl.push_str("}\n\n");
-
-        full_impl.push_str("void print_list_definition(List_Definition list) {\n");
-        full_impl.push_str("    printf(\"List_Definition[len=%zu]\\n\", list.len);\n");
         full_impl.push_str("}\n\n");
 
         full_impl.push_str("void print_unknown(void* ptr) {\n");
