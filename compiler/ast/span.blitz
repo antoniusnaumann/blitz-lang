@@ -4,7 +4,7 @@ struct Span {
 }
 
 fn empty_span() Span {
-	Span(range: Range(begin: 0, end: 0), path: "")
+	Span(range: Range(begin: 0, until: 0), path: "")
 }
 
 fn merge(first Span, second Span) Span {

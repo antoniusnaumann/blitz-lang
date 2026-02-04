@@ -1,0 +1,22 @@
+// Test file for function call implementation
+
+fn simple_call(a Int, b Int) Int {
+    return a + b
+}
+
+fn no_args() Int {
+    return 42
+}
+
+fn three_args(x Int, y Int, z Int) Int {
+    return x + y + z
+}
+
+fn nested_calls(a Int) Int {
+    return simple_call(a, no_args())
+}
+
+fn main() Int {
+    // Test various function call patterns
+    return nested_calls(three_args(1, 2, 3))
+}

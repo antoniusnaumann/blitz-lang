@@ -41,6 +41,8 @@ union TokenKind {
 	int
 	float
 	char
+	true_
+	false_
 
 	// Arithmetic
 	add

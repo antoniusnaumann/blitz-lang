@@ -1,0 +1,11 @@
+fn multiply(x Int, y Int) Int {
+    return x * y
+}
+
+fn get_five() Int {
+    return 5
+}
+
+fn main() Int {
+    return multiply(get_five(), 3)
+}
