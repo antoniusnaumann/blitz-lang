@@ -10,17 +10,17 @@ fn new_registry() Registry {
     Registry(mods: [core_module], types: [])
 }
 
-fn get(reg Registry, id ModId) Module {
-    reg.mods[id]
+fn get(reg Registry, mod ModId) Module {
+    reg.mods[mod.id]
 }
 
 fn get(reg Registry, ty TypeRef) TypeKind {
-    reg.types[id]
+    reg.types[ty.id]
 }
 
-fn push(mut reg Registry, mod Module) ModuleId {
+fn push(mut reg Registry, mod Module) ModId {
     reg.mods ++= mod
-    ModuleId(id: reg.mods.len() - 1)
+    ModId(id: reg.mods.len() - 1)
 }
 
 fn push(mut reg Registry, ty TypeKind) TypeRef {
@@ -45,24 +45,24 @@ struct TypeParam {
 
 struct Module {
    name   String
-   parent Option(ModuleId)
-   childs List(ModuleId) 
+   parent Option(ModId)
+   childs List(ModId) 
    funcs  List(FuncDef)  // indexed by FuncId
-   types  List(TypeDef)  // indexed by TypeDefId
+   types  List(TypeDef)  // indexed by TypeId
 
    func_export List(FuncId)
    type_export List(TypeId)
 }
 
 struct TypeDef {
-    def_id  DefId
+    def_id  TypeId
     name    Ident
     generic List(TypeParam)
     kind    TypeDefKind
     vis     Visibility
 }
 
-struct TypeDefKind {
+union TypeDefKind {
     StructDef
     UnionDef
 }
@@ -82,9 +82,9 @@ struct UnionDef {
 }
 
 struct FuncDef {
-    def_id  DefId
+    def_id  FuncId
     name    Ident
-    module  ModuleId            
+    module  ModId            
     generic List(GenericId)
     params  List(TypeRef)
     result  TypeRef
@@ -97,16 +97,16 @@ struct GenericId {
 }
 
 struct FuncId {
-    module ModuleId
+    module ModId
     id     Int
 }
 
 struct TypeId {
-    module ModuleId
+    module ModId
     id     Int 
 }
 
-struct ModuleId {
+struct ModId {
     id Int
 }
 

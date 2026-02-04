@@ -32,10 +32,22 @@ union HirExpressionKind {
     // ...
 }
 
-struct HirBreak {
-    loop ExpressionId
-}
+struct HirLoop {}
+
+struct HirIf {}
+
+struct HirElse {}
+
+struct HirConstructor {}
+
+struct HirCall {}
 
 struct HirReturn {
     expr ExpressionId
 }
+
+struct HirBreak {
+    loop ExpressionId
+}
+
+struct HirSwitch {}
