@@ -121,14 +121,6 @@ fn parse_expression_bp(mut parser Parser, min_prec Int) Option(Expression) {
         char { parser.mut.parse_char_lit() }
         int { parser.mut.parse_int_lit() }
         float { parser.mut.parse_float_lit() }
-        true_ {
-            parser.mut.tok()
-            Lit(value: true, span: parser.span(token))
-        }
-        false_ {
-            parser.mut.tok()
-            Lit(value: true, span: parser.span(token))
-        }
         UnaryOperator {
             parser.mut.tok()
             let inner = parser.mut.parse_expression() else return none

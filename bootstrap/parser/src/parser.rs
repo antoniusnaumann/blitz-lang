@@ -211,7 +211,17 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_case(&mut self) -> Case {
-        let label = self.consume_ident().map(|s| s.into());
+        let label = match self.lexer.peek().unwrap().kind {
+            TokenKind::False => {
+                self.lexer.next();
+                "false_".to_owned().into()
+            }
+            TokenKind::True => {
+                self.lexer.next();
+                "true_".to_owned().into()
+            }
+            _ => self.consume_ident().map(|s| s.into()),
+        };
         let ty = match self.lexer.kind() {
             _ if label.is_none() => Some(self.expect_type().into()),
             TokenKind::Colon => {
@@ -456,39 +466,33 @@ impl<'a> Parser<'a> {
             TokenKind::Assert => {
                 self.lexer.next(); // Consume the assert token
                 let condition = self.parse_expression_bp(0);
-                
+
                 // Convert the condition to a string for the error message
                 let condition_str = condition.print();
-                
+
                 // Create: if !(condition) { panic("Assertion 'condition' failed") }
-                let negated_condition = Expression::UnaryOp(
-                    crate::UnaryOp {
-                        op: Operator::Not,
-                        expr: Box::new(condition),
-                        span: self.span.clone(),
-                    }
-                );
-                
+                let negated_condition = Expression::UnaryOp(crate::UnaryOp {
+                    op: Operator::Not,
+                    expr: Box::new(condition),
+                    span: self.span.clone(),
+                });
+
                 let panic_message = format!("Assertion '{}' failed", condition_str);
-                let panic_call = Expression::Call(
-                    crate::Call {
-                        name: "panic".into(),
-                        args: vec![CallArg {
-                            label: None,
-                            init: Box::new(Expression::String(panic_message)),
-                        }],
-                        ufcs: false,
-                        span: self.span.clone(),
-                    }
-                );
-                
-                Expression::If(
-                    crate::If {
-                        cond: Box::new(negated_condition),
-                        body: vec![panic_call.into()],
-                        span: self.span.clone(),
-                    }
-                )
+                let panic_call = Expression::Call(crate::Call {
+                    name: "panic".into(),
+                    args: vec![CallArg {
+                        label: None,
+                        init: Box::new(Expression::String(panic_message)),
+                    }],
+                    ufcs: false,
+                    span: self.span.clone(),
+                });
+
+                Expression::If(crate::If {
+                    cond: Box::new(negated_condition),
+                    body: vec![panic_call.into()],
+                    span: self.span.clone(),
+                })
             }
             TokenKind::Lbrace => self.parse_block().into(),
             TokenKind::Ident => {
@@ -532,7 +536,7 @@ impl<'a> Parser<'a> {
             };
 
             let right = self.parse_expression();
-            
+
             // Desugar compound assignments: a += b becomes a = a + b
             let right = if let Some(binary_op) = op {
                 // Reconstruct the left side as an expression
@@ -541,7 +545,7 @@ impl<'a> Parser<'a> {
                     Lval::Member(member) => Expression::Member(member.clone()),
                     Lval::Index(index) => Expression::Index(index.clone()),
                 };
-                
+
                 let span = left_expr.span().merge(&right.span());
                 Expression::BinaryOp(BinaryOp {
                     op: binary_op,
@@ -552,8 +556,12 @@ impl<'a> Parser<'a> {
             } else {
                 right
             };
-            
-            Assignment { left, right: Box::new(right) }.into()
+
+            Assignment {
+                left,
+                right: Box::new(right),
+            }
+            .into()
         } else {
             expr
         }
@@ -670,9 +678,7 @@ impl<'a> Parser<'a> {
             } = self.lexer.peek().unwrap().clone();
 
             let label = match kind {
-                TokenKind::Ident => {
-                    self.expect_ident().into()
-                }
+                TokenKind::Ident => self.expect_ident().into(),
                 TokenKind::Type => self.expect_type().into(),
                 TokenKind::Else => {
                     self.lexer.next(); // Consume 'else' token
@@ -799,16 +805,16 @@ impl<'a> Parser<'a> {
         let mut args = Vec::new();
         while !self.has(TokenKind::Rparen) {
             let _is_mut = self.consume(TokenKind::Mut).is_some();
-            
+
             // Parse the argument expression
             let expr = self.parse_expression();
-            
+
             // Check if this is a named argument (expression must be just an Ident followed by colon)
             if let Expression::Ident(ident_expr) = &expr {
                 if self.consume(TokenKind::Colon).is_some() {
                     // This is a named argument or shorthand
                     let label = ident_expr.clone();
-                    
+
                     // Check for shorthand syntax (comma or rparen after colon)
                     if self.has(TokenKind::Comma) || self.has(TokenKind::Rparen) {
                         // Shorthand: foo(bar:) means foo(bar: bar)
@@ -839,7 +845,7 @@ impl<'a> Parser<'a> {
                     init: Box::new(expr),
                 });
             }
-            
+
             self.consume(TokenKind::Comma);
         }
         self.expect(TokenKind::Rparen);
@@ -863,7 +869,7 @@ impl<'a> Parser<'a> {
         while !self.has(TokenKind::Rparen) {
             let label = self.expect_ident();
             self.expect(TokenKind::Colon);
-            
+
             // Check for shorthand syntax (no expression after colon)
             let init = if self.has(TokenKind::Comma) || self.has(TokenKind::Rparen) {
                 // Shorthand: Type(field:) means Type(field: field)
@@ -875,7 +881,7 @@ impl<'a> Parser<'a> {
                 // Full syntax: Type(field: expr)
                 self.parse_expression().into()
             };
-            
+
             self.consume(TokenKind::Comma);
             args.push(ConstructorArg { label, init })
         }
@@ -1690,12 +1696,12 @@ mod tests {
             Expression::Call(c) => {
                 assert_eq!(c.name, "foo");
                 assert_eq!(c.args.len(), 2);
-                
+
                 // First argument: a: 1
                 assert!(c.args[0].label.is_some());
                 assert_eq!(c.args[0].label.as_ref().unwrap().name, "a");
                 assert!(matches!(c.args[0].init.as_ref(), Expression::Number(_)));
-                
+
                 // Second argument: b: 2
                 assert!(c.args[1].label.is_some());
                 assert_eq!(c.args[1].label.as_ref().unwrap().name, "b");
@@ -1714,7 +1720,7 @@ mod tests {
             Expression::Call(c) => {
                 assert_eq!(c.name, "foo");
                 assert_eq!(c.args.len(), 2);
-                
+
                 // First argument: bar: (shorthand for bar: bar)
                 assert!(c.args[0].label.is_some());
                 assert_eq!(c.args[0].label.as_ref().unwrap().name, "bar");
@@ -1722,7 +1728,7 @@ mod tests {
                     Expression::Ident(ident) => assert_eq!(ident.name, "bar"),
                     _ => panic!("Expected Ident in shorthand init"),
                 }
-                
+
                 // Second argument: baz: (shorthand for baz: baz)
                 assert!(c.args[1].label.is_some());
                 assert_eq!(c.args[1].label.as_ref().unwrap().name, "baz");
@@ -1744,11 +1750,11 @@ mod tests {
             Expression::Call(c) => {
                 assert_eq!(c.name, "foo");
                 assert_eq!(c.args.len(), 2);
-                
+
                 // First argument: positional
                 assert!(c.args[0].label.is_none());
                 assert!(matches!(c.args[0].init.as_ref(), Expression::Number(_)));
-                
+
                 // Second argument: named
                 assert!(c.args[1].label.is_some());
                 assert_eq!(c.args[1].label.as_ref().unwrap().name, "b");
@@ -1762,19 +1768,19 @@ mod tests {
     fn test_constructor_shorthand() {
         // Person(name:, age:) should parse with shorthand
         let expr = parse_expr("Person(name:, age:)");
-        
+
         match expr {
             Expression::Constructor(c) => {
                 assert_eq!(c.r#type.name, "Person");
                 assert_eq!(c.args.len(), 2);
-                
+
                 // First argument: name: (shorthand)
                 assert_eq!(c.args[0].label.name, "name");
                 match c.args[0].init.as_ref() {
                     Expression::Ident(ident) => assert_eq!(ident.name, "name"),
                     _ => panic!("Expected Ident in constructor shorthand"),
                 }
-                
+
                 // Second argument: age: (shorthand)
                 assert_eq!(c.args[1].label.name, "age");
                 match c.args[1].init.as_ref() {
@@ -1825,14 +1831,12 @@ mod tests {
         let expr = parse_expr("a -= b");
 
         match expr {
-            Expression::Assignment(assignment) => {
-                match assignment.right.as_ref() {
-                    Expression::BinaryOp(op) => {
-                        assert!(matches!(op.op, Operator::Sub));
-                    }
-                    _ => panic!("Expected BinaryOp on right side"),
+            Expression::Assignment(assignment) => match assignment.right.as_ref() {
+                Expression::BinaryOp(op) => {
+                    assert!(matches!(op.op, Operator::Sub));
                 }
-            }
+                _ => panic!("Expected BinaryOp on right side"),
+            },
             _ => panic!("Expected Assignment"),
         }
     }
@@ -1843,14 +1847,12 @@ mod tests {
         let expr = parse_expr("a *= b");
 
         match expr {
-            Expression::Assignment(assignment) => {
-                match assignment.right.as_ref() {
-                    Expression::BinaryOp(op) => {
-                        assert!(matches!(op.op, Operator::Mul));
-                    }
-                    _ => panic!("Expected BinaryOp on right side"),
+            Expression::Assignment(assignment) => match assignment.right.as_ref() {
+                Expression::BinaryOp(op) => {
+                    assert!(matches!(op.op, Operator::Mul));
                 }
-            }
+                _ => panic!("Expected BinaryOp on right side"),
+            },
             _ => panic!("Expected Assignment"),
         }
     }
@@ -1861,14 +1863,12 @@ mod tests {
         let expr = parse_expr("a /= b");
 
         match expr {
-            Expression::Assignment(assignment) => {
-                match assignment.right.as_ref() {
-                    Expression::BinaryOp(op) => {
-                        assert!(matches!(op.op, Operator::Div));
-                    }
-                    _ => panic!("Expected BinaryOp on right side"),
+            Expression::Assignment(assignment) => match assignment.right.as_ref() {
+                Expression::BinaryOp(op) => {
+                    assert!(matches!(op.op, Operator::Div));
                 }
-            }
+                _ => panic!("Expected BinaryOp on right side"),
+            },
             _ => panic!("Expected Assignment"),
         }
     }
@@ -1879,14 +1879,12 @@ mod tests {
         let expr = parse_expr("a %= b");
 
         match expr {
-            Expression::Assignment(assignment) => {
-                match assignment.right.as_ref() {
-                    Expression::BinaryOp(op) => {
-                        assert!(matches!(op.op, Operator::Rem));
-                    }
-                    _ => panic!("Expected BinaryOp on right side"),
+            Expression::Assignment(assignment) => match assignment.right.as_ref() {
+                Expression::BinaryOp(op) => {
+                    assert!(matches!(op.op, Operator::Rem));
                 }
-            }
+                _ => panic!("Expected BinaryOp on right side"),
+            },
             _ => panic!("Expected Assignment"),
         }
     }
@@ -1897,14 +1895,12 @@ mod tests {
         let expr = parse_expr("a ++= b");
 
         match expr {
-            Expression::Assignment(assignment) => {
-                match assignment.right.as_ref() {
-                    Expression::BinaryOp(op) => {
-                        assert!(matches!(op.op, Operator::Concat));
-                    }
-                    _ => panic!("Expected BinaryOp on right side"),
+            Expression::Assignment(assignment) => match assignment.right.as_ref() {
+                Expression::BinaryOp(op) => {
+                    assert!(matches!(op.op, Operator::Concat));
                 }
-            }
+                _ => panic!("Expected BinaryOp on right side"),
+            },
             _ => panic!("Expected Assignment"),
         }
     }
@@ -1919,13 +1915,13 @@ mod tests {
                 match assignment.right.as_ref() {
                     Expression::BinaryOp(add_op) => {
                         assert!(matches!(add_op.op, Operator::Add));
-                        
+
                         // Left side should be 'a'
                         match add_op.left.as_ref() {
                             Expression::Ident(ident) => assert_eq!(ident.name, "a"),
                             _ => panic!("Expected 'a' on left"),
                         }
-                        
+
                         // Right side should be b * c
                         match add_op.right.as_ref() {
                             Expression::BinaryOp(mul_op) => {
@@ -1983,7 +1979,7 @@ mod tests {
             Expression::Assignment(assignment) => {
                 // Left side should be arr[0]
                 match &assignment.left {
-                    Lval::Index(_) => {},
+                    Lval::Index(_) => {}
                     _ => panic!("Expected Index on left side"),
                 }
 
@@ -1992,7 +1988,7 @@ mod tests {
                     Expression::BinaryOp(op) => {
                         assert!(matches!(op.op, Operator::Add));
                         match op.left.as_ref() {
-                            Expression::Index(_) => {},
+                            Expression::Index(_) => {}
                             _ => panic!("Expected Index on left of addition"),
                         }
                     }

@@ -32,7 +32,9 @@ union Expression {
 	Group
 	Continue
 	Break
-	Lit(Bool)
+}
+
+union Literal {
 	Lit(String)
 	Lit(Rune)
 	Lit(Float)
