@@ -3210,11 +3210,22 @@ impl CCodegen {
                 result
             }
             parser::Expression::Index(idx) => {
-                // Indexing into a List_T returns T*
+                // Indexing into a List_T returns T or T* depending on whether T is a value type
                 let target_type = self.infer_expr_type(&idx.target);
                 if let Some(elem_type) = target_type.strip_prefix("List_") {
-                    // List_Token[i] returns Token*
-                    format!("{}*", elem_type)
+                    // Value types are returned directly (not as pointers)
+                    // - Rune (uint32_t) is a value type
+                    // - Int (int64_t) is a value type
+                    // - Float (double) is a value type
+                    // - Bool (bool) is a value type
+                    match elem_type {
+                        "Rune" => "uint32_t".to_string(),
+                        "Int" => "int64_t".to_string(),
+                        "Float" => "double".to_string(),
+                        "Bool" => "bool".to_string(),
+                        // Struct types get pointer
+                        _ => format!("{}*", elem_type),
+                    }
                 } else if target_type == "char*" || target_type == "String" {
                     // String indexing returns a character
                     "uint32_t".to_string()
@@ -5558,9 +5569,25 @@ impl CCodegen {
                 || expr_code.starts_with("todo(")
                 || expr_code.starts_with("err(")
             {
-                // Wrap in statement expression: ({ panic("msg"); (T){{0}}; })
+                // Wrap in statement expression: ({ panic("msg"); (T){0}; })
                 // Since panic/todo/err are noreturn or void, the dummy value is never reached
-                return format!("({{ {}; ({}){{{{0}}}}; }})", expr_code, to_type);
+                // For Option types, use proper none initialization
+                // For scalar types, use {0} not {{0}}
+                let dummy_value = if to_type.starts_with("Option_") {
+                    format!("({}){{.tag = {}_tag_none}}", to_type, to_type)
+                } else if to_type == "int64_t"
+                    || to_type == "double"
+                    || to_type == "bool"
+                    || to_type == "uint32_t"
+                    || to_type == "char"
+                {
+                    // Scalar types - use plain 0
+                    "0".to_string()
+                } else {
+                    // Struct types - use compound literal with zero init
+                    format!("({}){{0}}", to_type)
+                };
+                return format!("({{ {}; {}; }})", expr_code, dummy_value);
             }
             // For other void expressions, just return as-is (will be a type error)
         }
@@ -5696,6 +5723,36 @@ impl CCodegen {
                         "({}){{.tag = {}_tag_some, .value = memcpy(malloc(sizeof({})), &(({}){{.tag = {}_tag_{}, .data.as_{} = {}}}), sizeof({}))}}",
                         to_type, to_type, to_inner, to_inner, to_inner, from_base, from_base, expr_code, to_inner
                     );
+                }
+
+                // Check for nested union conversion: from_base -> middle -> to_inner
+                // e.g., Lit_Int -> Literal -> SwitchLabel
+                for middle in parents.iter() {
+                    if let Some(grandparents) = self.variant_to_union.get(middle) {
+                        if grandparents.contains(to_inner) {
+                            // Double wrap: from_base in middle, then middle in to_inner, then wrap in Option
+                            // Pattern: Lit_Int* -> Literal{Lit_Int} -> SwitchLabel{Literal} -> Option_SwitchLabel
+
+                            // Some types are stored by value in the inner union (not as pointers)
+                            // For Literal union, Lit_String, Lit_Rune, Lit_Float, Lit_Int are stored by value
+                            // So we need to dereference the pointer from the expression
+                            let value_types =
+                                ["Lit_Bool", "Lit_String", "Lit_Rune", "Lit_Float", "Lit_Int"];
+                            let inner_value =
+                                if value_types.contains(&from_base) && from_type.ends_with('*') {
+                                    format!("*{}", expr_code) // dereference pointer for value types
+                                } else {
+                                    expr_code.to_string()
+                                };
+
+                            return format!(
+                                "({}){{.tag = {}_tag_some, .value = memcpy(malloc(sizeof({})), &(({}){{.tag = {}_tag_{}, .data.as_{} = memcpy(malloc(sizeof({})), &(({}){{.tag = {}_tag_{}, .data.as_{} = {}}}), sizeof({}))}}), sizeof({}))}}",
+                                to_type, to_type, to_inner, to_inner, to_inner, middle, middle,
+                                middle, middle, middle, from_base, from_base, inner_value, middle,
+                                to_inner
+                            );
+                        }
+                    }
                 }
             }
         }

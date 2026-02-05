@@ -235,6 +235,10 @@ fn parse_switch_label(mut parser Parser) Option(SwitchLabel) {
     switch parser.peek().kind {
         ident { parser.mut.parse_ident() else return none }
         type { parser.mut.parse_type() else return none }
+        str { parser.mut.parse_string_lit() else return none }
+        int { parser.mut.parse_int_lit() else return none }
+        float { parser.mut.parse_float_lit() else return none }
+        char { parser.mut.parse_char_lit() else return none }
         else_ {
             parser.mut.tok()
             default
@@ -330,7 +334,39 @@ fn parse_string_lit(mut parser Parser) Option(Lit(String)) {
 }
 
 fn parse_char_lit(mut parser Parser) Option(Lit(Rune)) {
-    todo("parse_char_lit")
+    let token = parser.mut.expect(char)
+    let chars = parser.source.substr(token.span.range.begin + 1, token.span.range.until - 1).chars()
+    let value = switch chars.len() {
+        1 { chars[0] }
+        2 {
+            if chars[0] != '\\' {
+                parser.mut.err("Invalid char length")
+                return none
+            }
+
+            switch chars[1] {
+                'n' { '\n' }
+                'r' { '\r' }
+                't' { '\t' }
+                '0' { '\0' }
+                '\\' { '\\' }
+                '\'' { '\'' }
+                'x' { todo("Hex lit") }
+                'u' { todo("Unicode lit") }
+                '(' { todo("Format strings") }
+                else {
+                    parser.mut.err("Invalid escape sequence")
+                    return none
+                }
+            }
+        }
+        else {
+            parser.mut.err("Invalid char length")
+            return none
+        }
+    }
+
+    Lit(value:, span: parser.span(token))
 }
 
 fn parse_int_lit(mut parser Parser) Option(Lit(Int)) {
