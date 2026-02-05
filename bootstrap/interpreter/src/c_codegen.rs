@@ -256,6 +256,11 @@ impl CCodegen {
                 self.struct_field_types.insert(c_name, field_types);
             }
             Definition::Union(u) => {
+                // Skip the Bool union - it's defined in std but we use C's native bool type
+                if u.sig.name == "Bool" {
+                    return Ok(());
+                }
+
                 // Check if this is a symbolic-only union (simple enum)
                 // A union is a tagged union if ANY case has a type associated with it
                 let has_typed_variants = u.cases.iter().any(|c| c.r#type.is_some());
@@ -328,6 +333,11 @@ impl CCodegen {
     fn register_variants(&mut self, def: &Definition) -> Result<(), String> {
         match def {
             Definition::Union(u) => {
+                // Skip the Bool union - it's defined in std but we use C's native bool type
+                if u.sig.name == "Bool" {
+                    return Ok(());
+                }
+
                 // Skip generic unions - their label-only variants (like `none` in `Option(T)`)
                 // can't be resolved without knowing the concrete type parameter
                 if !u.sig.params.is_empty() {
@@ -391,6 +401,11 @@ impl CCodegen {
                 }
             }
             Definition::Union(u) => {
+                // Skip the Bool union - it's defined in std but we use C's native bool type
+                if u.sig.name == "Bool" {
+                    return Ok(());
+                }
+
                 for case in &u.cases {
                     if let Some(ty) = &case.r#type {
                         self.analyze_type(ty);
@@ -448,6 +463,11 @@ impl CCodegen {
                 self.type_dependencies.insert(c_name.clone(), deps);
             }
             Definition::Union(u) => {
+                // Skip the Bool union - it's defined in std but we use C's native bool type
+                if u.sig.name == "Bool" {
+                    return Ok(());
+                }
+
                 let blitz_name = u.sig.name.clone();
                 let has_typed_variants = u.cases.iter().any(|c| c.r#type.is_some());
                 let kind = if has_typed_variants {
@@ -1175,7 +1195,12 @@ impl CCodegen {
                 self.generate_union(&u.sig, &u.cases)?;
 
                 // Helper for common fields (like span) in tagged unions
-                if has_typed_variants && (union_name == "Expression" || union_name == "Statement") {
+                // Generate for Expression, Statement, and Literal (all have span in their variants)
+                if has_typed_variants
+                    && (union_name == "Expression"
+                        || union_name == "Statement"
+                        || union_name == "Literal")
+                {
                     self.generate_union_span_helper(&c_name, &u.cases)?;
                 }
             }
@@ -1246,6 +1271,11 @@ impl CCodegen {
 
     fn generate_union(&mut self, sig: &Type, cases: &[parser::Case]) -> Result<(), String> {
         let union_name = &sig.name;
+
+        // Skip the Bool union - it's defined in std but we use C's native bool type
+        if union_name == "Bool" {
+            return Ok(());
+        }
 
         // Skip generic unions for now
         if !sig.params.is_empty() {
@@ -1400,6 +1430,9 @@ impl CCodegen {
         // Types that DON'T have a span field (need special handling)
         let types_without_span = ["Assignment", "Expression", "Statement"];
 
+        // Types that are nested tagged unions - need to call their own _span helper
+        let nested_tagged_unions = ["Literal"];
+
         // Types that are Lit variants (have span as Span* pointer, not value)
         let is_lit_type = |name: &str| name.starts_with("Lit_");
 
@@ -1438,6 +1471,12 @@ impl CCodegen {
                             variant_name
                         ));
                     }
+                } else if nested_tagged_unions.contains(&type_name.as_str()) {
+                    // For nested tagged unions like Literal, call their _span helper
+                    code.push_str(&format!(
+                        "            return {}_span(expr->data.as_{});\n",
+                        type_name, variant_name
+                    ));
                 } else if is_lit_type(&variant_name) {
                     // Lit variants store span as Span* pointer, access directly (no &)
                     code.push_str(&format!(
@@ -5528,7 +5567,7 @@ impl CCodegen {
 
         // Handle Option_X to Option_Y conversions where X is a variant of Y
         if from_type.starts_with("Option_") && to_type.starts_with("Option_") {
-            let from_inner = &from_type[7..]; // e.g., "Call"
+            let from_inner = &from_type[7..]; // e.g., "Lit_String"
             let to_inner = &to_type[7..]; // e.g., "Expression"
 
             // Check if from_inner is a variant of to_inner (a union)
@@ -5571,6 +5610,47 @@ impl CCodegen {
                         to_type, to_type, to_inner, to_inner, to_inner, from_inner, from_inner, value_access, to_inner,
                         to_type, to_type
                     );
+                }
+
+                // Handle nested unions: e.g., Lit_String -> Literal -> Expression
+                // Check if any parent of from_inner is itself a variant of to_inner
+                for parent in parents.iter() {
+                    if let Some(grandparents) = self.variant_to_union.get(parent) {
+                        if grandparents.contains(to_inner) {
+                            // Need double wrapping:
+                            // Lit_String -> Literal -> Expression
+                            let value_types = [
+                                "Lit_Bool",
+                                "Lit_String",
+                                "Lit_Rune",
+                                "Lit_Float",
+                                "Lit_Int",
+                                "BinaryOperator",
+                                "UnaryOperator",
+                            ];
+                            let value_access = if value_types.contains(&from_inner) {
+                                "*_conv_tmp.value" // dereference for value types stored by value
+                            } else {
+                                "_conv_tmp.value"
+                            };
+
+                            // First wrap in middle union (e.g., Literal), then in outer union (e.g., Expression)
+                            // Pattern: Lit_String value -> Literal{.tag=Literal_tag_Lit_String, .data.as_Lit_String=value}
+                            //       -> Expression{.tag=Expression_tag_Literal, .data.as_Literal=&middle}
+                            return format!(
+                                "({{ {} _conv_tmp = {}; \
+                                (_conv_tmp.tag == {}_tag_some) \
+                                ? ({}){{.tag = {}_tag_some, .value = memcpy(malloc(sizeof({})), &(({}){{.tag = {}_tag_{}, .data.as_{} = memcpy(malloc(sizeof({})), &(({}){{.tag = {}_tag_{}, .data.as_{} = {}}}), sizeof({}))}}), sizeof({}))}} \
+                                : ({}){{.tag = {}_tag_none}}; }})",
+                                from_type, expr_code,
+                                from_type,
+                                to_type, to_type, to_inner, to_inner, to_inner, parent, parent,
+                                parent, parent, parent, from_inner, from_inner, value_access, parent,
+                                to_inner,
+                                to_type, to_type
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -6673,7 +6753,9 @@ impl CCodegen {
                     if ident.name == "else" {
                         code.push_str("        default:\n");
                     } else {
-                        let qualified = self.qualify_identifier(&ident.name);
+                        // Use cond_type as hint for enum variant disambiguation in switch-as-statement
+                        let qualified =
+                            self.qualify_identifier_with_hint(&ident.name, Some(cond_type));
                         code.push_str(&format!("        case {}:\n", qualified));
                     }
                 }
@@ -7352,6 +7434,7 @@ static inline String blitz_substring(List_Rune list, int64_t start, int64_t unti
 // Usage: print(x) expands to the appropriate function based on type
 // Note: Complex types (TokenKind, Operator, etc.) are handled via code generation
 // to print appropriate placeholders. This macro handles basic built-in types.
+// The default case handles struct pointers and other unknown types.
 #define print(x) _Generic((x), \
     char*: print_str, \
     const char*: print_str, \
@@ -7359,7 +7442,8 @@ static inline String blitz_substring(List_Rune list, int64_t start, int64_t unti
     int: print_int_from_int, \
     bool: print_bool, \
     double: print_float, \
-    List_Rune: print_list_rune \
+    List_Rune: print_list_rune, \
+    default: print_ptr \
 )(x)
 
 void print_str(const char* str);
@@ -7368,6 +7452,7 @@ void print_int_from_int(int val);
 void print_bool(bool val);
 void print_float(double val);
 void print_list_rune(List_Rune list);
+void print_ptr(const void* ptr);
 
 // Panic function - terminates the program with an error message
 // Used for unrecoverable errors
@@ -7803,6 +7888,10 @@ void todo(char* msg) __attribute__((noreturn));
 
         full_impl.push_str("void print_int_from_int(int val) {\n");
         full_impl.push_str("    printf(\"%d\\n\", val);\n");
+        full_impl.push_str("}\n\n");
+
+        full_impl.push_str("void print_ptr(const void* ptr) {\n");
+        full_impl.push_str("    printf(\"<ptr %p>\\n\", ptr);\n");
         full_impl.push_str("}\n\n");
 
         // blitz_time implementation
