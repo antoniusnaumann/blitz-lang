@@ -699,6 +699,32 @@ impl CCodegen {
         }
     }
 
+    /// Register that we need a list append function for the given element type.
+    /// This also ensures the corresponding List_<elem_type> is registered as a generic instance.
+    fn register_list_append_needed(&mut self, elem_type: String) {
+        // Add to list_append_needed
+        self.list_append_needed.insert(elem_type.clone());
+
+        // Also register the List_<elem_type> as a generic instance
+        let list_type_name = format!("List_{}", elem_type);
+        self.generic_instances
+            .entry(list_type_name)
+            .or_insert(("List".to_string(), vec![elem_type]));
+    }
+
+    /// Register that we need a list concat function for the given element type.
+    /// This also ensures the corresponding List_<elem_type> is registered as a generic instance.
+    fn register_list_concat_needed(&mut self, elem_type: String) {
+        // Add to list_concat_needed
+        self.list_concat_needed.insert(elem_type.clone());
+
+        // Also register the List_<elem_type> as a generic instance
+        let list_type_name = format!("List_{}", elem_type);
+        self.generic_instances
+            .entry(list_type_name)
+            .or_insert(("List".to_string(), vec![elem_type]));
+    }
+
     /// Get a simple type name for use in instance names
     fn type_name_for_instance(&self, ty: &Type) -> String {
         if ty.params.is_empty() {
@@ -835,10 +861,7 @@ impl CCodegen {
 
     /// Check if a type is a built-in type defined in blitz_types.h
     fn is_builtin_type(&self, type_name: &str) -> bool {
-        matches!(
-            type_name,
-            "Range" | "List_Rune" | "Option_String" | "List_String"
-        )
+        matches!(type_name, "Range" | "List_Rune" | "Option_String")
     }
 
     /// Check if a function name collides with C standard library function names
@@ -1881,6 +1904,13 @@ impl CCodegen {
                 // When used as a statement, generate a simple if statement, not a statement expression
                 if let parser::Expression::If(if_expr) = expr {
                     return self.generate_if_as_pure_statement(if_expr, is_main);
+                }
+
+                // Special handling for for loops used as pure statements
+                // When a for loop is the entire statement (not part of a larger expression),
+                // it should NOT collect results - just execute for side effects
+                if let parser::Expression::For(for_loop) = expr {
+                    return self.generate_for_as_pure_statement(for_loop, is_main);
                 }
 
                 let expr_code = self.generate_expression(expr, is_main);
@@ -3234,6 +3264,19 @@ impl CCodegen {
                     target_type
                 }
             }
+            parser::Expression::Assignment(assign) => {
+                // Assignment expressions return the type of the assigned value
+                // This is important for if-else expressions that end with assignments
+                self.infer_expr_type(&assign.right)
+            }
+            parser::Expression::Block(stmts) => {
+                // Block expressions return the type of the last expression
+                if let Some(parser::Statement::Expression(last_expr)) = stmts.last() {
+                    self.infer_expr_type(last_expr)
+                } else {
+                    "void".to_string()
+                }
+            }
             _ => "int64_t".to_string(), // Fallback for complex expressions
         }
     }
@@ -3724,14 +3767,14 @@ impl CCodegen {
 
                             if right_type.starts_with("List_") {
                                 // List ++ List concatenation
-                                self.list_concat_needed.insert(elem_type.clone());
+                                self.register_list_concat_needed(elem_type.clone());
                                 return format!(
                                     "blitz_list_concat_{}({}, {})",
                                     elem_type, left, right
                                 );
                             } else {
                                 // List ++ element append
-                                self.list_append_needed.insert(elem_type.clone());
+                                self.register_list_append_needed(elem_type.clone());
 
                                 // If right is an Option type, we need to unwrap it with .value
                                 let right_unwrapped = if right_type.starts_with("Option_") {
@@ -3746,7 +3789,12 @@ impl CCodegen {
                                 );
                             }
                         } else {
-                            // String concatenation - use blitz_string_concat helper
+                            // String concatenation
+                            // Check if right side is a Rune (uint32_t) - use blitz_string_append_rune
+                            if right_type == "uint32_t" || right_type == "Rune" {
+                                return format!("blitz_string_append_rune({}, {})", left, right);
+                            }
+                            // Otherwise use blitz_string_concat for string ++ string
                             return format!("blitz_string_concat({}, {})", left, right);
                         }
                     }
@@ -5039,7 +5087,7 @@ impl CCodegen {
                                 let body_code = self.generate_expression(body_expr, is_main);
 
                                 // Register that we need the list_append function for this element type
-                                self.list_append_needed.insert(result_elem_type.clone());
+                                self.register_list_append_needed(result_elem_type.clone());
 
                                 // Pop the loop label
                                 self.loop_label_stack.pop();
@@ -5234,100 +5282,125 @@ impl CCodegen {
                             len, len
                         ));
                     } else {
-                        // Check if all elements are identifiers (possibly enum variants)
-                        let all_idents = list
+                        // Check if all elements are string literals
+                        let all_strings = list
                             .elems
                             .iter()
-                            .all(|e| matches!(e, parser::Expression::Ident(_)));
+                            .all(|e| matches!(e, parser::Expression::String(_)));
 
-                        if all_idents {
-                            // Try to use expected element type from context first (e.g., list comparison)
-                            // This ensures we use the correct enum type when multiple enums share variant names
-                            let enum_type: Option<String> = if let Some(ref expected) =
-                                self.expected_list_elem_type
-                            {
-                                Some(expected.clone())
-                            } else if let parser::Expression::Ident(first_ident) = &list.elems[0] {
-                                // Fall back to inferring from first element
-                                let mut found_type: Option<String> = None;
-                                for (enum_name, variants) in &self.enum_variants {
-                                    if variants.contains(&first_ident.name) {
-                                        found_type = Some(enum_name.clone());
-                                        break;
-                                    }
-                                }
-                                found_type
-                            } else {
-                                None
-                            };
-
-                            if let Some(enum_name) = enum_type {
-                                // Generate array of enum values
-                                code.push_str(&format!(
-                                    "            {}* _tmp = malloc(sizeof({}) * {});\n",
-                                    enum_name, enum_name, len
-                                ));
-                                for (i, elem) in list.elems.iter().enumerate() {
-                                    let elem_code = self.generate_expression(elem, is_main);
-                                    code.push_str(&format!(
-                                        "            _tmp[{}] = {};\n",
-                                        i, elem_code
-                                    ));
-                                }
-                                code.push_str(&format!(
-                                    "            (List_{}){{.data = _tmp, .len = {}, .cap = {}}};\n",
-                                    enum_name, len, len
-                                ));
-                            } else {
-                                // Fall back to stub
-                                code.push_str("            /* TODO: non-integer list literal requires type inference */\n");
-                                code.push_str(&format!("            void* _tmp = NULL;\n"));
-                                code.push_str("            (void*){{}};\n");
+                        if all_strings {
+                            // All strings - use char**
+                            code.push_str(&format!(
+                                "        char** _tmp = malloc(sizeof(char*) * {});\n",
+                                len
+                            ));
+                            for (i, elem) in list.elems.iter().enumerate() {
+                                let elem_code = self.generate_expression(elem, is_main);
+                                code.push_str(&format!("        _tmp[{}] = {};\n", i, elem_code));
                             }
+                            code.push_str(&format!(
+                                "        (List_String){{.data = _tmp, .len = {}, .cap = {}}};\n",
+                                len, len
+                            ));
                         } else {
-                            // Check if all elements are constructors
-                            let all_constructors = list
+                            // Check if all elements are identifiers (possibly enum variants)
+                            let all_idents = list
                                 .elems
                                 .iter()
-                                .all(|e| matches!(e, parser::Expression::Constructor(_)));
+                                .all(|e| matches!(e, parser::Expression::Ident(_)));
 
-                            if all_constructors && !list.elems.is_empty() {
-                                // Infer element type from the first constructor
-                                if let parser::Expression::Constructor(first_ctor) = &list.elems[0]
-                                {
-                                    let elem_type = self.type_name_for_instance(&first_ctor.r#type);
-                                    let list_type = format!("List_{}", elem_type);
+                            if all_idents {
+                                // Try to use expected element type from context first (e.g., list comparison)
+                                // This ensures we use the correct enum type when multiple enums share variant names
+                                let enum_type: Option<String> =
+                                    if let Some(ref expected) = self.expected_list_elem_type {
+                                        Some(expected.clone())
+                                    } else if let parser::Expression::Ident(first_ident) =
+                                        &list.elems[0]
+                                    {
+                                        // Fall back to inferring from first element
+                                        let mut found_type: Option<String> = None;
+                                        for (enum_name, variants) in &self.enum_variants {
+                                            if variants.contains(&first_ident.name) {
+                                                found_type = Some(enum_name.clone());
+                                                break;
+                                            }
+                                        }
+                                        found_type
+                                    } else {
+                                        None
+                                    };
 
-                                    // Generate array of constructor results
+                                if let Some(enum_name) = enum_type {
+                                    // Generate array of enum values
                                     code.push_str(&format!(
-                                        "        {}** _tmp = malloc(sizeof({}*) * {});\n",
-                                        elem_type, elem_type, len
+                                        "            {}* _tmp = malloc(sizeof({}) * {});\n",
+                                        enum_name, enum_name, len
                                     ));
                                     for (i, elem) in list.elems.iter().enumerate() {
                                         let elem_code = self.generate_expression(elem, is_main);
                                         code.push_str(&format!(
-                                            "        _tmp[{}] = {};\n",
+                                            "            _tmp[{}] = {};\n",
                                             i, elem_code
                                         ));
                                     }
                                     code.push_str(&format!(
-                                        "        ({}){{.data = _tmp, .len = {}, .cap = {}}};\n",
-                                        list_type, len, len
-                                    ));
+                                    "            (List_{}){{.data = _tmp, .len = {}, .cap = {}}};\n",
+                                    enum_name, len, len
+                                ));
                                 } else {
-                                    // Fallback - shouldn't happen
-                                    code.push_str("        /* TODO: constructor list type inference failed */\n");
+                                    // Fall back to stub
+                                    code.push_str("            /* TODO: non-integer list literal requires type inference */\n");
+                                    code.push_str(&format!("            void* _tmp = NULL;\n"));
+                                    code.push_str("            (void*){{}};\n");
+                                }
+                            } else {
+                                // Check if all elements are constructors
+                                let all_constructors = list
+                                    .elems
+                                    .iter()
+                                    .all(|e| matches!(e, parser::Expression::Constructor(_)));
+
+                                if all_constructors && !list.elems.is_empty() {
+                                    // Infer element type from the first constructor
+                                    if let parser::Expression::Constructor(first_ctor) =
+                                        &list.elems[0]
+                                    {
+                                        let elem_type =
+                                            self.type_name_for_instance(&first_ctor.r#type);
+                                        let list_type = format!("List_{}", elem_type);
+
+                                        // Generate array of constructor results
+                                        code.push_str(&format!(
+                                            "        {}** _tmp = malloc(sizeof({}*) * {});\n",
+                                            elem_type, elem_type, len
+                                        ));
+                                        for (i, elem) in list.elems.iter().enumerate() {
+                                            let elem_code = self.generate_expression(elem, is_main);
+                                            code.push_str(&format!(
+                                                "        _tmp[{}] = {};\n",
+                                                i, elem_code
+                                            ));
+                                        }
+                                        code.push_str(&format!(
+                                            "        ({}){{.data = _tmp, .len = {}, .cap = {}}};\n",
+                                            list_type, len, len
+                                        ));
+                                    } else {
+                                        // Fallback - shouldn't happen
+                                        code.push_str("        /* TODO: constructor list type inference failed */\n");
+                                        code.push_str(&format!("        void* _tmp = NULL;\n"));
+                                        code.push_str("        (void*){{}};\n");
+                                    }
+                                } else {
+                                    // Mixed/complex types - we can't infer the type properly
+                                    // Just generate a stub for now
+                                    code.push_str("        /* TODO: non-integer list literal requires type inference */\n");
                                     code.push_str(&format!("        void* _tmp = NULL;\n"));
                                     code.push_str("        (void*){{}};\n");
                                 }
-                            } else {
-                                // Mixed/complex types - we can't infer the type properly
-                                // Just generate a stub for now
-                                code.push_str("        /* TODO: non-integer list literal requires type inference */\n");
-                                code.push_str(&format!("        void* _tmp = NULL;\n"));
-                                code.push_str("        (void*){{}};\n");
                             }
-                        }
+                        } // Close the `if all_strings { ... } else { ... }` block
                     }
 
                     code.push_str("    })");
@@ -5807,6 +5880,117 @@ impl CCodegen {
         }
 
         format!("if ({}) {{\n{}    }}", cond, body_code)
+    }
+
+    /// Generate a for loop as a pure statement (no result collection)
+    /// This is used when the for loop is the entire statement, not part of a larger expression
+    fn generate_for_as_pure_statement(&mut self, for_loop: &parser::For, is_main: bool) -> String {
+        // Mangle the loop variable name if it collides with C stdlib
+        let elem_name = self.mangle_variable_name(&for_loop.elem);
+
+        // Check if the iter expression is a Range constructor
+        if let parser::Expression::Constructor(ctor) = &*for_loop.iter {
+            if ctor.r#type.name == "Range" {
+                // Extract begin and until values from Range constructor
+                let mut begin_expr = None;
+                let mut until_expr = None;
+
+                for arg in &ctor.args {
+                    match arg.label.name.as_str() {
+                        "begin" => {
+                            begin_expr = Some(self.generate_expression(&arg.init, is_main));
+                        }
+                        "until" => {
+                            until_expr = Some(self.generate_expression(&arg.init, is_main));
+                        }
+                        _ => {}
+                    }
+                }
+
+                if let (Some(begin), Some(until)) = (begin_expr, until_expr) {
+                    // Create a unique loop label for break statements to target
+                    let loop_label = format!("_loop_exit_{}", self.loop_label_counter);
+                    self.loop_label_counter += 1;
+                    self.loop_label_stack.push(loop_label.clone());
+
+                    // Generate body statements
+                    let mut body_code = String::new();
+                    for stmt in &for_loop.body {
+                        let stmt_code = self.generate_statement(stmt, is_main);
+                        body_code.push_str("        ");
+                        body_code.push_str(&stmt_code);
+                        body_code.push_str("\n");
+                    }
+
+                    // Pop the loop label
+                    self.loop_label_stack.pop();
+
+                    // Generate C for-loop with proper iterator variable declaration
+                    return format!(
+                        "for (int64_t {} = {}; {} < {}; {}++) {{\n{}    }}\n    {}:;",
+                        elem_name, begin, elem_name, until, elem_name, body_code, loop_label
+                    );
+                }
+            }
+        }
+
+        // Check if the iterator is a List type - generate index-based for loop
+        let iter_type = self.infer_expr_type(&for_loop.iter);
+        if iter_type.starts_with("List_") {
+            let iter_code = self.generate_expression(&for_loop.iter, is_main);
+
+            // Extract the element type from List_ElementType
+            let elem_type = &iter_type[5..]; // Remove "List_" prefix
+
+            // Determine if the element type is a struct/union (needs pointer) or value type (enum/primitive)
+            let is_struct_type =
+                self.seen_types.contains(elem_type) || self.tagged_union_types.contains(elem_type);
+            let is_enum_type = self.enum_types.contains(elem_type);
+
+            // For structs and tagged unions, elements are pointers (List has Type**)
+            // For enums and primitives, elements are values (List has Type*)
+            let c_elem_type = if is_struct_type && !is_enum_type {
+                format!("{}*", elem_type)
+            } else {
+                self.normalize_c_type(elem_type)
+            };
+
+            // Create a unique loop label for break statements to target
+            let loop_label = format!("_loop_exit_{}", self.loop_label_counter);
+            self.loop_label_counter += 1;
+            self.loop_label_stack.push(loop_label.clone());
+
+            // Register the element variable type for use in the body
+            self.variable_types
+                .insert(elem_name.clone(), c_elem_type.clone());
+
+            // Generate body statements (always treat as statement, no result collection)
+            let mut body_code = String::new();
+            for stmt in &for_loop.body {
+                let stmt_code = self.generate_statement(stmt, is_main);
+                body_code.push_str("            ");
+                body_code.push_str(&stmt_code);
+                body_code.push_str("\n");
+            }
+
+            // Pop the loop label
+            self.loop_label_stack.pop();
+
+            // Generate C for-loop over list elements
+            return format!(
+                "for (int64_t _idx_{} = 0; _idx_{} < ({}).len; _idx_{}++) {{\n        {} {} = ({}).data[_idx_{}];\n{}}}\n    {}:;",
+                elem_name, elem_name, iter_code, elem_name,
+                c_elem_type, elem_name, iter_code, elem_name,
+                body_code, loop_label
+            );
+        }
+
+        // Fallback: generate a TODO comment for unknown iteration types
+        let iter_code = self.generate_expression(&for_loop.iter, is_main);
+        format!(
+            "// TODO: For loop over unknown type '{}': for {} in {} {{ ... }}",
+            iter_type, elem_name, iter_code
+        )
     }
 
     /// Generate a switch as a pure statement (no _switch_result wrapper)
@@ -7566,6 +7750,9 @@ Option_String blitz_read(char* path);  // Returns Option(String)
 // String concatenation - creates a new string from two input strings
 char* blitz_string_concat(char* a, char* b);
 
+// String append rune - creates a new string by appending a Unicode codepoint to a string
+char* blitz_string_append_rune(char* s, uint32_t rune);
+
 // Todo function - marks unimplemented code, panics at runtime
 void todo(char* msg) __attribute__((noreturn));
 
@@ -7909,6 +8096,38 @@ void todo(char* msg) __attribute__((noreturn));
         full_impl.push_str("    return result;\n");
         full_impl.push_str("}\n\n");
 
+        // blitz_string_append_rune implementation - appends a Unicode codepoint to a string
+        full_impl.push_str("char* blitz_string_append_rune(char* s, uint32_t rune) {\n");
+        full_impl.push_str("    size_t len_s = s ? strlen(s) : 0;\n");
+        full_impl.push_str("    // Determine how many bytes the UTF-8 encoding needs\n");
+        full_impl.push_str("    int rune_len;\n");
+        full_impl.push_str("    if (rune < 0x80) rune_len = 1;\n");
+        full_impl.push_str("    else if (rune < 0x800) rune_len = 2;\n");
+        full_impl.push_str("    else if (rune < 0x10000) rune_len = 3;\n");
+        full_impl.push_str("    else rune_len = 4;\n");
+        full_impl.push_str("    char* result = (char*)malloc(len_s + rune_len + 1);\n");
+        full_impl.push_str("    if (s) memcpy(result, s, len_s);\n");
+        full_impl.push_str("    // Encode the rune as UTF-8\n");
+        full_impl.push_str("    char* p = result + len_s;\n");
+        full_impl.push_str("    if (rune < 0x80) {\n");
+        full_impl.push_str("        *p++ = (char)rune;\n");
+        full_impl.push_str("    } else if (rune < 0x800) {\n");
+        full_impl.push_str("        *p++ = (char)(0xC0 | (rune >> 6));\n");
+        full_impl.push_str("        *p++ = (char)(0x80 | (rune & 0x3F));\n");
+        full_impl.push_str("    } else if (rune < 0x10000) {\n");
+        full_impl.push_str("        *p++ = (char)(0xE0 | (rune >> 12));\n");
+        full_impl.push_str("        *p++ = (char)(0x80 | ((rune >> 6) & 0x3F));\n");
+        full_impl.push_str("        *p++ = (char)(0x80 | (rune & 0x3F));\n");
+        full_impl.push_str("    } else {\n");
+        full_impl.push_str("        *p++ = (char)(0xF0 | (rune >> 18));\n");
+        full_impl.push_str("        *p++ = (char)(0x80 | ((rune >> 12) & 0x3F));\n");
+        full_impl.push_str("        *p++ = (char)(0x80 | ((rune >> 6) & 0x3F));\n");
+        full_impl.push_str("        *p++ = (char)(0x80 | (rune & 0x3F));\n");
+        full_impl.push_str("    }\n");
+        full_impl.push_str("    *p = '\\0';\n");
+        full_impl.push_str("    return result;\n");
+        full_impl.push_str("}\n\n");
+
         // todo implementation
         full_impl.push_str("void todo(char* msg) {\n");
         full_impl
@@ -8113,7 +8332,11 @@ void todo(char* msg) __attribute__((noreturn));
                 full_impl.push_str("    if (a.len != b.len) return false;\n");
                 full_impl.push_str("    for (size_t i = 0; i < a.len; i++) {\n");
 
-                if is_primitive {
+                if elem_type == "String" || elem_type == "char*" {
+                    // For strings, use strcmp (must check before is_primitive since String is considered primitive)
+                    full_impl
+                        .push_str("        if (strcmp(a.data[i], b.data[i]) != 0) return false;\n");
+                } else if is_primitive {
                     // For primitives, direct comparison
                     full_impl.push_str("        if (a.data[i] != b.data[i]) return false;\n");
                 } else if elem_type == "char" || elem_type.ends_with("*") {

@@ -29,7 +29,7 @@ fn split(source String, sep Rune) List(String) {
     mut curr = ""
     
     for chars |ch| {
-        if ch == '/' {
+        if ch == sep {
             splits ++= curr
             curr = ""
         } else {
@@ -37,5 +37,5 @@ fn split(source String, sep Rune) List(String) {
         }
     }
 
-    splits
+    splits ++ curr
 }

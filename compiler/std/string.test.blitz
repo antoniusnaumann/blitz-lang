@@ -2,3 +2,9 @@ test "Split path" {
     let path = "blitz/compiler/std/string.blitz"
     assert path.split('/') == ["blitz", "compiler", "std", "string.blitz"]
 }
+
+test "Substring" {
+    let str = "The quick brown fox jumps over the lazy dog"
+    assert str.substr(0, 3) == "The"
+    assert str.substr(4, 9) == "quick"
+}
