@@ -1,0 +1,4 @@
+test "Split path" {
+    let path = "blitz/compiler/std/string.blitz"
+    assert path.split('/') == ["blitz", "compiler", "std", "string.blitz"]
+}

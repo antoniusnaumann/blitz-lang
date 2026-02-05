@@ -32,11 +32,19 @@ union HirExpressionKind {
     // ...
 }
 
-struct HirLoop {}
+struct HirLoop {
+    body ExpressionId
+}
 
-struct HirIf {}
+struct HirIf {
+    cond ExpressionId
+    body ExpressionId
+}
 
-struct HirElse {}
+struct HirElse {
+    recv ExpressionId
+    body ExpressionId
+}
 
 struct HirConstructor {}
 

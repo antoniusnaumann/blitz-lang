@@ -1,0 +1,10 @@
+fn lower(asts List(Ast)) Hir {
+    mut hir = new_hir()
+
+    for asts |ast| {
+        mut mod = 
+        for ast.items |item| {
+             
+        }
+    }
+}

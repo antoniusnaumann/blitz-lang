@@ -1,29 +1,29 @@
-struct Registry {
+struct Hir {
     mods  List(Module) // indexed by ModId
     types List(TypeKind) // fully qualified, indexed by TypeRef 
 }
 
-fn new_registry() Registry {
+fn new_hir() Hir {
     let core_module = Module(name: "core", parent: none, childs: [], funcs: [], types: [], func_export: [], type_export: [])
     // TODO: insert builtin types as part of the "core" module
 
-    Registry(mods: [core_module], types: [])
+    Hir(mods: [core_module], types: [])
 }
 
-fn get(reg Registry, mod ModId) Module {
+fn get(reg Hir, mod ModId) Module {
     reg.mods[mod.id]
 }
 
-fn get(reg Registry, ty TypeRef) TypeKind {
+fn get(reg Hir, ty TypeRef) TypeKind {
     reg.types[ty.id]
 }
 
-fn push(mut reg Registry, mod Module) ModId {
+fn push(mut reg Hir, mod Module) ModId {
     reg.mods ++= mod
     ModId(id: reg.mods.len() - 1)
 }
 
-fn push(mut reg Registry, ty TypeKind) TypeRef {
+fn push(mut reg Hir, ty TypeKind) TypeRef {
     reg.types ++= ty
     TypeRef(id: reg.types.len() - 1)
 }
@@ -52,6 +52,10 @@ struct Module {
 
    func_export List(FuncId)
    type_export List(TypeId)
+}
+
+fn new_module(name String) Module {
+    Module(name:, parent: none, childs: [], funcs: [], types: [], func_export: [], type_export: [])
 }
 
 struct TypeDef {

@@ -202,22 +202,6 @@ fn peekch(lexer Lexer, n Int) Rune {
 	lexer.source[lexer.index + n]
 }
 
-fn substr(source List(Rune), start Int, until Int) String {
-	source.substring(start, until)
-	// let str = ""
-	// mut index = start
-	// while index < until {
-	// 	str ++= source[index]
-	// 	index = index + 1
-	// }
-
-	// str
-}
-
-fn substr(source List(Rune), range Range) String {
-	substr(source, range.begin, range.until)		
-}
-
 fn substr(source List(Rune), span Span) String {
 	substr(source, span.range)		
 }

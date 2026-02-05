@@ -1,0 +1,41 @@
+// TODO: efficient implementations that make a string slice out of the existing string
+ 
+fn substr(source List(Rune), start Int, until Int) String {
+	let str = ""
+	mut index = start
+	while index < until {
+	    str ++= source[index]
+	    index = index + 1
+	}
+
+	str
+}
+
+fn substr(source List(Rune), range Range) String {
+	substr(source, range.begin, range.until)		
+}
+
+fn substr(source String, start Int, until Int) String {
+    substr(source.chars(), start, until)
+}
+
+fn substr(source String, range Range) String {
+    substr(source.chars(), range)
+}
+
+fn split(source String, sep Rune) List(String) {
+    let chars = source.chars()
+    mut splits = []
+    mut curr = ""
+    
+    for chars |ch| {
+        if ch == '/' {
+            splits ++= curr
+            curr = ""
+        } else {
+            curr ++= ch
+        }
+    }
+
+    splits
+}
