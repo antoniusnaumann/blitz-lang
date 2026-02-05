@@ -23,6 +23,7 @@ union TokenKind {
 	continue_
 	return_
 	assert_
+	try_
 
 	// Identifier
 	type

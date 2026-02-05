@@ -23,7 +23,7 @@ impl Operator {
             Operator::Add | Operator::Sub => (42, 43),
             Operator::Mul | Operator::Div | Operator::Rem => (45, 46),
             // [Space reserved for power operator ** (right-associative): (~50, 49)]
-            Operator::Not | Operator::Neg => (0, 53),
+            Operator::Not | Operator::Neg | Operator::Try => (0, 53),
             // [Space reserved for 'as' type casting (~55-56)]
             Operator::Member => (59, 60),
             // Scope resolution :: - binds stronger than . for UFCS like `matrix.my_matrix_lib::transpose()`
@@ -34,7 +34,7 @@ impl Operator {
 
     /// Returns true if this is a prefix (unary) operator
     pub fn is_prefix(&self) -> bool {
-        matches!(self, Operator::Not | Operator::Neg)
+        matches!(self, Operator::Not | Operator::Neg | Operator::Try)
     }
 
     /// Returns true if this is an infix (binary) operator

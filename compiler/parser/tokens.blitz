@@ -24,11 +24,11 @@ union TokenKind {
 	break_
 	continue_
 	return_
+	try_
 
 	// Reserved
 	async_
 	await_
-	try_
 	catch_
 	raise_
 

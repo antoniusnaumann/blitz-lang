@@ -24,9 +24,9 @@ fn parse_def(mut parser Parser) Option(Definition) {
 }
 
 fn parse_struct(mut parser Parser) Option(Struct) {
-    let kw = parser.mut.expect(struct_) else return none
-    let ty = parser.mut.parse_type() else return none
-    let fields = parser.mut.parse_fields() else return none
+    let kw = try parser.mut.expect(struct_)
+    let ty = try parser.mut.parse_type()
+    let fields = try parser.mut.parse_fields()
 
     Struct(sig: ty, fields:, span: parser.span(kw))
 }
@@ -50,9 +50,9 @@ fn parse_fields(mut parser Parser) List(Field) {
 }
 
 fn parse_union(mut parser Parser) Option(Union) {
-    let kw = parser.mut.expect(union_) else return none
-    let ty = parser.mut.parse_type() else return none
-    let cases = parser.mut.parse_cases() else return none
+    let kw = try parser.mut.expect(union_)
+    let ty = try parser.mut.parse_type()
+    let cases = try parser.mut.parse_cases()
 
     Union(sig: ty, cases:, span: parser.span(kw))
 }
@@ -85,23 +85,23 @@ fn parse_cases(mut parser Parser) List(Case) {
 }
 
 fn parse_actor(mut parser Parser) Option(Actor) {
-    let kw = parser.mut.expect(actor_) else return none
+    let kw = try parser.mut.expect(actor_)
     todo("Parse actor")
 }
 
 fn parse_alias(mut parser Parser) Option(Alias) {
-    let kw = parser.mut.expect(alias_) else return none
+    let kw = try parser.mut.expect(alias_)
     todo("Parse alias")
 }
 
 fn parse_fn(mut parser Parser) Option(Fn) {
-    let kw = parser.mut.expect(fn_) else return none
-    let ident = parser.mut.parse_ident() else return none
+    let kw = try parser.mut.expect(fn_)
+    let ident = try parser.mut.parse_ident()
 
-    parser.mut.expect(lparen) else return none
+    try parser.mut.expect(lparen)
     mut args = []
     while parser.mut.accept(rparen) == none {
-        let arg = parser.mut.parse_arg() else return none
+        let arg = try parser.mut.parse_arg()
         args ++= arg
         parser.mut.accept(comma)
     }
@@ -115,8 +115,8 @@ fn parse_fn(mut parser Parser) Option(Fn) {
 fn parse_arg(mut parser Parser) Option(Arg) {
     let span = parser.span()
     let is_mut = parser.mut.accept(mut_) != none
-    let ident = parser.mut.parse_ident() else return none
-    let type = parser.mut.parse_type() else return none
+    let ident = try parser.mut.parse_ident()
+    let type = try parser.mut.parse_type()
 
     Arg(name: ident, type:, is_mut:, span: parser.span(span))
 }
@@ -138,23 +138,23 @@ fn parse_declaration(mut parser Parser) Option(Declaration) {
         let_ { true }
         else { panic("unreachable") }
     }
-    let name = parser.mut.parse_ident() else return none
-    let type = if parser.peek().kind != assign { parser.mut.parse_type() else return none }
-    parser.mut.expect(assign) else return none
-    let init = parser.mut.parse_expression() else return none
+    let name = try parser.mut.parse_ident()
+    let type = if parser.peek().kind != assign { try parser.mut.parse_type() }
+    try parser.mut.expect(assign)
+    let init = try parser.mut.parse_expression()
     
     Declaration(name:, type:, init:, is_mut:, span: parser.span(modifier))
 }
 
 fn parse_ident(mut parser Parser) Option(Ident) {
-    let token = parser.mut.expect(ident) else return none
+    let token = try parser.mut.expect(ident)
     let name = parser.source.substr(token.span)
 
     Ident(name:, span: token.span)
 }
 
 fn parse_type(mut parser Parser) Option(Type) {
-    let token = parser.mut.expect(type) else return none
+    let token = try parser.mut.expect(type)
     let name = parser.source.substr(token.span)
     let params = if parser.has(lparen) { parser.mut.parse_type_params() } else { [] }
 
@@ -162,7 +162,7 @@ fn parse_type(mut parser Parser) Option(Type) {
 }
 
 fn parse_type_ident(mut parser Parser) Option(Type) {
-    let token = parser.mut.expect(type) else return none
+    let token = try parser.mut.expect(type)
     let name = parser.source.substr(token.span)
 
     Type(name:, span: token.span, params: [])
@@ -182,6 +182,6 @@ fn parse_type_params(mut parser Parser) List(Type) {
 }
 
 fn parse_test(mut parser Parser) Option(Test) {
-    let kw = parser.mut.expect(test_) else return none
+    let kw = try parser.mut.expect(test_)
     todo("Parse test")
 }

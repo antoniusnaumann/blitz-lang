@@ -324,6 +324,7 @@ impl<'a> Parser<'a> {
         match kind {
             TokenKind::Not => Some(Operator::Not),
             TokenKind::Sub => Some(Operator::Neg),
+            TokenKind::Try => Some(Operator::Try),
             _ => None,
         }
     }
@@ -376,6 +377,26 @@ impl<'a> Parser<'a> {
                 if self.consume(TokenKind::Mut).is_some() {
                     self.expect(TokenKind::Dot);
                 }
+
+                // Special handling for .try: desugar to "expr else return none"
+                if self.consume(TokenKind::Try).is_some() {
+                    let span = lhs.span().merge(&self.span);
+                    let none_expr = Expression::Ident(Ident {
+                        name: "none".into(),
+                        span: span.clone(),
+                    });
+                    let return_none = Expression::Return(Box::new(none_expr));
+
+                    lhs = BinaryOp {
+                        op: Operator::Else,
+                        left: Box::new(lhs),
+                        right: Box::new(return_none),
+                        span,
+                    }
+                    .into();
+                    continue;
+                }
+
                 let member = self.expect_ident().name.into();
                 let span = lhs.span().merge(&self.span);
 
@@ -419,12 +440,29 @@ impl<'a> Parser<'a> {
             let expr = self.parse_expression_bp(right_bp);
             let span = op_token.span.merge(&expr.span());
 
-            let unary = UnaryOp {
-                op,
-                expr: Box::new(expr),
-                span,
-            }
-            .into();
+            // Special handling for 'try': desugar to "expr else return none"
+            let unary = if matches!(op, Operator::Try) {
+                let none_expr = Expression::Ident(Ident {
+                    name: "none".into(),
+                    span: span.clone(),
+                });
+                let return_none = Expression::Return(Box::new(none_expr));
+
+                BinaryOp {
+                    op: Operator::Else,
+                    left: Box::new(expr),
+                    right: Box::new(return_none),
+                    span,
+                }
+                .into()
+            } else {
+                UnaryOp {
+                    op,
+                    expr: Box::new(expr),
+                    span,
+                }
+                .into()
+            };
 
             return self.parse_precedence(unary, min_prec);
         }
@@ -1222,7 +1260,8 @@ mod tests {
                 assert_eq!(c.args.len(), 3);
                 assert!(matches!(c.args[0].init.as_ref(), Expression::Ident(_))); // obj
                 assert!(matches!(c.args[1].init.as_ref(), Expression::Ident(_))); // a
-                assert!(matches!(c.args[2].init.as_ref(), Expression::Ident(_))); // b
+                assert!(matches!(c.args[2].init.as_ref(), Expression::Ident(_)));
+                // b
             }
             _ => panic!("Expected Call"),
         }

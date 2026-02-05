@@ -208,6 +208,7 @@ impl Print for Operator {
             Operator::Le => "<=".into(),
             Operator::Not => "!".into(),
             Operator::Neg => "-".into(),
+            Operator::Try => "try".into(),
             Operator::And => "and".into(),
             Operator::Or => "or".into(),
             Operator::Else => "else".into(),

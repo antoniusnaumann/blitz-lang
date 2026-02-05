@@ -78,6 +78,7 @@ impl<'a> Lexer<'a> {
                     "continue" => Continue,
                     "return" => Return,
                     "assert" => Assert,
+                    "try" => Try,
                     "true" => True,
                     "false" => False,
                     _ => Ident,

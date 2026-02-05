@@ -27,11 +27,12 @@ union Expression {
 	Switch
 	Block
 	Return
+	Continue
+	Break
+	Try
 	List_
 	Index
 	Group
-	Continue
-	Break
 	Literal
 }
 
@@ -126,6 +127,12 @@ struct Continue {
 
 struct Break {
 	span Span
+}
+
+struct Try {
+	expr Box(Expression)
+	span Span
+	ufcs Bool
 }
 
 struct Block {
