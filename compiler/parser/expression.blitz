@@ -323,7 +323,11 @@ fn parse_list(mut parser Parser) Option(List_) {
 }
 
 fn parse_group(mut parser Parser) Option(Expression) {
-    todo("parse_group")
+    let token = parser.mut.expect(lparen) else return none
+    let expr = parser.mut.parse_expression() else return none
+    parser.mut.expect(rparen) else return none
+
+    Group(expr:, span: parser.span(token))
 }
 
 fn parse_string_lit(mut parser Parser) Option(Lit(String)) {

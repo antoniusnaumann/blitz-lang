@@ -39,3 +39,9 @@ test "Parse std/number.blitz" { parse_file("std/number.blitz") }
 test "Parse std/heap.blitz" { parse_file("std/heap.blitz") }
 test "Parse std/range.blitz" { parse_file("std/range.blitz") }
 test "Parse std/result.blitz" { parse_file("std/result.blitz") }
+test "Parse std/bool.blitz" { parse_file("std/bool.blitz") }
+
+test "Parse hir/expression.blitz" { parse_file("hir/expression.blitz") }
+test "Parse hir/definition.blitz" { parse_file("hir/definition.blitz") }
+
+test "Parse compile.blitz" { parse_file("compile.blitz") }
