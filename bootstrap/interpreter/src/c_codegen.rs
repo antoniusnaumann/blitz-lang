@@ -8174,7 +8174,8 @@ void todo(char* msg) __attribute__((noreturn));
         code.push_str(
             "// ============================================================================\n\n",
         );
-        code.push_str("#include <setjmp.h>\n\n");
+        code.push_str("#include <setjmp.h>\n");
+        code.push_str("#include <sys/time.h>\n\n");
         code.push_str("static jmp_buf blitz_test_panic_buf;\n");
         code.push_str("static char* blitz_test_panic_msg = NULL;\n");
         code.push_str("static int blitz_in_test = 0;\n\n");
@@ -8195,10 +8196,19 @@ void todo(char* msg) __attribute__((noreturn));
         code.push_str("#undef panic\n");
         code.push_str("#define panic(msg) blitz_test_panic(msg)\n\n");
 
+        // Helper function to get time in milliseconds
+        code.push_str("// Get current time in milliseconds\n");
+        code.push_str("double blitz_get_time_ms(void) {\n");
+        code.push_str("    struct timeval tv;\n");
+        code.push_str("    gettimeofday(&tv, NULL);\n");
+        code.push_str("    return (tv.tv_sec * 1000.0) + (tv.tv_usec / 1000.0);\n");
+        code.push_str("}\n\n");
+
         // Generate main function
         code.push_str("int main(int argc, char** argv) {\n");
         code.push_str("    int passed = 0;\n");
-        code.push_str("    int failed = 0;\n\n");
+        code.push_str("    int failed = 0;\n");
+        code.push_str("    double total_start_time = blitz_get_time_ms();\n\n");
 
         code.push_str(&format!("    printf(\"--- TEST OUTPUT ---\\n\\n\");\n"));
         code.push_str(&format!(
@@ -8223,33 +8233,48 @@ void todo(char* msg) __attribute__((noreturn));
             code.push_str("    // Test: ");
             code.push_str(&test.name);
             code.push_str("\n");
-            code.push_str("    blitz_in_test = 1;\n");
-            code.push_str("    if (setjmp(blitz_test_panic_buf) == 0) {\n");
-            code.push_str(&format!("        {}();\n", c_func_name));
-            code.push_str("        printf(\"\\x1b[92mPASS\\x1b[0m ... \\\"%s\\\"\\n\", \"");
+            code.push_str("    {\n");
+            code.push_str("        blitz_in_test = 1;\n");
+            code.push_str("        double test_start_time = blitz_get_time_ms();\n");
+            code.push_str("        if (setjmp(blitz_test_panic_buf) == 0) {\n");
+            code.push_str(&format!("            {}();\n", c_func_name));
+            code.push_str(
+                "            double test_duration = blitz_get_time_ms() - test_start_time;\n",
+            );
+            code.push_str("            if (test_duration > 100.0) {\n");
+            code.push_str(
+                "                printf(\"\\x1b[93mSLOW\\x1b[0m ... \\\"%s\\\" -- %.2fms\\n\", \"",
+            );
+            code.push_str(&escaped_name);
+            code.push_str("\", test_duration);\n");
+            code.push_str("            } else {\n");
+            code.push_str("                printf(\"\\x1b[92mPASS\\x1b[0m ... \\\"%s\\\"\\n\", \"");
             code.push_str(&escaped_name);
             code.push_str("\");\n");
-            code.push_str("        passed++;\n");
-            code.push_str("    } else {\n");
-            code.push_str("        printf(\"\\x1b[91mFAIL\\x1b[0m ... \\\"%s\\\"\\n\", \"");
+            code.push_str("            }\n");
+            code.push_str("            passed++;\n");
+            code.push_str("        } else {\n");
+            code.push_str("            printf(\"\\x1b[91mFAIL\\x1b[0m ... \\\"%s\\\"\\n\", \"");
             code.push_str(&escaped_name);
             code.push_str("\");\n");
-            code.push_str("        if (blitz_test_panic_msg) {\n");
-            code.push_str("            printf(\"  -> %s\\n\", blitz_test_panic_msg);\n");
-            code.push_str("            free(blitz_test_panic_msg);\n");
-            code.push_str("            blitz_test_panic_msg = NULL;\n");
+            code.push_str("            if (blitz_test_panic_msg) {\n");
+            code.push_str("                printf(\"  -> %s\\n\", blitz_test_panic_msg);\n");
+            code.push_str("                free(blitz_test_panic_msg);\n");
+            code.push_str("                blitz_test_panic_msg = NULL;\n");
+            code.push_str("            }\n");
+            code.push_str("            failed++;\n");
             code.push_str("        }\n");
-            code.push_str("        failed++;\n");
-            code.push_str("    }\n");
-            code.push_str("    blitz_in_test = 0;\n\n");
+            code.push_str("        blitz_in_test = 0;\n");
+            code.push_str("    }\n\n");
         }
 
-        // Summary
+        // Summary with total execution time
+        code.push_str("    double total_duration = blitz_get_time_ms() - total_start_time;\n");
         code.push_str("    printf(\"\\n\");\n");
         code.push_str("    if (failed == 0) {\n");
-        code.push_str("        printf(\"test result: \\x1b[92mok\\x1b[0m. %d passed; %d failed\\n\\n\", passed, failed);\n");
+        code.push_str("        printf(\"test result: \\x1b[92mok\\x1b[0m. %d passed; %d failed; finished in %.2fms\\n\\n\", passed, failed, total_duration);\n");
         code.push_str("    } else {\n");
-        code.push_str("        printf(\"test result: \\x1b[91mFAILED\\x1b[0m. %d passed; %d failed\\n\\n\", passed, failed);\n");
+        code.push_str("        printf(\"test result: \\x1b[91mFAILED\\x1b[0m. %d passed; %d failed; finished in %.2fms\\n\\n\", passed, failed, total_duration);\n");
         code.push_str("    }\n\n");
         code.push_str("    return failed > 0 ? 1 : 0;\n");
         code.push_str("}\n");

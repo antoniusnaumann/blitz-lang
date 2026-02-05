@@ -45,3 +45,19 @@ test "Parse hir/expression.blitz" { parse_file("hir/expression.blitz") }
 test "Parse hir/definition.blitz" { parse_file("hir/definition.blitz") }
 
 test "Parse compile.blitz" { parse_file("compile.blitz") }
+
+test "Should be slow" {
+    mut s = "s"
+    mut i = 0
+    while i < 100000 {
+        s ++= "s"
+        i += 1
+    }
+
+    mut t = 0
+    for s |e| {
+        for s |m| {
+            t = t + 1
+        }
+    }
+}
