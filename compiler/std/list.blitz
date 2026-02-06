@@ -1,0 +1,5 @@
+fn last(list List(T)) Option(T) {
+    if list.len() > 0 {
+        list[list.len() - 1]
+    }
+}

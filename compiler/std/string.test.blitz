@@ -8,3 +8,8 @@ test "Substring" {
     assert str.substr(0, 3) == "The"
     assert str.substr(4, 9) == "quick"
 }
+
+test "Trim" {
+    let str = "foo/bar/baz.blitz"
+    assert str.strip_suffix(".blitz") == "foo/bar/baz"
+}

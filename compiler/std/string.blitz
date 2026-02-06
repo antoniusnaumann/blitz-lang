@@ -39,3 +39,19 @@ fn split(source String, sep Rune) List(String) {
 
     splits ++ curr
 }
+
+/// Strip the suffix from the source string if it exists
+fn strip_suffix(source String, suffix String) String {
+    let chars = source.chars()
+    let check = suffix.chars()
+
+    if chars.len() < check.len() { return source }
+
+    mut index = 0
+    while index < check.len() {
+        if chars[chars.len() - check.len() + index] != check[index] { return source }
+        index += 1
+    }
+
+    chars.substr(0, chars.len() - check.len())
+}
