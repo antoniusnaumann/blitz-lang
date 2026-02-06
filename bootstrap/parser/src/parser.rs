@@ -508,7 +508,66 @@ impl<'a> Parser<'a> {
                 // Convert the condition to a string for the error message
                 let condition_str = condition.print();
 
-                // Create: if !(condition) { panic("Assertion 'condition' failed") }
+                // Check if this is a comparison binary operation - if so, we can show left/right values
+                let is_comparison = matches!(
+                    &condition,
+                    Expression::BinaryOp(binop) if matches!(
+                        binop.op,
+                        Operator::Eq | Operator::Ne | Operator::Lt | Operator::Le | Operator::Gt | Operator::Ge
+                    )
+                );
+
+                if is_comparison {
+                    // Extract left and right from the comparison
+                    if let Expression::BinaryOp(binop) = &condition {
+                        let left_str = binop.left.print();
+                        let right_str = binop.right.print();
+
+                        // Create: if !(condition) { _assert_cmp_failed("condition", left, "left_str", right, "right_str") }
+                        let negated_condition = Expression::UnaryOp(crate::UnaryOp {
+                            op: Operator::Not,
+                            expr: Box::new(condition.clone()),
+                            span: self.span.clone(),
+                        });
+
+                        // Generate a call to _assert_cmp_failed with the values
+                        let assert_call = Expression::Call(crate::Call {
+                            name: "_assert_cmp_failed".into(),
+                            args: vec![
+                                CallArg {
+                                    label: None,
+                                    init: Box::new(Expression::String(condition_str)),
+                                },
+                                CallArg {
+                                    label: None,
+                                    init: binop.left.clone(),
+                                },
+                                CallArg {
+                                    label: None,
+                                    init: Box::new(Expression::String(left_str)),
+                                },
+                                CallArg {
+                                    label: None,
+                                    init: binop.right.clone(),
+                                },
+                                CallArg {
+                                    label: None,
+                                    init: Box::new(Expression::String(right_str)),
+                                },
+                            ],
+                            ufcs: false,
+                            span: self.span.clone(),
+                        });
+
+                        return Expression::If(crate::If {
+                            cond: Box::new(negated_condition),
+                            body: vec![assert_call.into()],
+                            span: self.span.clone(),
+                        });
+                    }
+                }
+
+                // For non-comparison assertions, use the simple panic message
                 let negated_condition = Expression::UnaryOp(crate::UnaryOp {
                     op: Operator::Not,
                     expr: Box::new(condition),
