@@ -4419,9 +4419,11 @@ impl CCodegen {
                                 ("%p".to_string(), format!("(void*)({})", args[3]))
                             };
 
-                        // Generate inline code to print assertion failure with values
+                        // Generate inline code to format assertion failure and panic
                         return format!(
-                            "({{ fprintf(stderr, \"PANIC: Assertion '%%s' failed\\n  left:  %%s = {}\\n  right: %%s = {}\\n\", {}, {}, {}, {}, {}); abort(); }})",
+                            "({{ int _len = snprintf(NULL, 0, \"Assertion '%%s' failed\\n  left:  %%s = {}\\n  right: %%s = {}\\n\", {}, {}, {}, {}, {}); char* _msg = (char*)malloc((size_t)_len + 1); snprintf(_msg, (size_t)_len + 1, \"Assertion '%%s' failed\\n  left:  %%s = {}\\n  right: %%s = {}\\n\", {}, {}, {}, {}, {}); panic(_msg); }})",
+                            left_format, right_format,
+                            args[0], args[2], left_val, args[4], right_val,
                             left_format, right_format,
                             args[0], args[2], left_val, args[4], right_val
                         );
@@ -8161,6 +8163,13 @@ void todo(char* msg) __attribute__((noreturn));
         let mut full_impl = String::new();
         full_impl.push_str("#include \"blitz.h\"\n\n");
 
+        if self.include_tests && !self.test_definitions.is_empty() {
+            full_impl.push_str("#include <setjmp.h>\n\n");
+            full_impl.push_str("static jmp_buf blitz_test_panic_buf;\n");
+            full_impl.push_str("static char* blitz_test_panic_msg = NULL;\n");
+            full_impl.push_str("static int blitz_in_test = 0;\n\n");
+        }
+
         // Built-in runtime function stub implementations
         full_impl.push_str(
             "// ============================================================================\n",
@@ -8224,6 +8233,12 @@ void todo(char* msg) __attribute__((noreturn));
 
         // panic implementation
         full_impl.push_str("void panic(const char* message) {\n");
+        if self.include_tests && !self.test_definitions.is_empty() {
+            full_impl.push_str("    if (blitz_in_test) {\n");
+            full_impl.push_str("        blitz_test_panic_msg = strdup(message);\n");
+            full_impl.push_str("        longjmp(blitz_test_panic_buf, 1);\n");
+            full_impl.push_str("    }\n");
+        }
         full_impl.push_str("    fprintf(stderr, \"PANIC: %s\\n\", message);\n");
         full_impl.push_str("    abort();\n");
         full_impl.push_str("}\n\n");
@@ -8476,7 +8491,7 @@ void todo(char* msg) __attribute__((noreturn));
     fn generate_test_runner_main(&self) -> String {
         let mut code = String::new();
 
-        // Add setjmp include and global variables for panic recovery
+        // Add test runner banner and timing helper
         code.push_str(
             "\n// ============================================================================\n",
         );
@@ -8484,27 +8499,7 @@ void todo(char* msg) __attribute__((noreturn));
         code.push_str(
             "// ============================================================================\n\n",
         );
-        code.push_str("#include <setjmp.h>\n");
         code.push_str("#include <sys/time.h>\n\n");
-        code.push_str("static jmp_buf blitz_test_panic_buf;\n");
-        code.push_str("static char* blitz_test_panic_msg = NULL;\n");
-        code.push_str("static int blitz_in_test = 0;\n\n");
-
-        // Override panic for test mode
-        code.push_str("// Test-mode panic that uses longjmp instead of abort\n");
-        code.push_str("void blitz_test_panic(const char* message) {\n");
-        code.push_str("    if (blitz_in_test) {\n");
-        code.push_str("        blitz_test_panic_msg = strdup(message);\n");
-        code.push_str("        longjmp(blitz_test_panic_buf, 1);\n");
-        code.push_str("    } else {\n");
-        code.push_str("        fprintf(stderr, \"PANIC: %s\\n\", message);\n");
-        code.push_str("        abort();\n");
-        code.push_str("    }\n");
-        code.push_str("}\n\n");
-
-        // Redefine panic macro to use test panic
-        code.push_str("#undef panic\n");
-        code.push_str("#define panic(msg) blitz_test_panic(msg)\n\n");
 
         // Helper function to get time in milliseconds
         code.push_str("// Get current time in milliseconds\n");
@@ -8568,7 +8563,9 @@ void todo(char* msg) __attribute__((noreturn));
             code.push_str(&escaped_name);
             code.push_str("\");\n");
             code.push_str("            if (blitz_test_panic_msg) {\n");
-            code.push_str("                printf(\"  -> %s\\n\", blitz_test_panic_msg);\n");
+            code.push_str(
+                "                printf(\"  -> \\x1b[91m%s\\x1b[0m\\n\", blitz_test_panic_msg);\n",
+            );
             code.push_str("                free(blitz_test_panic_msg);\n");
             code.push_str("                blitz_test_panic_msg = NULL;\n");
             code.push_str("            }\n");
