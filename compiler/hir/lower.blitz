@@ -2,10 +2,82 @@ fn lower(asts List(Ast)) Hir {
     mut hir = new_hir()
 
     for asts |ast| {
+        let name = ast.origin.mod_name()
+        let index = hir.find(ast) else {
+            let mod = new_module(name)
+            hir.mut.push(mod)
+        }
+
         for ast.items |item| {
-            // TODO: lower each item
+            hir.mods[index.id].mut.push(item)
         }
     }
 
     hir
+}
+
+fn mod_name(path String) String {
+    let split = path.split('/')
+    if split.len() < 2 { "" }
+
+    split[split.len() - 2]
+}
+
+test "Extract mod name from path" {
+    assert "some/module/with/a/name/file.blitz".mod_name() == "name"
+}
+
+fn push(mut mod Module, item Definition) {
+    switch item {
+        Pub { todo("HIR: pub") }
+        Struct { mod.mut.push(item.lower()) }
+        Union { mod.mut.push(item.lower()) }
+        Fn { mod.mut.push(item.lower()) }
+        Alias { mod.mut.push(item.lower()) }
+        Actor { mod.mut.push(item.lower()) }
+        Test { mod.mut.push(item.lower()) }
+    }
+}
+
+fn lower(def Struct) TypeDef {
+    let name = Ident(name: def.sig.name, span: def.sig.span)
+    mut fields = []
+    for def.fields |field| {
+        fields ++= FieldDef(name: field.name, type: TypeRef(id: 0))
+    }
+
+    // TODO: type parameters
+    TypeDef(name:, generic: [], kind: StructDef(fields:), vis: module)
+}
+
+fn lower(def Union) TypeDef {
+    let name = Ident(name: def.sig.name, span: def.sig.span)
+    let kind = UnionDef(label: none, type: TypeRef(id: 0))
+
+    // TODO: type parameters
+    TypeDef(name:, generic: [], kind:, vis: module)
+}
+
+fn lower(def Fn) FuncDef {
+    let name = def.name
+    mut params = []
+    for def.args |arg| {
+        params ++= TypeRef(id: 0)
+    }
+
+    // TODO: type parameters
+    // TODO: lower expressions
+    FuncDef(name:, module: ModId(id: 0), generic: [], params:, result: TypeRef(id: 0), body: HirBody(expressions: []), vis: module)
+}
+
+fn lower(def Alias) TypeDef {
+    todo("HIR: alias")
+}
+
+fn lower(def Actor) TypeDef {
+    todo("HIR: actor")
+}
+
+fn lower(def Test) FuncDef {
+    todo("HIR: test")
 }

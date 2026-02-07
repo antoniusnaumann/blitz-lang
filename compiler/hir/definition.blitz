@@ -10,6 +10,26 @@ fn new_hir() Hir {
     Hir(mods: [core_module], types: [])
 }
 
+fn get(reg Hir, name String) Option(Module) {
+    // TODO: HashMap lookup
+    for reg.mods |it| {
+        if it.name == name { return it }
+    }
+
+    none
+}
+
+fn find(reg Hir, name String) Option(ModId) {
+    mut index = 0
+    while index < reg.mods.len() {
+        let item = reg.mods[index]
+        if item.name == name { return ModId(id: index) }
+        index += 1
+    }
+    
+    none
+}
+
 fn get(reg Hir, mod ModId) Module {
     reg.mods[mod.id]
 }
@@ -58,8 +78,17 @@ fn new_module(name String) Module {
     Module(name:, parent: none, childs: [], funcs: [], types: [], func_export: [], type_export: [])
 }
 
+fn push(mut mod Module, def FuncDef) FuncId {
+    mod.funcs ++= def
+    FuncId(module: def.module, id: mod.funcs.len() - 1)
+}
+
+fn push(mut mod Module, def TypeDef) TypeId {
+    mod.types ++= def
+    TypeId(module: ModId(id: 0), id: mod.types.len() - 1)
+}
+
 struct TypeDef {
-    def_id  TypeId
     name    Ident
     generic List(TypeParam)
     kind    TypeDefKind
@@ -86,7 +115,6 @@ struct UnionDef {
 }
 
 struct FuncDef {
-    def_id  FuncId
     name    Ident
     module  ModId            
     generic List(GenericId)
