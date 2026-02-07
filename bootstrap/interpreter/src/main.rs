@@ -277,6 +277,7 @@ fn build_c(asts: &[Ast]) -> i32 {
         .args([
             "-std=c11",
             "-O2",
+            "-w",
             "-I",
             "c-out",
             "-o",
@@ -289,7 +290,13 @@ fn build_c(asts: &[Ast]) -> i32 {
         Ok(output) => {
             if !output.status.success() {
                 eprintln!("\x1b[91mC compilation failed:\x1b[0m");
-                eprintln!("{}", String::from_utf8_lossy(&output.stderr));
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                // Only show error lines (skip warnings and notes) for readability
+                for line in stderr.lines() {
+                    if line.contains("error:") {
+                        eprintln!("{}", line);
+                    }
+                }
                 return 1;
             }
         }
@@ -356,6 +363,7 @@ fn run_c_tests(asts: &[Ast], base_dir: &Path) -> i32 {
     let compile_result = Command::new("gcc")
         .args([
             "-std=c11",
+            "-w",
             "-I",
             "c-out",
             "-o",
@@ -368,7 +376,13 @@ fn run_c_tests(asts: &[Ast], base_dir: &Path) -> i32 {
         Ok(output) => {
             if !output.status.success() {
                 eprintln!("\x1b[91mC compilation failed:\x1b[0m");
-                eprintln!("{}", String::from_utf8_lossy(&output.stderr));
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                // Only show error lines (skip warnings and notes) for readability
+                for line in stderr.lines() {
+                    if line.contains("error:") {
+                        eprintln!("{}", line);
+                    }
+                }
                 return 1;
             }
         }

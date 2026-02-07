@@ -5,6 +5,16 @@ use std::path::Path;
 
 use crate::c_codegen_patch::{TypeKind, TypeNameRegistry};
 
+/// Macro for debug output that's only shown when the debug flag is set.
+/// Use like: `debug_println!(self, "message {}", value);`
+macro_rules! debug_println {
+    ($self:expr, $($arg:tt)*) => {
+        if $self.debug {
+            eprintln!($($arg)*);
+        }
+    };
+}
+
 /// Main entry point for C transpilation (without tests)
 pub fn transpile_to_c(asts: &[Ast], output_dir: &Path) -> Result<(), String> {
     transpile_to_c_impl(asts, output_dir, false)
@@ -186,6 +196,8 @@ struct CCodegen {
     list_eq_needed: HashSet<String>,
     /// Expected list element type for list literal generation (used in comparisons)
     expected_list_elem_type: Option<String>,
+    /// Whether to show debug output during code generation
+    debug: bool,
 }
 
 impl CCodegen {
@@ -234,6 +246,7 @@ impl CCodegen {
             test_definitions: Vec::new(),
             list_eq_needed: HashSet::new(),
             expected_list_elem_type: None,
+            debug: std::env::var("BLITZ_DEBUG").is_ok(),
         }
     }
 
@@ -341,7 +354,7 @@ impl CCodegen {
                 // Skip generic unions - their label-only variants (like `none` in `Option(T)`)
                 // can't be resolved without knowing the concrete type parameter
                 if !u.sig.params.is_empty() {
-                    eprintln!(
+                    debug_println!(self, 
                         "DEBUG: Skipping generic union '{}' with params {:?}",
                         u.sig.name, u.sig.params
                     );
@@ -358,7 +371,7 @@ impl CCodegen {
                     for case in &u.cases {
                         if let Some(ty) = &case.r#type {
                             let variant_name = self.type_name_for_instance(ty);
-                            eprintln!(
+                            debug_println!(self, 
                                 "DEBUG: Registering variant '{}' -> union '{}'",
                                 variant_name, c_name
                             );
@@ -371,7 +384,7 @@ impl CCodegen {
                             // Track it for identifier resolution
                             // The variant name comes from the label field
                             if let Some(label) = &case.label {
-                                eprintln!(
+                                debug_println!(self, 
                                     "DEBUG: Registering label-only variant '{}' -> union '{}'",
                                     label, c_name
                                 );
@@ -489,7 +502,7 @@ impl CCodegen {
                 }
 
                 self.type_dependencies.insert(c_name.clone(), deps);
-                eprintln!(
+                debug_println!(self, 
                     "DEBUG: Type '{}' depends on: {:?}",
                     c_name,
                     self.type_dependencies.get(&c_name).unwrap()
@@ -1089,7 +1102,7 @@ impl CCodegen {
 
         // Check if function name collides with C stdlib first
         if Self::is_reserved_c_name(func_name) {
-            eprintln!(
+            debug_println!(self, 
                 "DEBUG: Mangling function call '{}' -> 'blitz_{}' (C stdlib collision)",
                 func_name, func_name
             );
@@ -1099,6 +1112,7 @@ impl CCodegen {
         // Check if this function has overloads
         if let Some(signatures) = self.function_signatures.get(func_name) {
             // Helper to strip pointer notation for type comparison
+            #[allow(dead_code)]
             fn strip_ptr(s: &str) -> &str {
                 s.trim_end_matches('*').trim_end_matches("Ptr")
             }
@@ -1129,7 +1143,7 @@ impl CCodegen {
                         .all(|(p, a)| normalize_type(p) == normalize_type(a));
                     if matches {
                         // Found match - return mangled name
-                        eprintln!(
+                        debug_println!(self, 
                             "DEBUG: Exact match for function '{}' (param types: {:?}, arg types: {:?})",
                             func_name, param_types, arg_types
                         );
@@ -1141,7 +1155,7 @@ impl CCodegen {
             // No match found - try to find a signature with matching argument count
             for (param_types, _) in signatures {
                 if param_types.len() == arg_types.len() {
-                    eprintln!(
+                    debug_println!(self, 
                         "DEBUG: Matched function '{}' by arg count {} (param types: {:?}, arg types: {:?})",
                         func_name, arg_types.len(), param_types, arg_types
                     );
@@ -1150,7 +1164,7 @@ impl CCodegen {
             }
 
             // If we have signatures but no match, use the first one as a fallback
-            eprintln!(
+            debug_println!(self, 
                 "DEBUG: No match for function '{}', using first signature",
                 func_name
             );
@@ -1261,7 +1275,7 @@ impl CCodegen {
 
         // Skip generic structs for now
         if !sig.params.is_empty() {
-            eprintln!("Skipping generic struct {}", struct_name);
+            debug_println!(self, "Skipping generic struct {}", struct_name);
             self.header.push_str(&format!(
                 "// TODO: Generic struct {} - NOT IMPLEMENTED YET\n\n",
                 c_name
@@ -1269,7 +1283,7 @@ impl CCodegen {
             return Ok(());
         }
 
-        eprintln!("Generating struct {} as {}", struct_name, c_name);
+        debug_println!(self, "Generating struct {} as {}", struct_name, c_name);
 
         // Handle empty structs
         if fields.is_empty() {
@@ -1322,7 +1336,7 @@ impl CCodegen {
 
         if !has_typed_variants {
             // Generate simple enum for symbolic-only unions
-            eprintln!("Generating enum {} as {}", union_name, c_name);
+            debug_println!(self, "Generating enum {} as {}", union_name, c_name);
 
             // Track enum variants for identifier resolution
             let mut variants = HashSet::new();
@@ -1367,7 +1381,7 @@ impl CCodegen {
             self.enum_defs.push_str(&format!("}} {};\n\n", c_name));
 
             // Store enum variants for later lookup
-            eprintln!(
+            debug_println!(self, 
                 "DEBUG: Storing enum '{}' with {} variants",
                 &c_name,
                 variants.len()
@@ -1375,7 +1389,7 @@ impl CCodegen {
             self.enum_variants.insert(c_name.clone(), variants);
         } else {
             // Generate tagged union for mixed/typed unions
-            eprintln!("Generating tagged union {} as {}", union_name, c_name);
+            debug_println!(self, "Generating tagged union {} as {}", union_name, c_name);
             // First generate the tag enum
             self.header.push_str(&format!("typedef enum {{\n"));
             for (i, case) in cases.iter().enumerate() {
@@ -1538,7 +1552,7 @@ impl CCodegen {
         self.variable_types.clear();
 
         // Track function for forward declaration - collect parameter types
-        let param_types: Vec<String> = func
+        let _param_types: Vec<String> = func
             .args
             .iter()
             .map(|arg| self.type_signature(&arg.r#type))
@@ -1559,7 +1573,7 @@ impl CCodegen {
 
         // Skip main function when in test mode (test runner provides its own main)
         if is_main && self.include_tests {
-            eprintln!("Skipping main function (test mode generates test runner main)");
+            debug_println!(self, "Skipping main function (test mode generates test runner main)");
             return Ok(());
         }
 
@@ -1598,7 +1612,7 @@ impl CCodegen {
             // This takes precedence over overload mangling
             if Self::is_reserved_c_name(&func.name) {
                 // Mangle to avoid collision: time -> blitz_time, read -> blitz_read
-                eprintln!(
+                debug_println!(self, 
                     "DEBUG: Mangling function definition '{}' -> 'blitz_{}' (C stdlib collision)",
                     func.name, func.name
                 );
@@ -1630,7 +1644,7 @@ impl CCodegen {
 
         if has_generic_params {
             // Skip generic functions - they need to be monomorphized first
-            eprintln!(
+            debug_println!(self, 
                 "Skipping generic function {} (has type parameters)",
                 func.name
             );
@@ -1947,17 +1961,21 @@ impl CCodegen {
                     // First check if preanalysis determined the type (for empty lists)
                     if let Some(preanalyzed_type) = self.variable_types.get(&decl.name) {
                         c_type = preanalyzed_type.clone();
-                        eprintln!(
+                        debug_println!(self, 
                             "DEBUG: Using preanalyzed type '{}' for variable '{}'",
                             c_type, decl.name
                         );
                     } else if let Some(init_expr) = &decl.init {
                         // Add debug for BinaryOp expressions
                         if let parser::Expression::BinaryOp(binop) = init_expr {
-                            eprintln!("DEBUG: Declaration init is BinaryOp with op={:?}", binop.op);
+                            debug_println!(
+                                self,
+                                "DEBUG: Declaration init is BinaryOp with op={:?}",
+                                binop.op
+                            );
                         }
                         c_type = self.infer_expr_type(init_expr);
-                        eprintln!(
+                        debug_println!(self, 
                             "DEBUG: Inferred type '{}' for variable '{}' (init expr kind: {:?})",
                             c_type,
                             decl.name,
@@ -1983,7 +2001,7 @@ impl CCodegen {
                 // The issue specifically mentions unwrapping.
 
                 if let Some(init_expr) = &decl.init {
-                    let inferred_type = self.infer_expr_type(init_expr);
+                    let _inferred_type = self.infer_expr_type(init_expr);
 
                     // If explicit type is Option_T but inferred type is T* (because of unwrap),
                     // we have a mismatch if we stick to explicit type.
@@ -2044,7 +2062,7 @@ impl CCodegen {
                                 // Actually, if c_type is Option_... and inferred is T*, we definitely want T*.
                                 if c_type.starts_with("Option_") && !inferred.starts_with("Option_")
                                 {
-                                    eprintln!("DEBUG: Fixing variable declaration type mismatch for unwrapped value. Declared: {}, Inferred: {}", c_type, inferred);
+                                    debug_println!(self, "DEBUG: Fixing variable declaration type mismatch for unwrapped value. Declared: {}, Inferred: {}", c_type, inferred);
                                     c_type = inferred;
                                 }
                             }
@@ -2141,7 +2159,11 @@ impl CCodegen {
 
         // Analyze none-initialized variables first
         if !none_vars.is_empty() {
-            eprintln!("DEBUG preanalyze: {} none vars to analyze", none_vars.len());
+            debug_println!(
+                self,
+                "DEBUG preanalyze: {} none vars to analyze",
+                none_vars.len()
+            );
             self.analyze_none_usage_in_stmts_recursive(stmts, &none_vars);
         }
 
@@ -2149,7 +2171,7 @@ impl CCodegen {
             return;
         }
 
-        eprintln!(
+        debug_println!(self, 
             "DEBUG preanalyze_empty_lists: {} empty list vars to analyze",
             empty_list_vars.len()
         );
@@ -2170,7 +2192,7 @@ impl CCodegen {
                 if let Some(init) = &decl.init {
                     if let parser::Expression::List(list) = init {
                         if list.elems.is_empty() {
-                            eprintln!(
+                            debug_println!(self, 
                                 "DEBUG preanalyze_empty_lists: found empty list declaration '{}'",
                                 decl.name
                             );
@@ -2180,7 +2202,7 @@ impl CCodegen {
                     // Check for `none` initializer - indicates Option type
                     if let parser::Expression::Ident(ident) = init {
                         if ident.name == "none" {
-                            eprintln!(
+                            debug_println!(self, 
                                 "DEBUG preanalyze: found none-initialized declaration '{}'",
                                 decl.name
                             );
@@ -2262,7 +2284,7 @@ impl CCodegen {
                     if none_vars.contains_key(&lval_ident.name) {
                         // Infer the type from the RHS
                         let inferred = self.infer_expr_type(&assign.right);
-                        eprintln!(
+                        debug_println!(self, 
                             "DEBUG analyze_none_usage: '{}' assigned with type '{}'",
                             lval_ident.name, inferred
                         );
@@ -2328,18 +2350,18 @@ impl CCodegen {
                 // Look for patterns like: cases ++= SwitchCase(...)
                 // This parses as Assignment { left: cases, right: BinaryOp(Concat, cases, SwitchCase(...)) }
                 if let parser::Lval::Ident(lval_ident) = &assign.left {
-                    eprintln!(
+                    debug_println!(self, 
                         "DEBUG analyze_list_usage: found assignment to '{}'",
                         lval_ident.name
                     );
                     if empty_list_vars.contains_key(&lval_ident.name) {
-                        eprintln!(
+                        debug_println!(self, 
                             "DEBUG analyze_list_usage: '{}' is in empty_list_vars",
                             lval_ident.name
                         );
                         // Check if RHS is a concat operation (from ++=)
                         if let parser::Expression::BinaryOp(binop) = &*assign.right {
-                            eprintln!(
+                            debug_println!(self, 
                                 "DEBUG analyze_list_usage: RHS is BinaryOp, op = {:?}",
                                 binop.op
                             );
@@ -2348,7 +2370,7 @@ impl CCodegen {
                                 if let parser::Expression::Constructor(ctor) = &*binop.right {
                                     let elem_type = self.type_name_for_instance(&ctor.r#type);
                                     let list_type = format!("List_{}", elem_type);
-                                    eprintln!(
+                                    debug_println!(self, 
                                         "DEBUG preanalyze_empty_lists: variable '{}' concat-assigned with constructor '{}', inferred type '{}'",
                                         lval_ident.name, elem_type, list_type
                                     );
@@ -2359,7 +2381,7 @@ impl CCodegen {
                                 else if let parser::Expression::Constructor(ctor) = &*binop.left {
                                     let elem_type = self.type_name_for_instance(&ctor.r#type);
                                     let list_type = format!("List_{}", elem_type);
-                                    eprintln!(
+                                    debug_println!(self, 
                                         "DEBUG preanalyze_empty_lists: variable '{}' concat with constructor '{}', inferred type '{}'",
                                         lval_ident.name, elem_type, list_type
                                     );
@@ -2378,7 +2400,7 @@ impl CCodegen {
                                         };
                                     if elem_type != "int64_t" && elem_type != "void" {
                                         let list_type = format!("List_{}", elem_type);
-                                        eprintln!(
+                                        debug_println!(self, 
                                             "DEBUG preanalyze_empty_lists: variable '{}' concat-assigned with inferred elem type '{}', list type '{}'",
                                             lval_ident.name, elem_type, list_type
                                         );
@@ -2392,7 +2414,7 @@ impl CCodegen {
                         else if let parser::Expression::Constructor(ctor) = &*assign.right {
                             let elem_type = self.type_name_for_instance(&ctor.r#type);
                             let list_type = format!("List_{}", elem_type);
-                            eprintln!(
+                            debug_println!(self, 
                                 "DEBUG preanalyze_empty_lists: variable '{}' assigned constructor '{}', inferred type '{}'",
                                 lval_ident.name, elem_type, list_type
                             );
@@ -2427,30 +2449,30 @@ impl CCodegen {
                 // Look for patterns like Block(statements: body, ...) where body is an empty list var
                 // This tells us that body should have the type of Block.statements
                 let type_name = self.type_name_for_instance(&ctor.r#type);
-                eprintln!(
+                debug_println!(self, 
                     "DEBUG analyze_list_usage Constructor: type={}, args count={}",
                     type_name,
                     ctor.args.len()
                 );
                 for arg in &ctor.args {
                     if let parser::Expression::Ident(ident) = &*arg.init {
-                        eprintln!(
+                        debug_println!(self, 
                             "DEBUG analyze_list_usage Constructor: arg {} = ident {} (in empty_list_vars={})",
                             arg.label.name, ident.name, empty_list_vars.contains_key(&ident.name)
                         );
                         if empty_list_vars.contains_key(&ident.name) {
                             // Look up the expected field type from struct_field_types
-                            eprintln!(
+                            debug_println!(self, 
                                 "DEBUG analyze_list_usage Constructor: looking up {}.{} in struct_field_types",
                                 type_name, arg.label.name
                             );
                             if let Some(struct_fields) = self.struct_field_types.get(&type_name) {
-                                eprintln!(
+                                debug_println!(self, 
                                     "DEBUG analyze_list_usage Constructor: found struct_fields for {}: {:?}",
                                     type_name, struct_fields.keys().collect::<Vec<_>>()
                                 );
                                 if let Some(field_type) = struct_fields.get(&arg.label.name) {
-                                    eprintln!(
+                                    debug_println!(self, 
                                     "DEBUG analyze_list_usage Constructor: field {} has type {}",
                                     arg.label.name, field_type
                                 );
@@ -2465,7 +2487,7 @@ impl CCodegen {
                                     } else {
                                         continue; // Not a list type
                                     };
-                                    eprintln!(
+                                    debug_println!(self, 
                                         "DEBUG preanalyze_empty_lists: variable '{}' used in constructor {}.{}, inferred type '{}'",
                                         ident.name, type_name, arg.label.name, list_type
                                     );
@@ -2485,7 +2507,7 @@ impl CCodegen {
                     if let Some(ref ret_type) = self.current_return_type {
                         let mapped = self.map_type(ret_type);
                         if mapped.starts_with("List_") {
-                            eprintln!(
+                            debug_println!(self, 
                                 "DEBUG preanalyze_empty_lists: variable '{}' is returned, inferred type '{}' from return type",
                                 ident.name, mapped
                             );
@@ -2540,7 +2562,7 @@ impl CCodegen {
             // First try exact match
             if let Some(variants) = self.enum_variants.get(enum_name) {
                 if variants.contains(ident_name) {
-                    eprintln!(
+                    debug_println!(self, 
                         "DEBUG qualify_identifier_with_hint: '{}' found in hinted enum '{}', returning '{}'",
                         ident_name,
                         enum_name,
@@ -2555,7 +2577,7 @@ impl CCodegen {
                 let suffixed_name = format!("{}_{}", enum_name, suffix);
                 if let Some(variants) = self.enum_variants.get(&suffixed_name) {
                     if variants.contains(ident_name) {
-                        eprintln!(
+                        debug_println!(self, 
                             "DEBUG qualify_identifier_with_hint: '{}' found in suffixed enum '{}', returning '{}'",
                             ident_name,
                             suffixed_name,
@@ -2573,7 +2595,7 @@ impl CCodegen {
         // in the lexer context where these ambiguities arise
         if let Some(variants) = self.enum_variants.get("TokenKind") {
             if variants.contains(ident_name) {
-                eprintln!(
+                debug_println!(self, 
                     "DEBUG qualify_identifier: '{}' found in enum 'TokenKind', returning '{}'",
                     ident_name,
                     format!("TokenKind_{}", ident_name)
@@ -2587,7 +2609,7 @@ impl CCodegen {
                 continue; // Already checked
             }
             if variants.contains(ident_name) {
-                eprintln!(
+                debug_println!(self, 
                     "DEBUG qualify_identifier: '{}' found in enum '{}', returning '{}'",
                     ident_name,
                     enum_name,
@@ -2603,7 +2625,7 @@ impl CCodegen {
             || ident_name == "char"
             || ident_name == "ch"
         {
-            eprintln!(
+            debug_println!(self, 
                 "DEBUG qualify_identifier: '{}' NOT FOUND in any enum. Enums available: {:?}",
                 ident_name,
                 self.enum_variants.keys().collect::<Vec<_>>()
@@ -2647,6 +2669,7 @@ impl CCodegen {
     }
 
     /// Get a printf format specifier for a given C type
+    #[allow(dead_code)]
     fn get_format_specifier(&self, c_type: &str) -> &'static str {
         match c_type {
             "char*" | "String" => "%s",
@@ -2667,7 +2690,7 @@ impl CCodegen {
         if let parser::Expression::BinaryOp(binop) = expr {
             if matches!(binop.op, parser::Operator::Else) {
                 if let parser::Expression::If(if_expr) = &*binop.left {
-                    eprintln!(
+                    debug_println!(self, 
                         "DEBUG infer_expr_type: ENTERING if-else case, body len={}",
                         if_expr.body.len()
                     );
@@ -2859,7 +2882,6 @@ impl CCodegen {
 
                     // Parser call/constructor functions - these return Expression variants
                     "parse_call" => return "Option_Expression".to_string(),
-                    "parse_member_call" => return "Option_Expression".to_string(),
                     "parse_constructor" => return "Option_Expression".to_string(),
                     "parse_group" => return "Option_Expression".to_string(),
                     "parse_list" => return "Option_Expression".to_string(),
@@ -2990,7 +3012,7 @@ impl CCodegen {
                 let struct_name = parent_type.trim_end_matches('*');
                 if let Some(fields) = self.struct_field_types.get(struct_name) {
                     if let Some(field_type) = fields.get(member_name) {
-                        return field_type.clone();
+                        return self.map_type_name(field_type);
                     }
                 }
 
@@ -3223,37 +3245,6 @@ impl CCodegen {
                 // If body is empty or has no expression, treat as void
                 "void".to_string()
             }
-            parser::Expression::BinaryOp(binop) if matches!(binop.op, parser::Operator::Else) => {
-                // If-else expression: infer from the then body
-                if let parser::Expression::If(if_expr) = &*binop.left {
-                    eprintln!(
-                        "DEBUG infer_expr_type: if-else, body len={}",
-                        if_expr.body.len()
-                    );
-                    if let Some(last_stmt) = if_expr.body.last() {
-                        eprintln!(
-                            "DEBUG infer_expr_type: last stmt type = {:?}",
-                            std::mem::discriminant(last_stmt)
-                        );
-                        if let parser::Statement::Expression(last_expr) = last_stmt {
-                            let result = self.infer_expr_type(last_expr);
-                            eprintln!(
-                                "DEBUG infer_expr_type: if-else from then body -> {}",
-                                result
-                            );
-                            return result;
-                        }
-                    }
-                    eprintln!("DEBUG infer_expr_type: if-else, body has no last expr");
-                }
-                // Fallback: try the else branch
-                let result = self.infer_expr_type(&binop.right);
-                eprintln!(
-                    "DEBUG infer_expr_type: if-else fallback to else branch -> {}",
-                    result
-                );
-                result
-            }
             parser::Expression::Index(idx) => {
                 // Indexing into a List_T returns T or T* depending on whether T is a value type
                 let target_type = self.infer_expr_type(&idx.target);
@@ -3325,6 +3316,7 @@ impl CCodegen {
 
     /// Generate the result expression from a block of statements
     /// Returns the last expression as a string
+    #[allow(dead_code)]
     fn generate_block_result(&mut self, stmts: &[parser::Statement], is_main: bool) -> String {
         if stmts.is_empty() {
             return "(void)0".to_string();
@@ -3524,6 +3516,7 @@ impl CCodegen {
     }
 
     /// Collect all branches of an if-elif-else chain
+    #[allow(dead_code)]
     fn collect_if_else_branches(
         &mut self,
         expr: &parser::Expression,
@@ -3549,7 +3542,7 @@ impl CCodegen {
         final_else: &mut Option<String>,
         result_type: &str,
     ) {
-        eprintln!(
+        debug_println!(self, 
             "DEBUG collect_if_else_branches_with_type: expr={:?}, result_type='{}'",
             std::mem::discriminant(expr),
             result_type
@@ -3582,7 +3575,7 @@ impl CCodegen {
             }
             parser::Expression::List(list) if list.elems.is_empty() => {
                 // Empty list in else branch - use the inferred result type
-                eprintln!(
+                debug_println!(self, 
                     "DEBUG collect_if_else: empty list, result_type='{}'",
                     result_type
                 );
@@ -3720,13 +3713,16 @@ impl CCodegen {
                     // Generate a placeholder that will need to be typed by context
                     // This happens in declarations like `let x = none`
                     // For now, return 'none' and let it fail - this is a limitation
-                    eprintln!("DEBUG: Found 'none' without Option context, generating bare 'none'");
+                    debug_println!(
+                        self,
+                        "DEBUG: Found 'none' without Option context, generating bare 'none'"
+                    );
                     return "none".to_string();
                 }
 
                 // Check if this is a label-only tagged union variant
                 // e.g., "default" in SwitchLabel union
-                eprintln!(
+                debug_println!(self, 
                     "DEBUG generate_expression Ident: checking '{}' against tagged_union_labels: {:?}",
                     ident.name, self.tagged_union_labels
                 );
@@ -3738,7 +3734,7 @@ impl CCodegen {
                         } else {
                             ident.name.clone()
                         };
-                        eprintln!(
+                        debug_println!(self, 
                             "DEBUG: Found label-only variant '{}' in union '{}', generating constructor",
                             ident.name, union_name
                         );
@@ -3837,7 +3833,7 @@ impl CCodegen {
                             branches.push((first_cond, first_body));
 
                             // Collect elif branches and final else, passing the result type
-                            eprintln!("DEBUG: calling collect_if_else_branches_with_type, result_type='{}'", result_type);
+                            debug_println!(self, "DEBUG: calling collect_if_else_branches_with_type, result_type='{}'", result_type);
                             self.collect_if_else_branches_with_type(
                                 &binop.right,
                                 is_main,
@@ -4467,7 +4463,7 @@ impl CCodegen {
                         self.type_name_registry.get_struct_c_name(&type_name)
                     {
                         if struct_c_name != type_name {
-                            eprintln!(
+                            debug_println!(self, 
                                 "DEBUG Constructor: resolving struct '{}' to C name '{}' (collision detected)",
                                 type_name, struct_c_name
                             );
@@ -4541,12 +4537,12 @@ impl CCodegen {
                                     ("SwitchCase", "body") | (_, "body") => {
                                         "List_Statement".to_string()
                                     }
+                                    ("Call", "args") => "List_CallArg".to_string(),
                                     ("Fn", "args") | (_, "args") => "List_Arg".to_string(),
                                     ("Struct", "fields") | (_, "fields") => {
                                         "List_Field".to_string()
                                     }
                                     ("Union", "cases") | (_, "cases") => "List_Case".to_string(),
-                                    ("Call", "args") => "List_CallArg".to_string(),
                                     (_, "elems") => "List_Expression".to_string(),
                                     _ => "List_Int".to_string(), // Default fallback
                                 }
@@ -4602,7 +4598,7 @@ impl CCodegen {
                             // Check if this is a known variable by looking in variable_types
                             let var_type = self.variable_types.get(&ident.name).cloned();
 
-                            eprintln!(
+                            debug_println!(self, 
                                 "DEBUG Constructor field: type={}, field={}, ident={}, var_type={:?}, expected={:?}",
                                 type_name, field_name, ident.name, var_type, expected_field_type
                             );
@@ -4715,7 +4711,7 @@ impl CCodegen {
                         if inner_monomorphized == type_name
                             || inner_monomorphized.as_str() == type_name.as_str()
                         {
-                            eprintln!(
+                            debug_println!(self, 
                                 "DEBUG Constructor: skipping union wrap because return type Option({}) matches type_name={}",
                                 inner_monomorphized, type_name
                             );
@@ -4748,7 +4744,7 @@ impl CCodegen {
                     if let Some(union_set) = self.variant_to_union.get(&variant_lookup_name) {
                         let union_name = union_set.iter().next().cloned().unwrap();
                         // This is a tagged union variant - wrap in the union struct
-                        eprintln!(
+                        debug_println!(self, 
                             "DEBUG Constructor: type_name={} (lookup={}) is variant of union {}, generating union wrapper",
                             type_name, variant_lookup_name, union_name
                         );
@@ -4798,7 +4794,7 @@ impl CCodegen {
                     && !self.enum_types.contains(&type_name))
                     || should_skip_union_wrapping; // When returning into Option.value, we need a pointer
 
-                eprintln!(
+                debug_println!(self, 
                     "DEBUG Constructor: type_name={}, seen_types.contains={}, enum_types.contains={}, needs_pointer={}, should_skip_union_wrapping={}",
                     type_name,
                     self.seen_types.contains(&type_name),
@@ -5568,16 +5564,20 @@ impl CCodegen {
 
         if option_types.len() == collected_types.len() && !option_types.is_empty() {
             // All are Option types - try to find common parent union
-            eprintln!(
+            debug_println!(self, 
                 "DEBUG infer_switch_result_type: all Option types: {:?}",
                 option_types
             );
             // Find the intersection of all parent unions
             let mut common_unions: Option<HashSet<String>> = None;
             for inner in &option_types {
-                eprintln!("DEBUG: Looking up variant '{}' in variant_to_union", inner);
+                debug_println!(
+                    self,
+                    "DEBUG: Looking up variant '{}' in variant_to_union",
+                    inner
+                );
                 if let Some(parents) = self.variant_to_union.get(*inner) {
-                    eprintln!("DEBUG: Found parents '{:?}'", parents);
+                    debug_println!(self, "DEBUG: Found parents '{:?}'", parents);
                     match &mut common_unions {
                         None => {
                             common_unions = Some(parents.clone());
@@ -5588,24 +5588,24 @@ impl CCodegen {
                         }
                     }
                 } else {
-                    eprintln!("DEBUG: No parent found for '{}'", inner);
+                    debug_println!(self, "DEBUG: No parent found for '{}'", inner);
                     common_unions = Some(HashSet::new()); // No common parent
                 }
             }
             if let Some(common) = common_unions {
                 if common.len() == 1 {
                     let parent = common.iter().next().unwrap();
-                    eprintln!("DEBUG: Unified to Option_{}", parent);
+                    debug_println!(self, "DEBUG: Unified to Option_{}", parent);
                     return format!("Option_{}", parent);
                 } else if common.len() > 1 {
                     // Multiple common parents - prefer "Expression" if it's there
                     if common.contains("Expression") {
-                        eprintln!("DEBUG: Unified to Option_Expression (preferred)");
+                        debug_println!(self, "DEBUG: Unified to Option_Expression (preferred)");
                         return "Option_Expression".to_string();
                     }
                     // Otherwise, just pick one
                     let parent = common.iter().next().unwrap();
-                    eprintln!("DEBUG: Unified to Option_{} (arbitrary)", parent);
+                    debug_println!(self, "DEBUG: Unified to Option_{} (arbitrary)", parent);
                     return format!("Option_{}", parent);
                 }
             }
@@ -5614,7 +5614,7 @@ impl CCodegen {
         // Check for MIXED Option and non-Option types that are all variants of the same union
         // e.g., Option_For + Return* should unify to Option_Expression
         if !option_types.is_empty() && option_types.len() < collected_types.len() {
-            eprintln!(
+            debug_println!(self, 
                 "DEBUG infer_switch_result_type: mixed Option and non-Option types: {:?}",
                 collected_types
             );
@@ -5652,7 +5652,7 @@ impl CCodegen {
                     } else {
                         common.iter().next().unwrap()
                     };
-                    eprintln!("DEBUG: Mixed types unified to Option_{}", parent);
+                    debug_println!(self, "DEBUG: Mixed types unified to Option_{}", parent);
                     return format!("Option_{}", parent);
                 }
             }
@@ -5866,7 +5866,7 @@ impl CCodegen {
             // Direct case: X* to Option_X (same type, just wrap in Option)
             // Also handle enum types: X to Option_X where X is an enum
             if from_base == to_inner || from_type == to_inner {
-                eprintln!(
+                debug_println!(self, 
                     "DEBUG convert_expr_to_type: wrapping '{}' (type {}) in Option_{}",
                     expr_code, from_type, to_inner
                 );
@@ -5925,6 +5925,7 @@ impl CCodegen {
 
     /// Check if a switch is used purely as a statement (for side effects, not for a value)
     /// A switch is a pure statement if all cases end with control flow or have empty bodies
+    #[allow(dead_code)]
     fn is_pure_statement_switch(&self, switch_expr: &parser::Switch) -> bool {
         // Check if all cases either:
         // 1. Have empty bodies
@@ -6434,7 +6435,7 @@ impl CCodegen {
         // 2. The function return type is an Option of that enum or a compatible type
         if let Some(ref ret_ty) = self.current_return_type {
             let mapped_return = self.map_type(ret_ty);
-            eprintln!(
+            debug_println!(self, 
                 "DEBUG generate_c_switch: inferred result_type='{}', function return='{}'",
                 result_type, mapped_return
             );
@@ -6444,7 +6445,7 @@ impl CCodegen {
                 let inner = &mapped_return[7..]; // e.g., "Assignment_1"
                                                  // If the inferred type matches the inner type of the Option, use the Option type
                 if result_type == inner {
-                    eprintln!(
+                    debug_println!(self, 
                         "DEBUG generate_c_switch: using function return type '{}' instead of '{}'",
                         mapped_return, result_type
                     );
@@ -6463,7 +6464,7 @@ impl CCodegen {
                             .next()
                             .is_some();
                         if has_collision {
-                            eprintln!(
+                            debug_println!(self, 
                                 "DEBUG generate_c_switch: enum variant collision detected, using function return type '{}' instead of '{}'",
                                 mapped_return, result_type
                             );
@@ -6512,7 +6513,7 @@ impl CCodegen {
                     } else {
                         // Enum variant - qualify it with the condition type as hint
                         // This ensures that when switching on TokenKind, we use TokenKind_xxx prefixes
-                        eprintln!(
+                        debug_println!(self, 
                             "DEBUG generate_c_switch: ident='{}', cond_type='{}'",
                             ident.name, cond_type
                         );
@@ -6574,13 +6575,13 @@ impl CCodegen {
                                 // contains just `none`, it should return from the function, not assign
                                 if let parser::Expression::Ident(ident) = expr {
                                     if ident.name == "none" {
-                                        eprintln!(
+                                        debug_println!(self, 
                                             "DEBUG: Found 'none' in switch case, current_return_type={:?}",
                                             self.current_return_type
                                         );
                                         if let Some(ref ret_ty) = self.current_return_type {
                                             let mapped_ret = self.map_type(ret_ty);
-                                            eprintln!(
+                                            debug_println!(self, 
                                                 "DEBUG: mapped_ret='{}', starts_with Option_={}",
                                                 mapped_ret,
                                                 mapped_ret.starts_with("Option_")
@@ -6618,12 +6619,12 @@ impl CCodegen {
                                     // instead of whatever infer_expr_type returns (which might find a different enum first).
                                     if result_type.starts_with("Option_") {
                                         let expected_inner = &result_type[7..]; // e.g., "Assignment_1"
-                                        eprintln!(
+                                        debug_println!(self, 
                                             "DEBUG switch Option: result_type={}, expected_inner={}, expr_type={}, expr_code={}",
                                             result_type, expected_inner, expr_type, expr_code
                                         );
                                         if let parser::Expression::Ident(ident) = expr {
-                                            eprintln!(
+                                            debug_println!(self, 
                                                 "DEBUG switch Option ident: name={}, enum_variants.get({})={:?}",
                                                 ident.name, expected_inner, self.enum_variants.get(expected_inner)
                                             );
@@ -6631,7 +6632,7 @@ impl CCodegen {
                                                 self.enum_variants.get(expected_inner)
                                             {
                                                 if variants.contains(&ident.name) {
-                                                    eprintln!("DEBUG switch Option: found variant, setting expr_type to {}", expected_inner);
+                                                    debug_println!(self, "DEBUG switch Option: found variant, setting expr_type to {}", expected_inner);
                                                     expr_type = expected_inner.to_string();
                                                 }
                                             }
@@ -7005,7 +7006,7 @@ impl CCodegen {
 
         // For Option conditions that are function calls, we need a temp variable
         // to avoid calling the function multiple times
-        let (actual_cond, needs_temp) = if cond_is_option {
+        let (actual_cond, _needs_temp) = if cond_is_option {
             // Check if cond looks like a function call (contains parentheses)
             if cond.contains('(') && !cond.starts_with('(') {
                 // Store in temp variable
@@ -7148,7 +7149,7 @@ impl CCodegen {
                                                 None;
                                             for (union_name, labels) in &self.tagged_union_labels {
                                                 if labels.contains(&ident.name) {
-                                                    eprintln!(
+                                                    debug_println!(self, 
                                                     "DEBUG generate_c_switch_as_statement: found label-only variant '{}' in union '{}'",
                                                     ident.name, union_name
                                                 );
@@ -7201,7 +7202,7 @@ impl CCodegen {
                                                 self.enum_variants.get(expected_inner)
                                             {
                                                 if variants.contains(&ident.name) {
-                                                    eprintln!(
+                                                    debug_println!(self, 
                                                         "DEBUG generate_c_switch_as_statement: correcting expr_type from '{}' to '{}' for ident '{}'",
                                                         expr_type, expected_inner, ident.name
                                                     );
@@ -7445,7 +7446,7 @@ impl CCodegen {
 
                 for (idx, stmt) in case.body.iter().enumerate() {
                     if idx == last_idx {
-                        eprintln!(
+                        debug_println!(self, 
                             "DEBUG: last_stmt is_expr={}, is_decl={}",
                             matches!(stmt, parser::Statement::Expression(_)),
                             matches!(stmt, parser::Statement::Declaration(_))
@@ -7466,14 +7467,14 @@ impl CCodegen {
                                     let expr_code = self.generate_expression(expr, is_main);
                                     let expr_type = self.infer_expr_type(expr);
 
-                                    eprintln!("DEBUG if_else_chain_as_statement: var_name='{}', var_type='{}', expr_type='{}'", var_name, var_type, expr_type);
+                                    debug_println!(self, "DEBUG if_else_chain_as_statement: var_name='{}', var_type='{}', expr_type='{}'", var_name, var_type, expr_type);
 
                                     // Check if we need to unwrap an Option type
                                     let should_unwrap = expr_type.starts_with("Option_")
                                         && !var_type.starts_with("Option_");
 
                                     if expr_type == "Option_Expression" {
-                                        eprintln!("DEBUG: should_unwrap={}, expr_code first 200 chars: {}", should_unwrap, &expr_code[..std::cmp::min(200, expr_code.len())]);
+                                        debug_println!(self, "DEBUG: should_unwrap={}, expr_code first 200 chars: {}", should_unwrap, &expr_code[..std::cmp::min(200, expr_code.len())]);
                                     }
 
                                     let final_expr = if should_unwrap {
@@ -7651,13 +7652,17 @@ impl CCodegen {
     }
 
     fn write_files(&self) -> Result<(), String> {
-        eprintln!(
+        debug_println!(self, 
             "DEBUG: forward_decls length = {} bytes",
             self.forward_decls.len()
         );
-        eprintln!("DEBUG: header length = {} bytes", self.header.len());
-        eprintln!("DEBUG: impl_code length = {} bytes", self.impl_code.len());
-        eprintln!(
+        debug_println!(self, "DEBUG: header length = {} bytes", self.header.len());
+        debug_println!(
+            self,
+            "DEBUG: impl_code length = {} bytes",
+            self.impl_code.len()
+        );
+        debug_println!(self, 
             "DEBUG: generic_instances count = {}",
             self.generic_instances.len()
         );
@@ -8149,7 +8154,7 @@ void todo(char* msg) __attribute__((noreturn));
 
         full_header.push_str("\n#endif // BLITZ_H\n");
 
-        eprintln!(
+        debug_println!(self, 
             "DEBUG: about to write {} bytes to {}",
             full_header.len(),
             header_path.display()

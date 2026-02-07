@@ -17,8 +17,8 @@ fn user_panic(msg: String) -> ! {
 
 macro_rules! make_builtin {
     ($name:ident ( $($param:ident),* $(,)? ) $body:block) => {
-        fn $name(values: &mut HashMap<String, Value>) -> Value {
-            $(let $param = &values[stringify!($param)];)*
+        fn $name(_values: &mut HashMap<String, Value>) -> Value {
+            $(let $param = &_values[stringify!($param)];)*
             $body
         }
     };
