@@ -4417,6 +4417,28 @@ impl CCodegen {
                                         }
                                     }
                                 }
+
+                                // Union-to-struct extraction for function call arguments:
+                                // If the arg's type is a tagged union (e.g., Expression*) but the
+                                // param expects a variant of that union (e.g., Ident), extract
+                                // with arg->data.as_Variant. Only for simple variable references.
+                                if let parser::Expression::Ident(ident) = &*arg.init {
+                                    let arg_type = self.infer_expr_type(&arg.init);
+                                    let arg_type_base = arg_type.trim_end_matches('*');
+                                    if self.tagged_union_types.contains(arg_type_base) {
+                                        // The arg is a tagged union — check if param_type is
+                                        // one of its variants
+                                        if let Some(unions) = self.variant_to_union.get(param_type.as_str()) {
+                                            if unions.contains(arg_type_base) && param_type != arg_type_base {
+                                                debug_println!(self,
+                                                    "DEBUG Function arg: extracting variant {} from union {} (var={})",
+                                                    param_type, arg_type_base, ident.name
+                                                );
+                                                arg_code = format!("{}->data.as_{}", arg_code, param_type);
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         } else {
                             // No signature found - use heuristic: if arg is Option and function
