@@ -3188,7 +3188,19 @@ impl CCodegen {
                         }
                         return "List_SwitchCase".to_string();
                     }
-                    "body" => return "List_Statement".to_string(),
+                    "body" => {
+                        // 'body' can be Block (for Fn, While, For, etc.) or List_Statement
+                        // Check the parent type to determine which struct's body field
+                        let parent_type = self.infer_expr_type(&member.parent);
+                        let struct_name = parent_type.trim_end_matches('*');
+                        if let Some(fields) = self.struct_field_types.get(struct_name) {
+                            if let Some(field_type) = fields.get("body") {
+                                return self.map_type_name(field_type);
+                            }
+                        }
+                        // Fallback to List_Statement for backwards compatibility
+                        return "List_Statement".to_string();
+                    }
                     "params" => return "List_Arg".to_string(),
                     "fields" => return "List_Field".to_string(),
                     "value" => {
@@ -5492,6 +5504,70 @@ impl CCodegen {
                     );
                 }
 
+                // Check if the iterator is a struct with a list field (structural iteration)
+                // e.g., `for ast |item|` where Ast has `items: List(Definition)`
+                let iter_type_base = iter_type.trim_end_matches('*');
+                let struct_list_field: Option<(String, String)> =
+                    if let Some(fields) = self.struct_field_types.get(iter_type_base) {
+                        fields
+                            .iter()
+                            .find(|(_, ftype)| ftype.starts_with("List_"))
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                    } else {
+                        None
+                    };
+                if let Some((field_name, field_type)) = struct_list_field {
+                    let elem_type_name = field_type.strip_prefix("List_").unwrap();
+
+                    // Determine if the element type is a struct/union (needs pointer) or value type
+                    let is_struct_type = self.seen_types.contains(elem_type_name)
+                        || self.tagged_union_types.contains(elem_type_name);
+                    let is_enum_type = self.enum_types.contains(elem_type_name);
+
+                    let c_elem_type = if is_struct_type && !is_enum_type {
+                        format!("{}*", elem_type_name)
+                    } else {
+                        self.normalize_c_type(elem_type_name)
+                    };
+
+                    let iter_code = self.generate_expression(&for_loop.iter, is_main);
+
+                    // Create a unique loop label for break statements to target
+                    let loop_label = format!("_loop_exit_{}", self.loop_label_counter);
+                    self.loop_label_counter += 1;
+                    self.loop_label_stack.push(loop_label.clone());
+
+                    // Register the element variable type for use in the body
+                    self.variable_types
+                        .insert(elem_name.clone(), c_elem_type.clone());
+
+                    // Generate body statements
+                    let mut body_code = String::new();
+                    for stmt in &for_loop.body {
+                        let stmt_code = self.generate_statement(stmt, is_main);
+                        body_code.push_str("            ");
+                        body_code.push_str(&stmt_code);
+                        body_code.push_str("\n");
+                    }
+
+                    // Pop the loop label
+                    self.loop_label_stack.pop();
+
+                    // Access the list field through the struct pointer: iter->field.data[i]
+                    let list_access = if iter_type.ends_with('*') {
+                        format!("({}->{})", iter_code, field_name)
+                    } else {
+                        format!("({}.{})", iter_code, field_name)
+                    };
+
+                    return format!(
+                        "for (int64_t _idx_{} = 0; _idx_{} < {}.len; _idx_{}++) {{\n        {} {} = {}.data[_idx_{}];\n{}}}\n    {}:;",
+                        elem_name, elem_name, list_access, elem_name,
+                        c_elem_type, elem_name, list_access, elem_name,
+                        body_code, loop_label
+                    );
+                }
+
                 // Fallback: generate a TODO comment for unknown iteration types
                 // DO NOT emit the loop body since the iterator variable is not declared
                 let iter_code = self.generate_expression(&for_loop.iter, is_main);
@@ -6400,6 +6476,70 @@ impl CCodegen {
                 "for (int64_t _idx_{} = 0; _idx_{} < ({}).len; _idx_{}++) {{\n        {} {} = ({}).data[_idx_{}];\n{}}}\n    {}:;",
                 elem_name, elem_name, iter_code, elem_name,
                 c_elem_type, elem_name, iter_code, elem_name,
+                body_code, loop_label
+            );
+        }
+
+        // Check if the iterator is a struct with a list field (structural iteration)
+        // e.g., `for ast |item|` where Ast has `items: List(Definition)`
+        let iter_type_base = iter_type.trim_end_matches('*');
+        let struct_list_field: Option<(String, String)> =
+            if let Some(fields) = self.struct_field_types.get(iter_type_base) {
+                fields
+                    .iter()
+                    .find(|(_, ftype)| ftype.starts_with("List_"))
+                    .map(|(k, v)| (k.clone(), v.clone()))
+            } else {
+                None
+            };
+        if let Some((field_name, field_type)) = struct_list_field {
+            let elem_type_name = field_type.strip_prefix("List_").unwrap();
+
+            // Determine if the element type is a struct/union (needs pointer) or value type
+            let is_struct_type = self.seen_types.contains(elem_type_name)
+                || self.tagged_union_types.contains(elem_type_name);
+            let is_enum_type = self.enum_types.contains(elem_type_name);
+
+            let c_elem_type = if is_struct_type && !is_enum_type {
+                format!("{}*", elem_type_name)
+            } else {
+                self.normalize_c_type(elem_type_name)
+            };
+
+            let iter_code = self.generate_expression(&for_loop.iter, is_main);
+
+            // Create a unique loop label for break statements to target
+            let loop_label = format!("_loop_exit_{}", self.loop_label_counter);
+            self.loop_label_counter += 1;
+            self.loop_label_stack.push(loop_label.clone());
+
+            // Register the element variable type for use in the body
+            self.variable_types
+                .insert(elem_name.clone(), c_elem_type.clone());
+
+            // Generate body statements
+            let mut body_code = String::new();
+            for stmt in &for_loop.body {
+                let stmt_code = self.generate_statement(stmt, is_main);
+                body_code.push_str("            ");
+                body_code.push_str(&stmt_code);
+                body_code.push_str("\n");
+            }
+
+            // Pop the loop label
+            self.loop_label_stack.pop();
+
+            // Access the list field through the struct pointer: iter->field.data[i]
+            let list_access = if iter_type.ends_with('*') {
+                format!("({}->{})", iter_code, field_name)
+            } else {
+                format!("({}.{})", iter_code, field_name)
+            };
+
+            return format!(
+                "for (int64_t _idx_{} = 0; _idx_{} < {}.len; _idx_{}++) {{\n        {} {} = {}.data[_idx_{}];\n{}}}\n    {}:;",
+                elem_name, elem_name, list_access, elem_name,
+                c_elem_type, elem_name, list_access, elem_name,
                 body_code, loop_label
             );
         }
