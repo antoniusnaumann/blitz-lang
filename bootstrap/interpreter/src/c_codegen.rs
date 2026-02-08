@@ -206,6 +206,13 @@ struct CCodegen {
     display_needed: HashSet<String>,
     /// Whether to show debug output during code generation
     debug: bool,
+    /// Track mutability flags for function parameters: func_name -> list of (param_type_sigs, mut_flags)
+    /// Used to pass value-type mut params by pointer and dereference them in the body
+    function_mut_params: HashMap<String, Vec<(Vec<String>, Vec<bool>)>>,
+    /// Track which variables in the current function scope are mut-pointer params
+    /// (i.e., originally value-type params marked `mut` that we pass as pointers)
+    /// Maps mangled variable name -> original C type (before adding pointer)
+    mut_pointer_params: HashMap<String, String>,
 }
 
 impl CCodegen {
@@ -257,6 +264,8 @@ impl CCodegen {
             expected_expr_type: None,
             display_needed: HashSet::new(),
             debug: std::env::var("BLITZ_DEBUG").is_ok(),
+            function_mut_params: HashMap::new(),
+            mut_pointer_params: HashMap::new(),
         }
     }
 
@@ -314,6 +323,15 @@ impl CCodegen {
                     .iter()
                     .map(|arg| self.type_signature(&arg.r#type))
                     .collect();
+
+                // Collect mutability flags for each parameter
+                let mut_flags: Vec<bool> = f.args.iter().map(|arg| arg.mutable).collect();
+
+                // Store mutability info alongside param types
+                self.function_mut_params
+                    .entry(f.name.clone())
+                    .or_insert_with(Vec::new)
+                    .push((param_types.clone(), mut_flags));
 
                 // Store the parameter types - we'll determine mangling later
                 self.function_signatures
@@ -887,6 +905,13 @@ impl CCodegen {
         }
         // Enum types are also primitives (value types, not pointers)
         self.enum_types.contains(type_name)
+    }
+
+    /// Check if a mapped C type is a "value type" (passed by value, not by pointer).
+    /// Value types include primitives, enums, List_T, and Option_T.
+    /// Pointer types (ending with *) are already indirected, so `mut` doesn't change them.
+    fn is_c_value_type(&self, c_type: &str) -> bool {
+        !c_type.ends_with('*')
     }
 
     /// Check if a type is a built-in type defined in blitz_types.h
@@ -1609,18 +1634,38 @@ impl CCodegen {
         // Generate parameter list and collect parameter types for mangling
         let mut params = Vec::new();
         let mut param_types = Vec::new();
+        // Clear mut_pointer_params for this function scope
+        self.mut_pointer_params.clear();
         for arg in &func.args {
             let param_type = self.map_type(&arg.r#type);
             let param_type_sig = self.type_signature(&arg.r#type);
             param_types.push(param_type_sig);
             // Mangle parameter name if it collides with C stdlib
             let param_name = self.mangle_variable_name(&arg.name);
-            // Track parameter type for type inference
-            self.variable_types
-                .insert(param_name.clone(), param_type.clone());
-            // Note: mutability is handled in Blitz semantics, not at C level
-            // In C, all parameters are passed by value (or pointer for structs)
-            params.push(format!("{} {}", param_type, param_name));
+
+            // Handle mut parameters on value types: pass by pointer
+            if arg.mutable && self.is_c_value_type(&param_type) {
+                debug_println!(
+                    self,
+                    "DEBUG: mut value-type param '{}' of type '{}' -> '{}*'",
+                    param_name,
+                    param_type,
+                    param_type
+                );
+                // Track this as a mut-pointer param so the body can dereference it
+                self.mut_pointer_params
+                    .insert(param_name.clone(), param_type.clone());
+                // Track variable type as the ORIGINAL value type (not pointer) for type inference
+                // The pointer indirection is handled by mut_pointer_params in code generation
+                self.variable_types
+                    .insert(param_name.clone(), param_type.clone());
+                params.push(format!("{}* {}", param_type, param_name));
+            } else {
+                // Track parameter type for type inference
+                self.variable_types
+                    .insert(param_name.clone(), param_type.clone());
+                params.push(format!("{} {}", param_type, param_name));
+            }
         }
         let params_str = if params.is_empty() {
             "void".to_string()
@@ -2966,9 +3011,18 @@ impl CCodegen {
 
                 // Try to look up return type by signature match (for overloaded functions)
                 if let Some(signatures) = self.function_return_by_signature.get(&call.name) {
-                    // Helper to strip pointer notation for type comparison
-                    fn strip_ptr(s: &str) -> &str {
-                        s.trim_end_matches('*').trim_end_matches("Ptr")
+                    // Normalize type names so that Blitz types (from signatures) and
+                    // C types (from infer_expr_type) compare equal.  This must match
+                    // the normalize_type helper used in resolve_function_call.
+                    fn normalize_type(s: &str) -> &str {
+                        match s.trim_end_matches('*') {
+                            "char" | "String" => "String",
+                            "int64_t" | "Int" => "Int",
+                            "bool" | "Bool" => "Bool",
+                            "double" | "Float" => "Float",
+                            "uint32_t" | "Rune" => "Rune",
+                            other => other,
+                        }
                     }
 
                     // Find matching signature
@@ -2977,7 +3031,7 @@ impl CCodegen {
                             let matches = param_types
                                 .iter()
                                 .zip(arg_types.iter())
-                                .all(|(p, a)| strip_ptr(p) == strip_ptr(a));
+                                .all(|(p, a)| normalize_type(p) == normalize_type(a));
                             if matches {
                                 return self.map_type(ret_type);
                             }
@@ -3591,7 +3645,9 @@ impl CCodegen {
                     } else {
                         let expr_code = self.generate_expression(expr, is_main);
                         // Use statement expression for multi-statement blocks
-                        return format!("({{ {}{} }})", result, expr_code);
+                        // The last expression in a GCC statement expression still
+                        // needs a trailing semicolon to form a valid expression statement.
+                        return format!("({{ {}{}; }})", result, expr_code);
                     }
                 }
                 _ => {
@@ -4004,8 +4060,12 @@ impl CCodegen {
 
                 // Check if this is an enum variant that needs qualification
                 let var_name = self.get_variable_name(&ident.name);
-                // If the variable doesn't exist in our mappings, it might be an enum variant
-                if var_name == ident.name {
+
+                // Check if this is a mut value-type parameter passed as pointer - dereference it
+                if self.mut_pointer_params.contains_key(&var_name) {
+                    format!("(*{})", var_name)
+                } else if var_name == ident.name {
+                    // If the variable doesn't exist in our mappings, it might be an enum variant
                     // Try to qualify as enum variant
                     self.qualify_identifier(&ident.name)
                 } else {
@@ -4180,7 +4240,15 @@ impl CCodegen {
                                 );
                             } else {
                                 let left = self.generate_expression(&binop.left, is_main);
-                                let right = self.generate_expression(&binop.right, is_main);
+
+                                // Special handling for Block expressions in else branch
+                                // Need to evaluate the block and return the last expression's value
+                                let right = if let parser::Expression::Block(stmts) = &*binop.right
+                                {
+                                    self.generate_block_result(&stmts, is_main)
+                                } else {
+                                    self.generate_expression(&binop.right, is_main)
+                                };
 
                                 // Need to wrap result in 'some' constructor if the result is assigned to an Option
                                 // But here we're unwrapping, so we return the value directly
@@ -4432,6 +4500,18 @@ impl CCodegen {
                     })
                     .cloned();
 
+                // Look up mutability flags for the callee's parameters
+                let mut_flags: Option<Vec<bool>> = self
+                    .function_mut_params
+                    .get(func_name)
+                    .and_then(|overloads| {
+                        overloads
+                            .iter()
+                            .find(|(params, _)| params.len() == arg_count)
+                            .or_else(|| overloads.first())
+                    })
+                    .map(|(_, flags)| flags.clone());
+
                 // Generate arguments
                 let args: Vec<String> = call
                     .args
@@ -4510,6 +4590,27 @@ impl CCodegen {
                                     || func_name == "unwrap";
                                 if !expects_option && !arg_code.ends_with(".value") {
                                     arg_code = format!("{}.value", arg_code);
+                                }
+                            }
+                        }
+                        // If this argument corresponds to a `mut` value-type parameter,
+                        // pass it by address so the callee can modify it through a pointer
+                        if let Some(ref flags) = mut_flags {
+                            if i < flags.len() && flags[i] {
+                                // Check that the arg's C type is a value type
+                                let arg_type = self.infer_expr_type(&arg.init);
+                                let c_type = self.map_type_name(&arg_type);
+                                if self.is_c_value_type(&c_type) {
+                                    // Need to take address of the arg.
+                                    // If the arg is a member access (e.g., reg->mods), wrap with &(...)
+                                    // If the arg is a dereferenced mut-pointer param (*name), just pass the raw pointer name
+                                    if arg_code.starts_with("(*") && arg_code.ends_with(')') {
+                                        // This is a dereferenced mut-pointer param like (*mods)
+                                        // Just pass the raw pointer: mods
+                                        arg_code = arg_code[2..arg_code.len()-1].to_string();
+                                    } else {
+                                        arg_code = format!("&({})", arg_code);
+                                    }
                                 }
                             }
                         }
@@ -5293,7 +5394,15 @@ impl CCodegen {
             parser::Expression::Assignment(assign) => {
                 // Generate assignment: lval = rhs
                 let lval_code = match &assign.left {
-                    parser::Lval::Ident(ident) => self.get_variable_name(&ident.name),
+                    parser::Lval::Ident(ident) => {
+                        let var_name = self.get_variable_name(&ident.name);
+                        if self.mut_pointer_params.contains_key(&var_name) {
+                            // Mut value-type param: assignment goes through pointer
+                            format!("*{}", var_name)
+                        } else {
+                            var_name
+                        }
+                    }
                     parser::Lval::Member(member) => {
                         // Use the same logic as Expression::Member for consistency
                         let parent_code = self.generate_expression(&member.parent, is_main);

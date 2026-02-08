@@ -30,22 +30,57 @@ fn find(reg Hir, name String) Option(ModId) {
     none
 }
 
+fn find(reg Hir, type TypeKind) Option(TypeRef) {
+    reg.types.find(type)
+}
+
+fn find(types List(TypeKind), type TypeKind) Option(TypeRef) {
+    mut index = 0
+    while index < types.len() {
+        let item = types[index]
+        if item == type { return TypeRef(id: index) }
+        index += 1
+    }
+
+    none
+}
+
 fn get(reg Hir, mod ModId) Module {
     reg.mods[mod.id]
+}
+
+fn get(mods List(Module), mod ModId) Module {
+    mods[mod.id]
 }
 
 fn get(reg Hir, ty TypeRef) TypeKind {
     reg.types[ty.id]
 }
 
+fn get(types List(TypeKind), ty TypeRef) TypeKind {
+    types[ty.id]
+}
+
 fn push(mut reg Hir, mod Module) ModId {
-    reg.mods ++= mod
-    ModId(id: reg.mods.len() - 1)
+    reg.mods.mut.push(mod)
+}
+
+fn push(mut mods List(Module), mod Module) ModId {
+    mods ++= mod
+    ModId(id: mods.len() - 1)
 }
 
 fn push(mut reg Hir, ty TypeKind) TypeRef {
-    reg.types ++= ty
-    TypeRef(id: reg.types.len() - 1)
+    reg.types.mut.push(ty)
+}
+
+fn push(mut types List(TypeKind), ty TypeKind) TypeRef {
+    types ++= ty
+    TypeRef(id: types.len() - 1)
+}
+
+fn insert(mut types List(TypeKind), ty TypeKind) TypeRef {
+    types.find(ty) else { types.mut.push(ty) }
 }
 
 union TypeKind {

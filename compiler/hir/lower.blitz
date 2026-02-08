@@ -9,7 +9,20 @@ fn lower(asts List(Ast)) Hir {
         }
 
         for ast.items |item| {
-            hir.mods[index.id].mut.push(item)
+            hir.mods[index.id].mut.push_type(mut hir.types, item)
+        }
+    }
+
+    for asts |ast| {
+        let name = ast.origin.mod_name()
+        let index = hir.find(name) else {
+            panic("All modules should have been pushed in the first pass!")
+            // HACK: this is never reachable, but the bootstrap compiler typechecking currently cannot handle diverging types
+            ModId(id: 0)
+        }
+
+        for ast.items |item| {
+            hir.mods[index.id].mut.push_func(mut hir.types, item)
         }
     }
 
@@ -27,19 +40,32 @@ test "Extract mod name from path" {
     assert "some/module/with/a/name/file.blitz".mod_name() == "name"
 }
 
-fn push(mut mod Module, item Definition) {
+fn push_type(mut mod Module, mut types List(TypeKind), item Definition) {
+    // TODO: intern referenced types here
     switch item {
         Pub { todo("HIR: pub") }
-        Struct { mod.mut.push(item.lower()) }
-        Union { mod.mut.push(item.lower()) }
-        Fn { mod.mut.push(item.lower()) }
-        Alias { mod.mut.push(item.lower()) }
-        Actor { mod.mut.push(item.lower()) }
-        Test { mod.mut.push(item.lower()) }
+        Struct { mod.mut.push(item.lower(mut types)) }
+        Union { mod.mut.push(item.lower(mut types)) }
+        Alias { mod.mut.push(item.lower(mut types)) }
+        Actor { mod.mut.push(item.lower(mut types)) }
+        else {
+            // tests and functions will be handled in a second pass later
+        }
     }
 }
 
-fn lower(def Struct) TypeDef {
+fn push_func(mut mod Module, mut types List(TypeKind), item Definition) {
+    switch item {
+        Pub { todo("HIR: pub") }
+        Fn { mod.mut.push(item.lower(mut types)) }
+        Test { mod.mut.push(item.lower(mut types)) }
+        else {
+            // nothing to do, types should've already been pushed
+        }
+    }
+}
+
+fn lower(def Struct, mut types List(TypeKind)) TypeDef {
     let name = Ident(name: def.sig.name, span: def.sig.span)
     mut fields = []
     for def.fields |field| {
@@ -50,7 +76,7 @@ fn lower(def Struct) TypeDef {
     TypeDef(name:, generic: [], kind: StructDef(fields:), vis: module)
 }
 
-fn lower(def Union) TypeDef {
+fn lower(def Union, mut types List(TypeKind)) TypeDef {
     let name = Ident(name: def.sig.name, span: def.sig.span)
     let kind = UnionDef(label: none, type: TypeRef(id: 0))
 
@@ -58,7 +84,7 @@ fn lower(def Union) TypeDef {
     TypeDef(name:, generic: [], kind:, vis: module)
 }
 
-fn lower(def Fn) FuncDef {
+fn lower(def Fn, mut types List(TypeKind)) FuncDef {
     let name = def.name
     mut params = []
     for def.args |arg| {
@@ -70,14 +96,14 @@ fn lower(def Fn) FuncDef {
     FuncDef(name:, module: ModId(id: 0), generic: [], params:, result: TypeRef(id: 0), body: HirBody(expressions: []), vis: module)
 }
 
-fn lower(def Alias) TypeDef {
+fn lower(def Alias, mut types List(TypeKind)) TypeDef {
     todo("HIR: alias")
 }
 
-fn lower(def Actor) TypeDef {
+fn lower(def Actor, mut types List(TypeKind)) TypeDef {
     todo("HIR: actor")
 }
 
-fn lower(def Test) FuncDef {
+fn lower(def Test, mut types List(TypeKind)) FuncDef {
     todo("HIR: test")
 }
