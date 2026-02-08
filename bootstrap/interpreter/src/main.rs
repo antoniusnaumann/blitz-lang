@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::sync::RwLock;
 
 use interpreter::DEBUG;
-use interpreter::{run_checked, Body, Builtin, Registry, ROOT};
+use interpreter::{Body, Builtin, ROOT, Registry, run_checked};
 use parser::{Ast, Parser};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -121,18 +121,27 @@ fn main() {
     // Execute based on subcommand and backend
     match (subcommand, backend) {
         (Subcommand::Run, Backend::Interpreter) => {
+            panic!(
+                "The interpreter is no longer supported and will be removed. Run with c backend (using -c flag) instead!"
+            );
             run_interpreter(all_asts, &input_paths[0]);
         }
         (Subcommand::Run, Backend::C) => {
             std::process::exit(run_c(&all_asts, &base_dir));
         }
         (Subcommand::Test, Backend::Interpreter) => {
+            panic!(
+                "The interpreter is no longer supported and will be removed. Run with c backend (using -c flag) instead!"
+            );
             run_test_suite_interpreter(all_asts, &input_paths[0]);
         }
         (Subcommand::Test, Backend::C) => {
             std::process::exit(run_c_tests(&all_asts, &base_dir));
         }
         (Subcommand::Build, Backend::Interpreter) => {
+            panic!(
+                "The interpreter is no longer supported and will be removed. Run with c backend (using -c flag) instead!"
+            );
             eprintln!("Note: 'build' with interpreter backend just validates the code.");
             // The interpreter doesn't need a separate build step
             // Just validate that the code parses and type-checks
