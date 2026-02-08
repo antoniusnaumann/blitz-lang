@@ -3,7 +3,7 @@ fn lower(asts List(Ast)) Hir {
 
     for asts |ast| {
         let name = ast.origin.mod_name()
-        let index = hir.find(ast) else {
+        let index = hir.find(name) else {
             let mod = new_module(name)
             hir.mut.push(mod)
         }

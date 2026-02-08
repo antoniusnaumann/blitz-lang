@@ -8772,9 +8772,9 @@ void todo(char* msg) __attribute__((noreturn));
 
             // blitz_assert_cmp_failed helper
             full_impl.push_str("void blitz_assert_cmp_failed(const char* cond_str, const char* left_str, const char* left_val, const char* right_str, const char* right_val) {\n");
-            full_impl.push_str("    int _len = snprintf(NULL, 0, \"Assertion '%s' failed\\n  left:  %s = %s\\n  right: %s = %s\\n\", cond_str, left_str, left_val, right_str, right_val);\n");
+            full_impl.push_str("    int _len = snprintf(NULL, 0, \"Assertion '%s' failed\\n  left:  %s ('%s')\\n  right: %s ('%s')\\n\", cond_str, left_val, left_str, right_val, right_str);\n");
             full_impl.push_str("    char* _msg = (char*)malloc((size_t)_len + 1);\n");
-            full_impl.push_str("    snprintf(_msg, (size_t)_len + 1, \"Assertion '%s' failed\\n  left:  %s = %s\\n  right: %s = %s\\n\", cond_str, left_str, left_val, right_str, right_val);\n");
+            full_impl.push_str("    snprintf(_msg, (size_t)_len + 1, \"Assertion '%s' failed\\n  left:  %s ('%s')\\n  right: %s ('%s')\\n\", cond_str, left_val, left_str, right_val, right_str);\n");
             full_impl.push_str("    panic(_msg);\n");
             full_impl.push_str("}\n\n");
 
@@ -8985,7 +8985,7 @@ void todo(char* msg) __attribute__((noreturn));
             code.push_str("        int sig = sigsetjmp(blitz_test_signal_buf, 1);\n");
             code.push_str("        if (sig != 0) {\n");
             code.push_str("            const char* sig_name = sig == SIGSEGV ? \"SIGSEGV\" : sig == SIGBUS ? \"SIGBUS\" : sig == SIGABRT ? \"SIGABRT\" : \"SIGNAL\";\n");
-            code.push_str("            printf(\"\\x1b[91mCRASH\\x1b[0m ... \\\"%s\\\"\\n\", \"");
+            code.push_str("            printf(\"\\x1b[95mEXIT\\x1b[0m ... \\\"%s\\\"\\n\", \"");
             code.push_str(&escaped_name);
             code.push_str("\");\n");
             code.push_str(

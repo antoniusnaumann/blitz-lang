@@ -1,0 +1,123 @@
+test "New HIR contains core module" {
+    let hir = new_hir()
+    assert hir.mods.len() == 1
+
+    let mod_id = hir.find("core")
+    assert mod_id != none
+    assert hir.get(mod_id.unwrap()).name == "core"
+}
+
+test "Create module name from AST" {
+    let ast = Ast(origin: "some/mymodule/file.blitz", items: [])
+    mut asts = []
+    asts ++= ast
+    let hir = asts.lower()
+    
+    // Should create a module named "mymodule" (plus core module = 2 total)
+    assert hir.mods.len() == 2
+    
+    let mod_id = hir.find("mymodule")
+    assert mod_id != none
+    
+    let mod = hir.get(mod_id.unwrap())
+    assert mod.name == "mymodule"
+}
+
+test "Collect ASTs into module" {
+    // Multiple files in same directory should go to same module
+    let fn1 = Fn(
+        name: Ident(name: "add", span: empty_span()),
+        args: [],
+        type: none,
+        body: Block(statements: [], span: empty_span()),
+        span: empty_span()
+    )
+    mut items1 = []
+    items1 ++= fn1
+    let ast1 = Ast(origin: "src/math/add.blitz", items: items1)
+    
+    let fn2 = Fn(
+        name: Ident(name: "subtract", span: empty_span()),
+        args: [],
+        type: none,
+        body: Block(statements: [], span: empty_span()),
+        span: empty_span()
+    )
+    mut items2 = []
+    items2 ++= fn2
+    let ast2 = Ast(origin: "src/math/subtract.blitz", items: items2)
+    
+    mut asts = []
+    asts ++= ast1
+    asts ++= ast2
+    let hir = asts.lower()
+    
+    // Should have only one "math" module (plus core) = 2 total
+    assert hir.mods.len() == 2
+    
+    let mod_id = hir.find("math")
+    assert mod_id != none
+    
+    let mod = hir.get(mod_id.unwrap())
+    assert mod.funcs.len() == 2
+}
+
+test "Create module names from ASTs" {
+    let ast1 = Ast(origin: "src/module1/file.blitz", items: [])
+    let ast2 = Ast(origin: "src/module2/file.blitz", items: [])
+    let ast3 = Ast(origin: "src/module3/file.blitz", items: [])
+    
+    mut asts = []
+    asts ++= ast1
+    asts ++= ast2
+    asts ++= ast3
+    let hir = asts.lower()
+    
+    // Should have 3 modules + core = 4 total
+    assert hir.mods.len() == 4
+    assert hir.find("module1") != none
+    assert hir.find("module2") != none
+    assert hir.find("module3") != none
+}
+
+test "Lower types" {
+    let struct_def = Struct(
+        sig: Type(name: "Point", params: [], span: empty_span()),
+        fields: [
+            Field(
+                name: Ident(name: "x", span: empty_span()),
+                type: Type(name: "Int", params: [], span: empty_span()),
+                span: empty_span()
+            ),
+            Field(
+                name: Ident(name: "y", span: empty_span()),
+                type: Type(name: "Int", params: [], span: empty_span()),
+                span: empty_span()
+            )
+        ],
+        span: empty_span()
+    )
+    
+    mut items = []
+    items ++= struct_def
+    let ast = Ast(origin: "src/geometry/point.blitz", items:)
+    mut asts = []
+    asts ++= ast
+    let hir = asts.lower()
+    
+    let mod_id = hir.find("geometry")
+    assert mod_id != none
+    
+    let mod = hir.get(mod_id.unwrap())
+    assert mod.types.len() == 1
+    
+    let type_def = mod.types[0]
+    assert type_def.name.name == "Point"
+    
+    switch type_def.kind {
+        StructDef { 
+            assert it.fields.len() == 2
+        }
+        else { panic("Expected StructDef") }
+    }
+}

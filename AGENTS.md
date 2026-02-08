@@ -28,7 +28,7 @@ compiler/                   # Self-hosted compiler in Blitz
 ## Build / Run / Test Commands
 
 All commands are run from `bootstrap/interpreter/` unless noted otherwise.
-Prefer the C transpiler backend if possible.
+Prefer the C transpiler backend if possible, especially for running tests.
 
 ```bash
 # Build the Rust workspace
@@ -92,6 +92,7 @@ BLITZ_DEBUG=1 cargo run -- test -c ../../compiler/
 - Remove unreachable patterns and duplicate match arms
 
 ## Code Style — Blitz (compiler/)
+In the Blitz codebase, never use hacks or shortcuts. Try to implement the feature completely and cleanly. In case a feature is too large to implement it in one session, use the builtin todo("reason") function, where reason is one short sentence describing what needs to be done to implement the feature in full.
 
 ### File Organization
 - One concept per file: `lexer.blitz`, `parser.blitz`, `tokens.blitz`
