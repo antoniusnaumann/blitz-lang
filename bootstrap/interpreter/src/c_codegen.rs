@@ -196,6 +196,12 @@ struct CCodegen {
     list_eq_needed: HashSet<String>,
     /// Expected list element type for list literal generation (used in comparisons)
     expected_list_elem_type: Option<String>,
+    /// Expected type for the current expression being generated (set by outer constructor when
+    /// generating field values). Used to decide whether to wrap a constructor in its parent
+    /// tagged union or produce a bare struct. For example, when generating `Ident(...)` as
+    /// a field value for `TypeDef.name` (which is type `Ident`), this is set to `"Ident"` so
+    /// the Ident constructor produces a bare `Ident*` rather than wrapping in `SwitchLabel`.
+    expected_expr_type: Option<String>,
     /// Track which display functions need to be generated for assertion output (c_type_name)
     display_needed: HashSet<String>,
     /// Whether to show debug output during code generation
@@ -248,6 +254,7 @@ impl CCodegen {
             test_definitions: Vec::new(),
             list_eq_needed: HashSet::new(),
             expected_list_elem_type: None,
+            expected_expr_type: None,
             display_needed: HashSet::new(),
             debug: std::env::var("BLITZ_DEBUG").is_ok(),
         }
@@ -4800,7 +4807,34 @@ impl CCodegen {
                                     } else if vt == "TokenKind" && eft == "UnaryOperator" {
                                         format!("TokenKind_to_UnaryOperator({})", var_name)
                                     } else {
-                                        var_name
+                                        // Check if the variable is typed as a union but the field
+                                        // expects a bare struct that's a variant of that union.
+                                        // e.g., var_type = "SwitchLabel*" but field expects "Ident"
+                                        let vt_base = vt.trim_end_matches('*');
+                                        if vt_base != eft.as_str()
+                                            && self.tagged_union_types.contains(vt_base)
+                                        {
+                                            // The variable is a tagged union — check if the expected
+                                            // field type is one of its variants
+                                            if let Some(variants) =
+                                                self.variant_to_union.get(eft.as_str())
+                                            {
+                                                if variants.contains(vt_base) {
+                                                    // Extract the inner variant value from the union
+                                                    debug_println!(self,
+                                                        "DEBUG Constructor field: extracting variant {} from union {} (var={})",
+                                                        eft, vt_base, var_name
+                                                    );
+                                                    format!("{}->data.as_{}", var_name, eft)
+                                                } else {
+                                                    var_name
+                                                }
+                                            } else {
+                                                var_name
+                                            }
+                                        } else {
+                                            var_name
+                                        }
                                     }
                                 } else {
                                     var_name
@@ -4817,7 +4851,16 @@ impl CCodegen {
                             }
                         }
                     } else {
-                        self.generate_expression(&arg.init, is_main)
+                        // Set expected_expr_type from the field's declared type so that
+                        // nested constructors know whether to produce a bare struct or
+                        // wrap in a tagged union.
+                        let old_expected = self.expected_expr_type.take();
+                        if let Some(ref eft) = expected_field_type {
+                            self.expected_expr_type = Some(eft.clone());
+                        }
+                        let result = self.generate_expression(&arg.init, is_main);
+                        self.expected_expr_type = old_expected;
+                        result
                     };
 
                     // Auto-unwrap Option types for struct fields that expect pointers
@@ -4885,18 +4928,34 @@ impl CCodegen {
                 }
 
                 // Check if this is a variant of a tagged union (like Lit_Bool -> Expression)
-                // BUT: if the return type directly expects this type (e.g., Option(Call) not Option(Expression)),
-                // we should NOT wrap it in the parent union - we want the bare struct.
-                let should_skip_union_wrapping = if let Some(ref return_type) =
-                    self.current_return_type
+                // BUT: if the context directly expects the bare struct type (not a union),
+                // we should NOT wrap it in the parent union.
+                //
+                // Contexts that tell us to skip wrapping:
+                // 1. expected_expr_type is set and matches our type (from outer constructor field)
+                // 2. Return type is Option(X) where X matches our type
+                // 3. Return type directly matches our type (bare struct return)
+                // 4. No context at all (let binding without type annotation) AND the type
+                //    is used as a struct field type somewhere — prefer bare struct
+                let should_skip_union_wrapping = if let Some(ref expected) = self.expected_expr_type
                 {
+                    // The outer constructor's field expects a specific type.
+                    // If that type matches our constructor type, produce a bare struct.
+                    // e.g., TypeDef.name is "Ident" and we're constructing Ident(...)
+                    if expected == &type_name {
+                        debug_println!(self,
+                            "DEBUG Constructor: skipping union wrap because expected_expr_type '{}' matches type_name={}",
+                            expected, type_name
+                        );
+                        true
+                    } else {
+                        false
+                    }
+                } else if let Some(ref return_type) = self.current_return_type {
                     // If return type is Option(X), check if X matches our type_name
                     if return_type.name == "Option" && !return_type.params.is_empty() {
-                        // Get the inner type name, monomorphized if it has params
-                        // e.g., Lit(Int) -> Lit_Int
                         let inner_type = &return_type.params[0];
                         let inner_monomorphized = self.type_name_for_instance(inner_type);
-                        // If the inner type matches our constructor type, don't wrap in union
                         if inner_monomorphized == type_name
                             || inner_monomorphized.as_str() == type_name.as_str()
                         {
@@ -4908,7 +4967,17 @@ impl CCodegen {
                         } else {
                             false
                         }
+                    } else if return_type.name == type_name {
+                        // Return type directly matches (e.g., fn lower() -> TypeDef returns TypeDef)
+                        debug_println!(self,
+                            "DEBUG Constructor: skipping union wrap because return type '{}' matches type_name={}",
+                            return_type.name, type_name
+                        );
+                        true
                     } else {
+                        // Return type is a different type — check if it's a union that contains our type
+                        // If so, we DO need wrapping (should_skip = false)
+                        // If not, it's unrelated context, no reason to wrap
                         false
                     }
                 } else {
@@ -5623,10 +5692,54 @@ impl CCodegen {
                                     enum_name, len, len
                                 ));
                                 } else {
-                                    // Fall back to stub
-                                    code.push_str("            /* TODO: non-integer list literal requires type inference */\n");
-                                    code.push_str(&format!("            void* _tmp = NULL;\n"));
-                                    code.push_str("            (void*){{}};\n");
+                                    // Not an enum variant - check if it's a local variable
+                                    // and infer the list element type from variable_types
+                                    let var_type = if let parser::Expression::Ident(first_ident) =
+                                        &list.elems[0]
+                                    {
+                                        self.variable_types.get(&first_ident.name).cloned().or_else(
+                                            || {
+                                                let mangled =
+                                                    self.get_variable_name(&first_ident.name);
+                                                self.variable_types.get(&mangled).cloned()
+                                            },
+                                        )
+                                    } else {
+                                        None
+                                    };
+
+                                    if let Some(ref vt) = var_type {
+                                        // We know the element type from variable_types
+                                        // Determine the base type name for the list (strip pointer suffix)
+                                        let base_type = vt.trim_end_matches('*');
+                                        let _is_pointer = vt.ends_with('*');
+                                        let elem_c_type = vt.as_str();
+                                        let list_type = format!("List_{}", base_type);
+
+                                        code.push_str(&format!(
+                                            "        {}* _tmp = malloc(sizeof({}) * {});\n",
+                                            elem_c_type, elem_c_type, len
+                                        ));
+                                        for (i, elem) in list.elems.iter().enumerate() {
+                                            let elem_code = self.generate_expression(elem, is_main);
+                                            code.push_str(&format!(
+                                                "        _tmp[{}] = {};\n",
+                                                i, elem_code
+                                            ));
+                                        }
+                                        code.push_str(&format!(
+                                            "        ({}){{.data = _tmp, .len = {}, .cap = {}}};\n",
+                                            list_type, len, len
+                                        ));
+
+                                        // Ensure we have a list append function for this element type
+                                        self.list_append_needed.insert(base_type.to_string());
+                                    } else {
+                                        // Fall back to stub
+                                        code.push_str("            /* TODO: non-integer list literal requires type inference */\n");
+                                        code.push_str(&format!("            void* _tmp = NULL;\n"));
+                                        code.push_str("            (void*){{}};\n");
+                                    }
                                 }
                             } else {
                                 // Check if all elements are constructors
