@@ -3162,7 +3162,18 @@ impl CCodegen {
                     "range" => return "Range*".to_string(),
                     "span" => return "Span*".to_string(),
                     "path" => return "char*".to_string(),
-                    "name" => return "char*".to_string(),
+                    "name" => {
+                        // 'name' is String for Ident, Type, Module but Ident for Fn, Arg, Field, Call, Declaration, etc.
+                        let parent_type = self.infer_expr_type(&member.parent);
+                        let struct_name = parent_type.trim_end_matches('*');
+                        if let Some(fields) = self.struct_field_types.get(struct_name) {
+                            if let Some(field_type) = fields.get("name") {
+                                return self.map_type_name(field_type);
+                            }
+                        }
+                        // Fallback to char* (String) for backwards compatibility
+                        return "char*".to_string();
+                    }
                     "kind" => {
                         // Check the parent type to determine which 'kind' field this is
                         let parent_type = self.infer_expr_type(&member.parent);
@@ -3176,7 +3187,18 @@ impl CCodegen {
                         return "TokenKind".to_string();
                     }
                     // List fields
-                    "args" => return "List_CallArg".to_string(),
+                    "args" => {
+                        // 'args' is List(CallArg) for Call/Constructor, List(Arg) for Fn, List(TypeRef) for Nominal
+                        let parent_type = self.infer_expr_type(&member.parent);
+                        let struct_name = parent_type.trim_end_matches('*');
+                        if let Some(fields) = self.struct_field_types.get(struct_name) {
+                            if let Some(field_type) = fields.get("args") {
+                                return self.map_type_name(field_type);
+                            }
+                        }
+                        // Fallback to List_CallArg for backwards compatibility
+                        return "List_CallArg".to_string();
+                    }
                     "elems" => return "List_Expression".to_string(),
                     "cases" => {
                         // Could be List_SwitchCase or List_Case depending on context
@@ -3201,8 +3223,30 @@ impl CCodegen {
                         // Fallback to List_Statement for backwards compatibility
                         return "List_Statement".to_string();
                     }
-                    "params" => return "List_Arg".to_string(),
-                    "fields" => return "List_Field".to_string(),
+                    "params" => {
+                        // 'params' is List(Type) for Type, List(TypeRef) for FuncDef
+                        let parent_type = self.infer_expr_type(&member.parent);
+                        let struct_name = parent_type.trim_end_matches('*');
+                        if let Some(fields) = self.struct_field_types.get(struct_name) {
+                            if let Some(field_type) = fields.get("params") {
+                                return self.map_type_name(field_type);
+                            }
+                        }
+                        // Fallback to List_Arg for backwards compatibility
+                        return "List_Arg".to_string();
+                    }
+                    "fields" => {
+                        // 'fields' is List(Field) for Struct, List(FieldDef) for StructDef
+                        let parent_type = self.infer_expr_type(&member.parent);
+                        let struct_name = parent_type.trim_end_matches('*');
+                        if let Some(fields_map) = self.struct_field_types.get(struct_name) {
+                            if let Some(field_type) = fields_map.get("fields") {
+                                return self.map_type_name(field_type);
+                            }
+                        }
+                        // Fallback to List_Field for backwards compatibility
+                        return "List_Field".to_string();
+                    }
                     "value" => {
                         // For Option types, return the inner type
                         let parent_type = self.infer_expr_type(&member.parent);
