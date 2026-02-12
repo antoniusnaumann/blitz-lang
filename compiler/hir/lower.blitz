@@ -6,38 +6,34 @@ struct ModuleStub {
 
 fn lower(asts List(Ast)) Hir {
     var stubs = []
-    // TODO: yet another pass where stubs for all types are created first
-    // TODO: maybe pre-sort ASTs by module name already
     for asts |ast| {
         stubs.mut.insert(ast)        
     }
 
     var hir = new_hir()
+    var index = hir.mods.len()
 
-    // TODO: this stuff is outdated, iterate over the module stubs
-    for asts |ast| {
-        let name = ast.origin.mod_name()
-        let index = hir.find(name) else {
-            let mod = new_module(name)
-            hir.mut.push(mod)
+    for stubs |stub| {
+        let mod = new_module(stub.name)
+
+        for stub.asts |ast| {
+            for ast.items |item| {
+                mod.mut.push_type(mut hir.types, item)
+            }
         }
 
-        for ast.items |item| {
-            hir.mods[index.id].mut.push_type(mut hir.types, item)
-        }
+        hir.mut.push(mod)
     }
 
-    for asts |ast| {
-        let name = ast.origin.mod_name()
-        let index = hir.find(name) else {
-            panic("All modules should have been pushed in the first pass!")
-            // HACK: this is never reachable, but the bootstrap compiler typechecking currently cannot handle diverging types
-            ModId(id: 0)
+    // TODO: once pass for func signatures first maybe? or supply AST func signatures?
+    for stubs |stub| {
+        for stub.asts |ast| {
+            for ast.items |item| {
+                hir.mods[index].mut.push_func(mut hir.types, item)
+            }
         }
-
-        for ast.items |item| {
-            hir.mods[index.id].mut.push_func(mut hir.types, item)
-        }
+        
+        index += 1 
     }
 
     hir

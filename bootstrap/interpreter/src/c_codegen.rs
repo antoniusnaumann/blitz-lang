@@ -2615,8 +2615,34 @@ impl CCodegen {
                 self.analyze_list_usage_in_stmts(&w.body, empty_list_vars);
             }
             parser::Expression::For(for_expr) => {
+                // Temporarily register the iteration variable's type so that
+                // infer_expr_type can resolve it when analyzing calls inside the body.
+                // e.g., `for asts |ast| { stubs.mut.insert(ast) }` — we need to know
+                // that `ast` is `Ast*` to disambiguate the insert() overload.
+                let iter_type = self.infer_expr_type(&for_expr.iter);
+                let mut temp_var: Option<String> = None;
+                if iter_type.starts_with("List_") {
+                    let inner = &iter_type[5..]; // strip "List_" prefix
+                    let is_struct =
+                        self.seen_types.contains(inner) && !self.enum_types.contains(inner);
+                    let is_tagged = self.tagged_union_types.contains(inner);
+                    let elem_c_type = if is_struct || is_tagged {
+                        format!("{}*", inner)
+                    } else {
+                        inner.to_string()
+                    };
+                    let elem_var = for_expr.elem.clone();
+                    if !self.variable_types.contains_key(&elem_var) {
+                        self.variable_types.insert(elem_var.clone(), elem_c_type);
+                        temp_var = Some(elem_var);
+                    }
+                }
                 // Scan the for body
                 self.analyze_list_usage_in_stmts(&for_expr.body, empty_list_vars);
+                // Clean up temporary variable type
+                if let Some(var) = temp_var {
+                    self.variable_types.remove(&var);
+                }
             }
             parser::Expression::If(if_expr) => {
                 // If only has cond and body; else is handled via BinaryOp::Else
@@ -2703,6 +2729,100 @@ impl CCodegen {
                 self.analyze_list_usage_in_expr(&**ret_expr, empty_list_vars);
             }
             parser::Expression::Call(call) => {
+                // Check if any argument to this call is an empty-list variable.
+                // If so, look up the function signature to infer the expected list type.
+                // This handles patterns like: stubs.mut.insert(ast)
+                // where `insert(mut stubs List(ModuleStub), ast Ast)` tells us stubs is List(ModuleStub).
+                if let Some(signatures) = self.function_signatures.get(&call.name) {
+                    // Find which arg positions are empty-list variables
+                    let mut empty_list_positions: Vec<(usize, String)> = Vec::new();
+                    for (i, arg) in call.args.iter().enumerate() {
+                        if let Some(var_name) = Self::extract_root_ident(&arg.init) {
+                            if empty_list_vars.contains_key(&var_name) {
+                                empty_list_positions.push((i, var_name));
+                            }
+                        }
+                    }
+                    if !empty_list_positions.is_empty() {
+                        // Infer types for all non-empty-list arguments for disambiguation
+                        let arg_types: Vec<Option<String>> = call
+                            .args
+                            .iter()
+                            .enumerate()
+                            .map(|(i, arg)| {
+                                if empty_list_positions.iter().any(|(pos, _)| *pos == i) {
+                                    None // unknown — this is the empty list we're trying to infer
+                                } else {
+                                    let inferred = self.infer_expr_type(&arg.init);
+                                    if inferred == "int64_t" || inferred == "void" {
+                                        None
+                                    } else {
+                                        Some(inferred)
+                                    }
+                                }
+                            })
+                            .collect();
+
+                        // Try to find the best matching signature
+                        fn normalize_type_for_match(s: &str) -> &str {
+                            let s = s.trim_end_matches('*');
+                            match s {
+                                "char" | "String" => "String",
+                                "int64_t" | "Int" => "Int",
+                                "bool" | "Bool" => "Bool",
+                                "double" | "Float" => "Float",
+                                "uint32_t" | "Rune" => "Rune",
+                                other => other,
+                            }
+                        }
+
+                        let mut best_match: Option<&Vec<String>> = None;
+                        for (param_types, _) in signatures.iter() {
+                            if param_types.len() != call.args.len() {
+                                continue;
+                            }
+                            // Check if all known arg types match this signature
+                            let all_match = arg_types.iter().enumerate().all(|(i, arg_type)| {
+                                match arg_type {
+                                    None => true, // unknown, matches anything
+                                    Some(at) => {
+                                        normalize_type_for_match(&param_types[i])
+                                            == normalize_type_for_match(at)
+                                    }
+                                }
+                            });
+                            if all_match {
+                                best_match = Some(param_types);
+                                break;
+                            }
+                        }
+
+                        // If no exact match, fall back to first signature with matching arg count
+                        if best_match.is_none() {
+                            for (param_types, _) in signatures.iter() {
+                                if param_types.len() == call.args.len() {
+                                    best_match = Some(param_types);
+                                    break;
+                                }
+                            }
+                        }
+
+                        if let Some(param_types) = best_match {
+                            for (pos, var_name) in &empty_list_positions {
+                                if let Some(param_type) = param_types.get(*pos) {
+                                    if param_type.starts_with("List_") {
+                                        debug_println!(self,
+                                            "DEBUG preanalyze_empty_lists: variable '{}' passed to {}() param {}, inferred type '{}'",
+                                            var_name, call.name, pos, param_type
+                                        );
+                                        self.variable_types
+                                            .insert(var_name.clone(), param_type.clone());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 // Recurse into call arguments
                 for arg in &call.args {
                     self.analyze_list_usage_in_expr(&*arg.init, empty_list_vars);
@@ -2715,6 +2835,22 @@ impl CCodegen {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Extract the root identifier name from an expression, stripping `.mut` member accesses.
+    /// For example: `stubs.mut` -> Some("stubs"), `stubs` -> Some("stubs"), `foo.bar` -> None
+    fn extract_root_ident(expr: &parser::Expression) -> Option<String> {
+        match expr {
+            parser::Expression::Ident(ident) => Some(ident.name.clone()),
+            parser::Expression::Member(member) => {
+                if member.member == "mut" {
+                    Self::extract_root_ident(&member.parent)
+                } else {
+                    None
+                }
+            }
+            _ => None,
         }
     }
 
