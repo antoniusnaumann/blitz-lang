@@ -1,6 +1,20 @@
+struct ModuleStub {
+    asts List(Ast)
+    path String
+    name String
+}
+
 fn lower(asts List(Ast)) Hir {
+    mut stubs = []
+    // TODO: yet another pass where stubs for all types are created first
+    // TODO: maybe pre-sort ASTs by module name already
+    for asts |ast| {
+        stubs.mut.insert(ast)        
+    }
+
     mut hir = new_hir()
 
+    // TODO: this stuff is outdated, iterate over the module stubs
     for asts |ast| {
         let name = ast.origin.mod_name()
         let index = hir.find(name) else {
@@ -29,6 +43,19 @@ fn lower(asts List(Ast)) Hir {
     hir
 }
 
+fn insert(mut stubs List(ModuleStub), ast Ast) {
+    mut index = 0 
+    while index < stubs.len() {
+        if stubs[index].path == ast.origin.mod_path() {
+            stubs[index].asts ++= ast
+            return
+        }
+        index += 1
+    }
+
+    stubs ++= ModuleStub(asts: [ast], path: ast.origin.mod_path(), name: ast.origin.mod_name())
+}
+
 fn mod_name(path String) String {
     let split = path.split('/')
     if split.len() < 2 { "" }
@@ -36,8 +63,25 @@ fn mod_name(path String) String {
     split[split.len() - 2]
 }
 
+fn mod_path(path String) String {
+    let split = path.split('/')
+    mut result = ""
+    mut index = 0
+    while index < split.len() - 1 {
+        result ++= split[index]
+        result ++= '/'
+        index += 1
+    }
+
+    result
+}
+
 test "Extract mod name from path" {
     assert "some/module/with/a/name/file.blitz".mod_name() == "name"
+}
+
+test "Extract mod path from path" {
+    assert "this/is/a/module/with_a_file.blitz".mod_path() == "this/is/a/module/"
 }
 
 fn push_type(mut mod Module, mut types List(TypeKind), item Definition) {
@@ -63,6 +107,20 @@ fn push_func(mut mod Module, mut types List(TypeKind), item Definition) {
             // nothing to do, types should've already been pushed
         }
     }
+}
+
+fn lower(ty Type, mut types List(TypeKind)) TypeRef {
+    let chars = ty.name.chars()
+    let result = if ty.params.len() == 0 and chars.len() == 1 {
+        GenericId(letter: chars[0])
+    } else {
+        let args = for ty.params |param| {
+            param.lower(mut types)
+        }
+        // TODO: find type definition and replace
+        Nominal(def_id: TypeId(id: 0), args:)
+    }
+    types.mut.insert(result)    
 }
 
 fn lower(def Struct, mut types List(TypeKind)) TypeDef {

@@ -4,7 +4,7 @@ struct Hir {
 }
 
 fn new_hir() Hir {
-    let core_module = Module(name: "core", parent: none, childs: [], funcs: [], types: [], func_export: [], type_export: [])
+    let core_module = Module(name: "core", funcs: [], types: [], func_export: [], type_export: [])
     // TODO: insert builtin types as part of the "core" module
 
     Hir(mods: [core_module], types: [])
@@ -89,19 +89,18 @@ union TypeKind {
 }
 
 struct Nominal {
-    def_id  TypeId
-    args    List(TypeRef)
+    def_id TypeId
+    args   List(TypeRef)
 }
 
 struct TypeParam {
     local_id Int
 }
 
-
 struct Module {
    name   String
-   parent Option(ModId)
-   childs List(ModId) 
+   // parent Option(ModId)
+   // childs List(ModId) 
    funcs  List(FuncDef)  // indexed by FuncId
    types  List(TypeDef)  // indexed by TypeId
 
@@ -110,7 +109,7 @@ struct Module {
 }
 
 fn new_module(name String) Module {
-    Module(name:, parent: none, childs: [], funcs: [], types: [], func_export: [], type_export: [])
+    Module(name:, funcs: [], types: [], func_export: [], type_export: [])
 }
 
 fn push(mut mod Module, def FuncDef) FuncId {
@@ -160,7 +159,7 @@ struct FuncDef {
 }
 
 struct GenericId {
-    name Rune // take advantage of the fact that type params are always single letter
+    letter Rune // take advantage of the fact that type params are always single letter
 }
 
 struct FuncId {
