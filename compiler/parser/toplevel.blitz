@@ -33,7 +33,7 @@ fn parse_struct(mut parser Parser) Option(Struct) {
 
 fn parse_fields(mut parser Parser) List(Field) {
     parser.mut.expect(lbrace)
-    mut fields = []
+    var fields = []
 
     parser.mut.skip_newlines()
     while !parser.has(rbrace) {
@@ -59,11 +59,11 @@ fn parse_union(mut parser Parser) Option(Union) {
 
 fn parse_cases(mut parser Parser) List(Case) {
     parser.mut.expect(lbrace)
-    mut cases = []
+    var cases = []
     parser.mut.skip_newlines()
     while !parser.has(rbrace) {
         let span = parser.span()
-        mut label = none
+        var label = none
         if parser.has(ident) {
             label = parser.mut.parse_ident()
             if parser.has(colon) {
@@ -99,7 +99,7 @@ fn parse_fn(mut parser Parser) Option(Fn) {
     let ident = try parser.mut.parse_ident()
 
     try parser.mut.expect(lparen)
-    mut args = []
+    var args = []
     while parser.mut.accept(rparen) == none {
         let arg = try parser.mut.parse_arg()
         args ++= arg
@@ -125,7 +125,7 @@ fn parse_statement(mut parser Parser) Option(Statement) {
     parser.mut.skip_newlines()
     let token = parser.peek()
     switch token.kind {
-        mut_ { parser.mut.parse_declaration() else todo("recover") }
+        var_ { parser.mut.parse_declaration() else todo("recover") }
         let_ { parser.mut.parse_declaration() else todo("recover") }
         else { parser.mut.parse_expression() else todo("recover") }
     }
@@ -134,8 +134,8 @@ fn parse_statement(mut parser Parser) Option(Statement) {
 fn parse_declaration(mut parser Parser) Option(Declaration) {
     let modifier = parser.tok()
     let is_mut = switch modifier.kind {
-        mut_ { false }
-        let_ { true }
+        var_ { true }
+        let_ { false }
         else { panic("unreachable") }
     }
     let name = try parser.mut.parse_ident()
@@ -171,7 +171,7 @@ fn parse_type_ident(mut parser Parser) Option(Type) {
 fn parse_type_params(mut parser Parser) List(Type) {
     let token = parser.mut.expect(lparen) else return []
 
-    mut params = []
+    var params = []
     while !parser.has(rparen) {
         params ++= parser.mut.parse_type() else return []
         parser.mut.accept(comma)

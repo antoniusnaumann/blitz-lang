@@ -65,6 +65,7 @@ impl<'a> Lexer<'a> {
                     "fn" => Fn,
                     "pub" => Pub,
                     "let" => Let,
+                    "var" => Var,
                     "mut" => Mut,
                     "for" => For,
                     "while" => While,

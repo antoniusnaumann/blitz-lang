@@ -12,6 +12,7 @@ union TokenKind {
 	fn_
 	pub_
 	let_
+	var_
 	mut_
 	for_
 	while_

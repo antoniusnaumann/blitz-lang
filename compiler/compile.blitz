@@ -3,7 +3,7 @@ fn compile_file(path String) {
 	let content = read(path).unwrap()
 
     // CODE -> AST
-	mut parser = new_parser(content)
+	var parser = new_parser(content)
 	let ast = Ast(items: parser.mut.parse(), origin: "main.blitz")
 
 	// AST -> HIR

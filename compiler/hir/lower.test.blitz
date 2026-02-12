@@ -9,7 +9,7 @@ test "New HIR contains core module" {
 
 test "Create module name from AST" {
     let ast = Ast(origin: "some/mymodule/file.blitz", items: [])
-    mut asts = []
+    var asts = []
     asts ++= ast
     let hir = asts.lower()
     
@@ -32,7 +32,7 @@ test "Collect ASTs into module" {
         body: Block(statements: [], span: empty_span()),
         span: empty_span()
     )
-    mut items1 = []
+    var items1 = []
     items1 ++= fn1
     let ast1 = Ast(origin: "src/math/add.blitz", items: items1)
     
@@ -43,11 +43,11 @@ test "Collect ASTs into module" {
         body: Block(statements: [], span: empty_span()),
         span: empty_span()
     )
-    mut items2 = []
+    var items2 = []
     items2 ++= fn2
     let ast2 = Ast(origin: "src/math/subtract.blitz", items: items2)
     
-    mut asts = []
+    var asts = []
     asts ++= ast1
     asts ++= ast2
     let hir = asts.lower()
@@ -67,7 +67,7 @@ test "Create module names from ASTs" {
     let ast2 = Ast(origin: "src/module2/file.blitz", items: [])
     let ast3 = Ast(origin: "src/module3/file.blitz", items: [])
     
-    mut asts = []
+    var asts = []
     asts ++= ast1
     asts ++= ast2
     asts ++= ast3
@@ -98,10 +98,10 @@ test "Lower types" {
         span: empty_span()
     )
     
-    mut items = []
+    var items = []
     items ++= struct_def
     let ast = Ast(origin: "src/geometry/point.blitz", items:)
-    mut asts = []
+    var asts = []
     asts ++= ast
     let hir = asts.lower()
     

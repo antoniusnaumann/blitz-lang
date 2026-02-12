@@ -20,7 +20,7 @@ fn get(reg Hir, name String) Option(Module) {
 }
 
 fn find(reg Hir, name String) Option(ModId) {
-    mut index = 0
+    var index = 0
     while index < reg.mods.len() {
         let item = reg.mods[index]
         if item.name == name { return ModId(id: index) }
@@ -35,7 +35,7 @@ fn find(reg Hir, type TypeKind) Option(TypeRef) {
 }
 
 fn find(types List(TypeKind), type TypeKind) Option(TypeRef) {
-    mut index = 0
+    var index = 0
     while index < types.len() {
         let item = types[index]
         if item == type { return TypeRef(id: index) }

@@ -221,7 +221,7 @@ impl Print for Statement {
         match self {
             Statement::Declaration(d) => format!(
                 "{} {}: {}{}",
-                if d.is_mut { "mut" } else { "let" },
+                if d.is_mut { "var" } else { "let" },
                 d.name,
                 d.r#type.print(),
                 d.init

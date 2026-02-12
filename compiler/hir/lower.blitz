@@ -5,14 +5,14 @@ struct ModuleStub {
 }
 
 fn lower(asts List(Ast)) Hir {
-    mut stubs = []
+    var stubs = []
     // TODO: yet another pass where stubs for all types are created first
     // TODO: maybe pre-sort ASTs by module name already
     for asts |ast| {
         stubs.mut.insert(ast)        
     }
 
-    mut hir = new_hir()
+    var hir = new_hir()
 
     // TODO: this stuff is outdated, iterate over the module stubs
     for asts |ast| {
@@ -44,7 +44,7 @@ fn lower(asts List(Ast)) Hir {
 }
 
 fn insert(mut stubs List(ModuleStub), ast Ast) {
-    mut index = 0 
+    var index = 0 
     while index < stubs.len() {
         if stubs[index].path == ast.origin.mod_path() {
             stubs[index].asts ++= ast
@@ -65,8 +65,8 @@ fn mod_name(path String) String {
 
 fn mod_path(path String) String {
     let split = path.split('/')
-    mut result = ""
-    mut index = 0
+    var result = ""
+    var index = 0
     while index < split.len() - 1 {
         result ++= split[index]
         result ++= '/'
@@ -125,7 +125,7 @@ fn lower(ty Type, mut types List(TypeKind)) TypeRef {
 
 fn lower(def Struct, mut types List(TypeKind)) TypeDef {
     let name = Ident(name: def.sig.name, span: def.sig.span)
-    mut fields = []
+    var fields = []
     for def.fields |field| {
         fields ++= FieldDef(name: field.name, type: TypeRef(id: 0))
     }
@@ -144,7 +144,7 @@ fn lower(def Union, mut types List(TypeKind)) TypeDef {
 
 fn lower(def Fn, mut types List(TypeKind)) FuncDef {
     let name = def.name
-    mut params = []
+    var params = []
     for def.args |arg| {
         params ++= TypeRef(id: 0)
     }

@@ -1,6 +1,6 @@
 test "Parse empty func" {
     let defs = "fn foo() {}".parse()
-    mut count = 0
+    var count = 0
     assert defs.len() == 1
     switch defs[0] {
         Fn { count = 1 }
@@ -11,7 +11,7 @@ test "Parse empty func" {
 
 fn parse_file(path String) {
     let content = read(path).unwrap()
-    mut parser = new_parser(content)
+    var parser = new_parser(content)
 	for parser.tokens |token| {
 	    if token.kind == error { print(parser.source.substr(token.span)) }
 		assert token.kind != error
@@ -47,14 +47,14 @@ test "Parse hir/definition.blitz" { parse_file("hir/definition.blitz") }
 test "Parse compile.blitz" { parse_file("compile.blitz") }
 
 // test "Should be slow" {
-//     mut s = "s"
-//     mut i = 0
+//     var s = "s"
+//     var i = 0
 //     while i < 100000 {
 //         s ++= "s"
 //         i += 1
 //     }
 
-//     mut t = 0
+//     var t = 0
 //     for s |e| {
 //         for s |m| {
 //             t = t + 1

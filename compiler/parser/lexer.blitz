@@ -14,13 +14,13 @@ fn new_lexer(source List(Rune)) Lexer {
 
 
 fn lex(source String) List(Token) {
-	mut lexer = new_lexer(source)
+	var lexer = new_lexer(source)
 	lexer.mut.lex()
 }
 
 fn lex(mut lexer Lexer) List(Token) {
-	mut tokens = []
-	mut token = lexer.mut.next()
+	var tokens = []
+	var token = lexer.mut.next()
 
 	while token != none {
 		tokens ++= token		
@@ -141,8 +141,9 @@ fn next(mut lexer Lexer) Option(Token) {
 						"alias" { alias_ }
 						"fn" { fn_ }
 						"pub" { pub_ }
-						"let" { let_ }
-						"mut" { mut_ }
+					"let" { let_ }
+					"var" { var_ }
+					"mut" { mut_ }
 						"for" { for_ }
 						"while" { while_ }
 						"if" { if_ }
@@ -247,7 +248,7 @@ fn skip_comment(mut lexer Lexer) {
 }
 
 fn skip_str(mut lexer Lexer) {
-	mut escape = false	
+	var escape = false	
 	while true {
 		if escape {
 			switch lexer.curr() {
@@ -271,7 +272,7 @@ fn skip_str(mut lexer Lexer) {
 }
 
 fn skip_ch(mut lexer Lexer) {
-	mut escape = false
+	var escape = false
 	while true {
 		if escape {
 			escape = false
@@ -291,7 +292,7 @@ fn skip_ch(mut lexer Lexer) {
 }
 
 fn skip_num(mut lexer Lexer) TokenKind {
-	mut dot = false	
+	var dot = false	
 	while true {
 		let ch = lexer.curr()
 		if !(ch >= '0' and ch <= '9') and ch != '.' { return if dot { float } else { int } }

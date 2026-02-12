@@ -111,7 +111,7 @@ fn main() {
 	}
 
 	// due to structural typing, the typename can be ommitted for struct constructors <== probably won't be implemented as it clashes with auto-deriving comparison operations on structs
-	mut v = (x: 1, y: 1, z: 3)
+	var v = (x: 1, y: 1, z: 3)
 	// structs automatically implement all operators that are supported by their fields
 	// mutability is only local, methods receive a copy of their struct params
 	v *= 2

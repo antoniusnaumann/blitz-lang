@@ -293,7 +293,7 @@ impl<'a> Parser<'a> {
     fn parse_statement(&mut self) -> Statement {
         self.skip_newlines();
         match self.lexer.kind() {
-            TokenKind::Let | TokenKind::Mut => self.parse_declaration().into(),
+            TokenKind::Let | TokenKind::Var => self.parse_declaration().into(),
             _ => self.parse_expression().into(),
         }
     }
@@ -477,7 +477,7 @@ impl<'a> Parser<'a> {
                 self.lexer.next(); // Consume the return token
                 if self.lexer.peek().is_some_and(|t| {
                     [
-                        TokenKind::Mut,
+                        TokenKind::Var,
                         TokenKind::Let,
                         TokenKind::Semicolon,
                         TokenKind::Rbrace,
@@ -997,7 +997,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_declaration(&mut self) -> Declaration {
-        let Token { kind, span } = self.one_of(&[TokenKind::Let, TokenKind::Mut]);
+        let Token { kind, span } = self.one_of(&[TokenKind::Let, TokenKind::Var]);
         let name = self.expect_ident().name.into();
 
         // TODO: type inference
@@ -1020,7 +1020,7 @@ impl<'a> Parser<'a> {
         Declaration {
             name,
             r#type,
-            is_mut: kind == TokenKind::Mut,
+            is_mut: kind == TokenKind::Var,
             span: span.merge(&self.span),
             init,
         }

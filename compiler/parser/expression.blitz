@@ -1,5 +1,5 @@
 fn parse_precedence(mut parser Parser, lhs Expression, min_prec Int) Option(Expression) {
-    mut left = lhs
+    var left = lhs
     parser.mut.skip_newlines()
 
     while true {
@@ -89,7 +89,7 @@ fn parse_expression_bp(mut parser Parser, min_prec Int) Option(Expression) {
             let span = token.span
             let empty_return = Return(expr: Block(statements: [], span:), span:)
             switch peek.kind {
-                mut_ { empty_return }
+                var_ { empty_return }
                 let_ { empty_return }
                 semicolon { empty_return }
                 rbrace { empty_return }
@@ -230,7 +230,7 @@ fn parse_switch(mut parser Parser) Option(Switch) {
     try parser.mut.expect(lbrace)
     parser.mut.skip_newlines()
 
-    mut cases = []
+    var cases = []
     while !parser.has(rbrace) {
         let case_start = parser.span()
         let label = try parser.mut.parse_switch_label()
@@ -262,7 +262,7 @@ fn parse_switch_label(mut parser Parser) Option(SwitchLabel) {
 }
 
 fn parse_member_call(mut parser Parser, target Expression, method Ident) Option(Call) {
-    mut call = parser.mut.parse_call(method)
+    var call = parser.mut.parse_call(method)
     call.ufcs = true
     call.args = [CallArg(label: none, init: target)] ++ call.args
     call
@@ -285,7 +285,7 @@ fn parse_constructor(mut parser Parser) Option(Constructor) {
 
 fn parse_args(mut parser Parser) Option(List(CallArg)) {
     try parser.mut.expect(lparen)
-    mut args = []
+    var args = []
 
     while !parser.has(rparen) {
         let param = parser.peek()
@@ -323,7 +323,7 @@ fn parse_args(mut parser Parser) Option(List(CallArg)) {
 
 fn parse_list(mut parser Parser) Option(List_) {
     let start = try parser.mut.expect(lbracket)
-    mut elems = []
+    var elems = []
 
     while !parser.has(rbracket) {
         parser.mut.skip_newlines()
@@ -389,8 +389,8 @@ fn parse_char_lit(mut parser Parser) Option(Lit(Rune)) {
 
 fn parse_int_lit(mut parser Parser) Option(Lit(Int)) {
     let token = parser.mut.expect(int)
-    mut index = token.span.range.begin
-    mut number = 0
+    var index = token.span.range.begin
+    var number = 0
 
     while index < token.span.range.until {
         number *= 10
@@ -420,7 +420,7 @@ fn parse_float_lit(mut parser Parser) Option(Lit(Float)) {
 fn parse_body(mut parser Parser) Option(Block) {
     try parser.mut.expect(lbrace)
     let first = parser.peek()
-    mut body = []
+    var body = []
     while !parser.has(rbrace) {
         let statement = try parser.mut.parse_statement()
         body ++= statement

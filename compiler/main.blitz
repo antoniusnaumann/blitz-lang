@@ -4,7 +4,7 @@ fn main() {
 	print(content) // should print the content of this file
 
 	let time = time()
-	mut parser = new_parser(content)
+	var parser = new_parser(content)
 	print("Lexing took: (ms)")
 	print(time() - time)
 	
@@ -39,7 +39,7 @@ fn parse_parser_file() {
 	print(content) // should print the content of this file
 
 	let time = time()
-	mut parser = new_parser(content)
+	var parser = new_parser(content)
 	print("Lexing took: (ms)")
 	print(time() - time)
 	for parser.tokens |token| {

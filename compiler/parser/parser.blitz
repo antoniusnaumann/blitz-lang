@@ -7,15 +7,15 @@ struct Parser {
 
 fn new_parser(source String) Parser {
     let chars = source.chars()
-    mut lexer = new_lexer(chars)
+    var lexer = new_lexer(chars)
     let tokens = lexer.mut.lex()
 
     Parser(tokens:, errors: [], source: chars, index: 0)
 }
 
 fn parse(mut parser Parser) List(Definition) {
-    mut result = []
-    mut def = parser.mut.next()
+    var result = []
+    var def = parser.mut.next()
 
     while def != none {
         result ++= def
@@ -26,12 +26,12 @@ fn parse(mut parser Parser) List(Definition) {
 }
 
 fn parse(source String) List(Definition) {
-    mut parser = new_parser(source)
+    var parser = new_parser(source)
     parser.mut.parse()
 }
 
 fn next(mut parser Parser) Option(Definition) {
-    mut def = none
+    var def = none
 
     parser.mut.skip_newlines()
     while def == none and !parser.eof() {
@@ -128,7 +128,7 @@ fn accept(mut parser Parser, expected TokenKind) Option(Token) {
 
 fn accept(mut parser Parser, expected List(TokenKind)) Option(Token) {
     parser.mut.skip_newlines()
-    mut any = false
+    var any = false
     for expected |kind| {
         if parser.has(kind) {
             any = true

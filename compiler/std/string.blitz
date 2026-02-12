@@ -2,7 +2,7 @@
  
 fn substr(source List(Rune), start Int, until Int) String {
 	let str = ""
-	mut index = start
+	var index = start
 	while index < until {
 	    str ++= source[index]
 	    index = index + 1
@@ -25,8 +25,8 @@ fn substr(source String, range Range) String {
 
 fn split(source String, sep Rune) List(String) {
     let chars = source.chars()
-    mut splits = []
-    mut curr = ""
+    var splits = []
+    var curr = ""
     
     for chars |ch| {
         if ch == sep {
@@ -47,7 +47,7 @@ fn strip_suffix(source String, suffix String) String {
 
     if chars.len() < check.len() { return source }
 
-    mut index = 0
+    var index = 0
     while index < check.len() {
         if chars[chars.len() - check.len() + index] != check[index] { return source }
         index += 1
