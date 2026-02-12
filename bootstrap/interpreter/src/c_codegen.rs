@@ -116,6 +116,24 @@ fn transpile_to_c_impl(asts: &[Ast], output_dir: &Path, include_tests: bool) -> 
         }
     }
 
+    // Check for accumulated codegen errors before writing output
+    if !codegen.codegen_errors.is_empty() {
+        eprintln!();
+        for err in &codegen.codegen_errors {
+            eprintln!("\x1b[91;1merror:\x1b[0m {}", err);
+        }
+        eprintln!();
+        return Err(format!(
+            "{} error{} detected during transpilation",
+            codegen.codegen_errors.len(),
+            if codegen.codegen_errors.len() == 1 {
+                ""
+            } else {
+                "s"
+            }
+        ));
+    }
+
     // Write output files (test mode writes test runner main instead of user main)
     codegen.write_files()?;
 
@@ -213,6 +231,9 @@ struct CCodegen {
     /// (i.e., originally value-type params marked `mut` that we pass as pointers)
     /// Maps mangled variable name -> original C type (before adding pointer)
     mut_pointer_params: HashMap<String, String>,
+    /// Accumulated codegen errors (e.g., unknown struct fields, undefined variables).
+    /// Collected during code generation and reported before C compilation.
+    codegen_errors: Vec<String>,
 }
 
 impl CCodegen {
@@ -266,6 +287,7 @@ impl CCodegen {
             debug: std::env::var("BLITZ_DEBUG").is_ok(),
             function_mut_params: HashMap::new(),
             mut_pointer_params: HashMap::new(),
+            codegen_errors: Vec::new(),
         }
     }
 
@@ -750,6 +772,9 @@ impl CCodegen {
     /// Register that we need a list append function for the given element type.
     /// This also ensures the corresponding List_<elem_type> is registered as a generic instance.
     fn register_list_append_needed(&mut self, elem_type: String) {
+        // Strip pointer suffix - list type names must be valid C identifiers (e.g. "TypeRef" not "TypeRef*")
+        let elem_type = elem_type.trim_end_matches('*').to_string();
+
         // Add to list_append_needed
         self.list_append_needed.insert(elem_type.clone());
 
@@ -2051,7 +2076,30 @@ impl CCodegen {
                                 binop.op
                             );
                         }
-                        c_type = self.infer_expr_type(init_expr);
+                        // Special handling for for-expression inits: temporarily register
+                        // the iteration variable's type so body inference can resolve method calls.
+                        if let parser::Expression::For(for_expr) = init_expr {
+                            let iter_type = self.infer_expr_type(&for_expr.iter);
+                            if iter_type.starts_with("List_") {
+                                let inner = &iter_type[5..]; // strip "List_" prefix
+                                let is_struct = self.seen_types.contains(inner)
+                                    && !self.enum_types.contains(inner);
+                                let is_tagged = self.tagged_union_types.contains(inner);
+                                let elem_c_type = if is_struct || is_tagged {
+                                    format!("{}*", inner)
+                                } else {
+                                    self.normalize_c_type(inner)
+                                };
+                                let elem_var = self.mangle_variable_name(&for_expr.elem);
+                                self.variable_types.insert(elem_var.clone(), elem_c_type);
+                                c_type = self.infer_expr_type(init_expr);
+                                self.variable_types.remove(&elem_var);
+                            } else {
+                                c_type = self.infer_expr_type(init_expr);
+                            }
+                        } else {
+                            c_type = self.infer_expr_type(init_expr);
+                        }
                         debug_println!(
                             self,
                             "DEBUG: Inferred type '{}' for variable '{}' (init expr kind: {:?})",
@@ -3590,6 +3638,20 @@ impl CCodegen {
                     "void".to_string()
                 }
             }
+            parser::Expression::For(for_expr) => {
+                // A for-expression with a single expression body collects values into a list.
+                // Infer the element type from the body expression and wrap it in List_.
+                if for_expr.body.len() == 1 {
+                    if let parser::Statement::Expression(body_expr) = &for_expr.body[0] {
+                        let elem_type = self.infer_expr_type(body_expr);
+                        if elem_type != "void" {
+                            let base = elem_type.trim_end_matches('*');
+                            return format!("List_{}", base);
+                        }
+                    }
+                }
+                "void".to_string()
+            }
             _ => "int64_t".to_string(), // Fallback for complex expressions
         }
     }
@@ -4885,6 +4947,26 @@ impl CCodegen {
                         .and_then(|fields| fields.get(field_name))
                         .cloned();
 
+                    // Validate that the field actually exists on this struct
+                    if expected_field_type.is_none() {
+                        if let Some(known_fields) = self.struct_field_types.get(&type_name) {
+                            let available: Vec<&String> = known_fields.keys().collect();
+                            self.codegen_errors.push(format!(
+                                "struct '{}' has no field '{}' (available fields: {})",
+                                type_name,
+                                field_name,
+                                if available.is_empty() {
+                                    "<none>".to_string()
+                                } else {
+                                    let mut sorted: Vec<&str> =
+                                        available.iter().map(|s| s.as_str()).collect();
+                                    sorted.sort();
+                                    sorted.join(", ")
+                                }
+                            ));
+                        }
+                    }
+
                     // Check if this is an empty list - we need to determine the correct type
                     let mut field_value = if let parser::Expression::List(list) = &*arg.init {
                         if list.elems.is_empty() {
@@ -5020,10 +5102,30 @@ impl CCodegen {
                                 }
                             } else if var_name == ident.name {
                                 // Not a known variable - try to qualify as enum variant with type hint
-                                self.qualify_identifier_with_hint(
+                                let qualified = self.qualify_identifier_with_hint(
                                     &ident.name,
                                     expected_field_type.as_deref(),
-                                )
+                                );
+                                // If the identifier wasn't resolved as an enum variant
+                                // (qualify_identifier_with_hint returned it unchanged),
+                                // and it's not a known tagged union label, it's likely
+                                // an undefined variable reference (e.g., shorthand `def_id:`
+                                // expanding to `def_id: def_id` where def_id doesn't exist).
+                                if qualified == ident.name {
+                                    let is_tagged_label = self
+                                        .tagged_union_labels
+                                        .values()
+                                        .any(|labels| labels.contains(&ident.name));
+                                    let is_constructor_type = self.seen_types.contains(&ident.name)
+                                        || self.tagged_union_types.contains(&ident.name);
+                                    if !is_tagged_label && !is_constructor_type {
+                                        self.codegen_errors.push(format!(
+                                            "undefined variable '{}' used in constructor field '{}' of struct '{}'",
+                                            ident.name, field_name, type_name
+                                        ));
+                                    }
+                                }
+                                qualified
                             } else {
                                 // Mapped variable name
                                 var_name
@@ -5611,13 +5713,18 @@ impl CCodegen {
 
                             // Skip void expressions (side-effect-only for loops)
                             if result_elem_type != "void" {
-                                let result_list_type = format!("List_{}", result_elem_type);
+                                // Strip pointer suffix for list type naming.
+                                // infer_expr_type returns e.g. "TypeRef*" for struct types,
+                                // but the list type name should be "List_TypeRef" (without '*').
+                                let base_elem_type =
+                                    result_elem_type.trim_end_matches('*').to_string();
+                                let result_list_type = format!("List_{}", base_elem_type);
 
                                 // Generate the body expression
                                 let body_code = self.generate_expression(body_expr, is_main);
 
-                                // Register that we need the list_append function for this element type
-                                self.register_list_append_needed(result_elem_type.clone());
+                                // Register that we need the list_append function for the base element type
+                                self.register_list_append_needed(base_elem_type.clone());
 
                                 // Pop the loop label
                                 self.loop_label_stack.pop();
@@ -5629,7 +5736,7 @@ impl CCodegen {
                                     result_list_type,
                                     elem_name, elem_name, iter_code, elem_name,
                                     c_elem_type, elem_name, iter_code, elem_name,
-                                    result_elem_type, body_code
+                                    base_elem_type, body_code
                                 );
                             }
                         }
