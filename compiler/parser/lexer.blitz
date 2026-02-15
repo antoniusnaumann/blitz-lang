@@ -117,7 +117,12 @@ fn next(mut lexer Lexer) Option(Token) {
 			'}' { rbrace }
 			',' { comma }
 			'.' { dot }
-			':' { colon }
+			':' {
+				switch lexer.curr() {
+					':' { lexer.mut.up(path) }
+					else { colon }
+				}
+			}
 			';' { semicolon }
 			'|' { pipe }
 			'\n' { newline }

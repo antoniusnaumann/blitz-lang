@@ -70,5 +70,6 @@ struct Test {
 struct Type {
 	name   String
 	params List(Type)
+	module Option(Ident)
 	span   Span
 }

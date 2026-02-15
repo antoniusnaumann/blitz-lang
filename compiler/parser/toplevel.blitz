@@ -153,12 +153,24 @@ fn parse_ident(mut parser Parser) Option(Ident) {
     Ident(name:, span: token.span)
 }
 
+fn parse_qualified_type(mut parser Parser) Option(Type) {
+    let mod = if parser.has(ident) {
+        let ident = parser.mut.parse_ident.unwrap()
+        try parser.mut.expect(path) // TODO: Better error reporting here, i.e., reporting that a lower case type was encountered where upper case was expected
+        ident
+    }
+    var ty = parser.mut.parse_type()
+    ty.module = mod
+
+    ty
+}
+
 fn parse_type(mut parser Parser) Option(Type) {
     let token = try parser.mut.expect(type)
     let name = parser.source.substr(token.span)
     let params = if parser.has(lparen) { parser.mut.parse_type_params() } else { [] }
 
-    Type(name:, span: token.span, params:)
+    Type(name:, span: token.span, params:, module: none)
 }
 
 fn parse_type_ident(mut parser Parser) Option(Type) {

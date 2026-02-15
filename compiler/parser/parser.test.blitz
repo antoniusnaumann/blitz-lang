@@ -9,6 +9,24 @@ test "Parse empty func" {
     assert count == 1
 }
 
+test "Parse type with qualified type field" {
+    let defs = "struct Foo { bar wibble::Baz }".parse()
+    var count = 0
+    assert defs.len() == 1
+    switch defs[0] {
+        Struct {
+        assert it.fields.len() == 1
+            let field = it.fields[0]
+            assert field.name.name == "bar"
+            assert field.type.module.unwrap().name == "wibble"
+            assert field.type.name == "Baz"
+            count = 1
+        }
+        else { panic("Expected function") }
+    }
+    assert count == 1
+}
+
 fn parse_file(path String) {
     let content = read(path).unwrap()
     var parser = new_parser(content)

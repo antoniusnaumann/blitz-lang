@@ -3501,6 +3501,25 @@ impl CCodegen {
                 let parent_type = self.infer_expr_type(&member.parent);
                 // Strip pointer notation to get struct name
                 let struct_name = parent_type.trim_end_matches('*');
+
+                // Special case: parser method references without parentheses
+                // e.g., `parser.mut.parse_ident` is a method call, not a field access
+                if member_name.starts_with("parse_") && struct_name == "Parser" {
+                    // Look up the return type as if it were a function call
+                    if let Some(ret_type) = self.function_return_types.get(member_name) {
+                        return self.map_type(ret_type);
+                    }
+                    // Fall back to hardcoded return types for known parser functions
+                    match member_name.as_str() {
+                        "parse_def" => return "Option_Definition".to_string(),
+                        "parse_ident" => return "Option_Ident".to_string(),
+                        "parse_type" => return "Option_Type".to_string(),
+                        "parse_expression" => return "Option_Expression".to_string(),
+                        "parse_statement" => return "Option_Statement".to_string(),
+                        _ => {}
+                    }
+                }
+
                 if let Some(fields) = self.struct_field_types.get(struct_name) {
                     if let Some(field_type) = fields.get(member_name) {
                         return self.map_type_name(field_type);
@@ -3720,7 +3739,23 @@ impl CCodegen {
                 // Standalone if (no else) returns Option<T> where T is the body's result type
                 // Try to infer T from the last expression in the body
                 if let Some(parser::Statement::Expression(last_expr)) = if_expr.body.last() {
-                    let body_type = self.infer_expr_type(last_expr);
+                    // If the last expression is an identifier, check if it was declared
+                    // earlier in the if body and infer its type from the declaration.
+                    let body_type = if let parser::Expression::Ident(ident) = last_expr {
+                        let mut found_type = None;
+                        for stmt in &if_expr.body {
+                            if let parser::Statement::Declaration(decl) = stmt {
+                                if decl.name == ident.name {
+                                    if let Some(init_expr) = &decl.init {
+                                        found_type = Some(self.infer_expr_type(init_expr));
+                                    }
+                                }
+                            }
+                        }
+                        found_type.unwrap_or_else(|| self.infer_expr_type(last_expr))
+                    } else {
+                        self.infer_expr_type(last_expr)
+                    };
                     // Wrap in Option type
                     if body_type.starts_with("Option_") {
                         return body_type;
@@ -5502,14 +5537,14 @@ impl CCodegen {
                     return parent_code;
                 }
 
-                // Special case: parse_def method call without parentheses
-                // In Blitz, `parser.mut.parse_def` is a method call, not a field access
-                // Parser doesn't have a parse_def field, so this must be a call
-                if member_name == "parse_def" {
+                // Special case: parser method calls without parentheses
+                // In Blitz, `parser.mut.parse_def` or `parser.mut.parse_ident` are method calls, not field accesses
+                // Parser doesn't have these as fields, so they must be calls
+                if member_name.starts_with("parse_") {
                     let parent_type = self.infer_expr_type(&member.parent);
                     let base_type = parent_type.trim_end_matches('*');
                     if base_type == "Parser" {
-                        return format!("parse_def({})", parent_code);
+                        return format!("{}({})", member_name, parent_code);
                     }
                 }
 
@@ -6037,6 +6072,19 @@ impl CCodegen {
                     format!("if ({}) {{\n{}    }}", cond, body_code)
                 } else {
                     // This is an expression-style if - returns Option<T>
+                    // Pre-register variable types from declarations in the if body
+                    // so that infer_expr_type can resolve them when inferring the
+                    // type of the last expression (e.g., `let ident = ...; ident`).
+                    for stmt in &if_expr.body {
+                        if let parser::Statement::Declaration(decl) = stmt {
+                            if let Some(init_expr) = &decl.init {
+                                let inferred = self.infer_expr_type(init_expr);
+                                let var_name = self.compute_mangled_name(&decl.name);
+                                self.variable_types.insert(var_name, inferred);
+                            }
+                        }
+                    }
+
                     // Infer the result type from the body
                     let body_type = if let Some(parser::Statement::Expression(last_expr)) =
                         if_expr.body.last()
