@@ -153,6 +153,14 @@ fn has(parser Parser, expected TokenKind) Bool {
     parser.peek().kind == expected
 }
 
+fn has(parser Parser, expected List(TokenKind)) Bool {
+    let curr = parser.peek().kind
+    for expected |kind| {
+        if kind == curr { return true }
+    }
+    false
+}
+
 fn err(mut parser Parser, msg String) {
     // TODO: for now, we panic, later we should maintain an error list
     print(parser.source.substr(parser.last().span))

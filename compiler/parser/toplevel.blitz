@@ -39,7 +39,7 @@ fn parse_fields(mut parser Parser) List(Field) {
     while !parser.has(rbrace) {
         let span = parser.span()
         let name = parser.mut.parse_ident() else break
-        let type = parser.mut.parse_type() else break
+        let type = parser.mut.parse_qualified_type() else break
         parser.mut.accept(comma)
 
         fields ++= Field(name:, type:, span: parser.span(span))
@@ -74,7 +74,7 @@ fn parse_cases(mut parser Parser) List(Case) {
                 continue
             }
         }
-        let ty = if parser.has(type) { parser.mut.parse_type() }
+        let ty = if parser.has([type, ident]) { parser.mut.parse_qualified_type() }
         parser.mut.skip_newlines()
 
         cases ++= Case(label:, type: ty)
@@ -96,7 +96,7 @@ fn parse_alias(mut parser Parser) Option(Alias) {
 
 fn parse_fn(mut parser Parser) Option(Fn) {
     let kw = try parser.mut.expect(fn_)
-    let ident = try parser.mut.parse_ident()
+    let ident_ = try parser.mut.parse_ident()
 
     try parser.mut.expect(lparen)
     var args = []
@@ -106,17 +106,17 @@ fn parse_fn(mut parser Parser) Option(Fn) {
         parser.mut.accept(comma)
     }
     
-    let type = if parser.has(type) { parser.mut.parse_type() }
+    let type = if parser.has([type, ident]) { parser.mut.parse_qualified_type() }
     let body = parser.mut.parse_body()
     
-    Fn(name: ident, args:, type:, body:, span: parser.span(kw))
+    Fn(name: ident_, args:, type:, body:, span: parser.span(kw))
 }
 
 fn parse_arg(mut parser Parser) Option(Arg) {
     let span = parser.span()
     let is_mut = parser.mut.accept(mut_) != none
     let ident = try parser.mut.parse_ident()
-    let type = try parser.mut.parse_type()
+    let type = try parser.mut.parse_qualified_type()
 
     Arg(name: ident, type:, is_mut:, span: parser.span(span))
 }
@@ -139,7 +139,7 @@ fn parse_declaration(mut parser Parser) Option(Declaration) {
         else { panic("unreachable") }
     }
     let name = try parser.mut.parse_ident()
-    let type = if parser.peek().kind != assign { try parser.mut.parse_type() }
+    let type = if parser.peek().kind != assign { try parser.mut.parse_qualified_type() }
     try parser.mut.expect(assign)
     let init = try parser.mut.parse_expression()
     
@@ -155,7 +155,7 @@ fn parse_ident(mut parser Parser) Option(Ident) {
 
 fn parse_qualified_type(mut parser Parser) Option(Type) {
     let mod = if parser.has(ident) {
-        let ident = parser.mut.parse_ident.unwrap()
+        let ident = parser.mut.parse_ident().unwrap()
         try parser.mut.expect(path) // TODO: Better error reporting here, i.e., reporting that a lower case type was encountered where upper case was expected
         ident
     }
@@ -185,7 +185,7 @@ fn parse_type_params(mut parser Parser) List(Type) {
 
     var params = []
     while !parser.has(rparen) {
-        params ++= parser.mut.parse_type() else return []
+        params ++= parser.mut.parse_qualified_type() else return []
         parser.mut.accept(comma)
     }
     parser.mut.expect(rparen)

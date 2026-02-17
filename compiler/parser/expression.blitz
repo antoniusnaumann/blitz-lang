@@ -248,7 +248,7 @@ fn parse_switch(mut parser Parser) Option(Switch) {
 fn parse_switch_label(mut parser Parser) Option(SwitchLabel) {
     switch parser.peek().kind {
         ident { try parser.mut.parse_ident() }
-        type { try parser.mut.parse_type() }
+        type { try parser.mut.parse_qualified_type() }
         str { try parser.mut.parse_string_lit() }
         int { try parser.mut.parse_int_lit() }
         float { try parser.mut.parse_float_lit() }
