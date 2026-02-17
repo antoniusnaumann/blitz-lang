@@ -60,5 +60,6 @@ struct Test {
 struct Type {
 	name   String
 	params Vec(Type)
+	module Option(String)
 	span   Span
 }

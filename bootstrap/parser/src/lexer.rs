@@ -201,7 +201,15 @@ impl<'a> Lexer<'a> {
             ')' => self.up(Rparen),
             ',' => self.up(Comma),
             '.' => self.up(Dot),
-            ':' => self.up(Colon),
+            ':' => {
+                _ = self.chars.next();
+                let (pos, ch) = self.peek_char();
+                end = pos;
+                match ch {
+                    ':' => self.up(Path),
+                    _ => Colon,
+                }
+            }
             ';' => self.up(Semicolon),
             '|' => self.up(Pipe),
             '\n' => self.up(Newline),

@@ -18,6 +18,7 @@ type_macro::blitz_types!();
 pub struct Ast {
     pub defs: Vec<Definition>,
     pub source: String,
+    pub path: String,
 }
 
 impl From<Span> for RangeInclusive<usize> {
@@ -178,6 +179,7 @@ impl Hash for Type {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.name.hash(state);
         self.params.hash(state);
+        self.module.hash(state);
         self.span.hash(state);
     }
 }

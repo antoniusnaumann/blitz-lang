@@ -11,6 +11,8 @@ pub struct Parser<'a> {
     span: Span,
     #[allow(dead_code)]
     has_pub: bool,
+    /// A token that was consumed but needs to be "put back" for the next read.
+    pending_token: Option<Token>,
 }
 
 impl<'a> Parser<'a> {
@@ -20,6 +22,7 @@ impl<'a> Parser<'a> {
             lexer: lexer.peekable(),
             span: Span { start: 0, end: 0 },
             has_pub: false,
+            pending_token: None,
         }
     }
 
@@ -29,6 +32,7 @@ impl<'a> Parser<'a> {
             lexer: crate::Lexer::new(source).peekable(),
             span: Span { start: 0, end: 0 },
             has_pub: false,
+            pending_token: None,
         }
     }
 
@@ -36,13 +40,17 @@ impl<'a> Parser<'a> {
         if kind != TokenKind::Newline {
             self.skip_newlines();
         }
-        let next = self.lexer.next().unwrap_or_else(|| {
-            panic!(
-                "Expected {:#?}, but got nothing.\n\n{}",
-                kind,
-                self.report_span(self.span.clone())
-            )
-        });
+        let next = if let Some(pending) = self.pending_token.take() {
+            pending
+        } else {
+            self.lexer.next().unwrap_or_else(|| {
+                panic!(
+                    "Expected {:#?}, but got nothing.\n\n{}",
+                    kind,
+                    self.report_span(self.span.clone())
+                )
+            })
+        };
         let got = next.kind.clone();
         assert_eq!(
             got,
@@ -59,6 +67,9 @@ impl<'a> Parser<'a> {
         if kind != TokenKind::Newline {
             self.skip_newlines();
         }
+        if let Some(pending) = &self.pending_token {
+            return pending.kind == kind;
+        }
         self.lexer.kind() == kind
     }
 
@@ -66,7 +77,11 @@ impl<'a> Parser<'a> {
         if kinds.contains(&TokenKind::Newline) {
             self.skip_newlines();
         }
-        let next = self.lexer.next().unwrap();
+        let next = if let Some(pending) = self.pending_token.take() {
+            pending
+        } else {
+            self.lexer.next().unwrap()
+        };
         let got = next.kind.clone();
         assert!(
             kinds.contains(&got),
@@ -83,8 +98,12 @@ impl<'a> Parser<'a> {
         if kind != TokenKind::Newline {
             self.skip_newlines();
         }
-        let next = self.lexer.peek();
-        if next.as_ref().map(|t| t.kind.clone()) == Some(kind.clone()) {
+        let next_kind = if let Some(pending) = &self.pending_token {
+            Some(pending.kind.clone())
+        } else {
+            self.lexer.peek().map(|t| t.kind.clone())
+        };
+        if next_kind == Some(kind.clone()) {
             let result = self.expect(kind);
             self.span = result.span.clone();
 
@@ -100,19 +119,69 @@ impl<'a> Parser<'a> {
     }
 
     fn consume_type(&mut self) -> Option<Type> {
+        // Check for qualified type: ident::Type
+        let module = self.consume_module_prefix();
+
         let Token { kind: _, span } = self.consume(TokenKind::Type)?;
         let name = String::from(&self.source[RangeInclusive::from(span.clone())]);
         let params = self.parse_type_params();
 
-        Some(Type { name, params, span })
+        Some(Type {
+            name,
+            params,
+            module,
+            span,
+        })
     }
 
     fn skip_newlines(&mut self) {
+        // Don't skip newlines past a pending token
+        if self.pending_token.is_some() {
+            return;
+        }
         while self
             .lexer
             .next_if(|token| token.kind == TokenKind::Newline || token.kind == TokenKind::Comment)
             .is_some()
         {}
+    }
+
+    /// Try to consume a module prefix of the form `ident::`.
+    /// If the next tokens are `ident` followed by `::`, consume both and return Some(module_name).
+    /// Otherwise return None without consuming anything (may leave a pending token).
+    fn consume_module_prefix(&mut self) -> Option<String> {
+        self.skip_newlines();
+
+        // Check if next token is Ident
+        let peeked_kind = if let Some(pending) = &self.pending_token {
+            pending.kind.clone()
+        } else {
+            self.lexer.peek().map(|t| t.kind.clone())?
+        };
+
+        if peeked_kind != TokenKind::Ident {
+            return None;
+        }
+
+        // Consume the ident token
+        let ident_token = if let Some(pending) = self.pending_token.take() {
+            pending
+        } else {
+            self.lexer.next()?
+        };
+        let ident_span = ident_token.span.clone();
+
+        // Check if next token is Path (::)
+        if self.lexer.peek().map(|t| t.kind.clone()) == Some(TokenKind::Path) {
+            // Consume the :: token
+            self.lexer.next();
+            let module_name = self.source[RangeInclusive::from(ident_span)].to_string();
+            Some(module_name)
+        } else {
+            // Not a qualified name - put the ident back as a pending token
+            self.pending_token = Some(ident_token);
+            None
+        }
     }
 
     fn expect_ident(&mut self) -> Ident {
@@ -123,11 +192,19 @@ impl<'a> Parser<'a> {
     }
 
     fn expect_type(&mut self) -> Type {
+        // Check for qualified type: ident::Type
+        let module = self.consume_module_prefix();
+
         let Token { kind: _, span } = self.expect(TokenKind::Type);
         let name = String::from(&self.source[RangeInclusive::from(span.clone())]);
         let params = self.parse_type_params();
 
-        Type { name, params, span }
+        Type {
+            name,
+            params,
+            module,
+            span,
+        }
     }
 
     fn parse_type_params(&mut self) -> Vec<Type> {
@@ -596,7 +673,74 @@ impl<'a> Parser<'a> {
                 let span = token.span;
                 let name = self.expect_ident().name;
 
-                if self.has(TokenKind::Lparen) {
+                // Check if this is a qualified constructor: ident::Type(...)
+                if self.has(TokenKind::Path) {
+                    // This is a module-qualified name
+                    self.expect(TokenKind::Path);
+                    // After ::, we expect a Type token for a constructor
+                    if self.has(TokenKind::Type) {
+                        // Put the module name into pending state and parse as constructor
+                        let module = Some(name.clone());
+                        let type_token = self.expect(TokenKind::Type);
+                        let type_name = String::from(
+                            &self.source[RangeInclusive::from(type_token.span.clone())],
+                        );
+
+                        if self.has(TokenKind::Lparen) {
+                            // module::Type(...)  - qualified constructor
+                            let mut args = Vec::new();
+                            let type_params = Vec::new();
+                            self.expect(TokenKind::Lparen);
+                            while !self.has(TokenKind::Rparen) {
+                                let label = self.expect_ident();
+                                self.expect(TokenKind::Colon);
+
+                                let init =
+                                    if self.has(TokenKind::Comma) || self.has(TokenKind::Rparen) {
+                                        Box::new(Expression::Ident(Ident {
+                                            name: label.name.clone(),
+                                            span: label.span.clone(),
+                                        }))
+                                    } else {
+                                        self.parse_expression().into()
+                                    };
+
+                                self.consume(TokenKind::Comma);
+                                args.push(ConstructorArg { label, init });
+                            }
+                            self.expect(TokenKind::Rparen);
+
+                            let r#type = Type {
+                                name: type_name,
+                                params: type_params,
+                                module,
+                                span: span.clone(),
+                            };
+                            Constructor {
+                                r#type,
+                                args,
+                                span: span.merge(&self.span),
+                            }
+                            .into()
+                        } else {
+                            // module::Type without parens - treat as a type reference
+                            // This shouldn't normally happen in expression context,
+                            // but we'll return it as a constructor with no args for now
+                            panic!(
+                                "Expected '(' after qualified type name {}::{}\n\n{}",
+                                name,
+                                type_name,
+                                self.report_span(span)
+                            );
+                        }
+                    } else {
+                        panic!(
+                            "Expected type name after '{}::'\n\n{}",
+                            name,
+                            self.report_span(span)
+                        );
+                    }
+                } else if self.has(TokenKind::Lparen) {
                     self.parse_call(&name).into()
                 } else {
                     Ident {
@@ -775,7 +919,31 @@ impl<'a> Parser<'a> {
             } = self.lexer.peek().unwrap().clone();
 
             let label = match kind {
-                TokenKind::Ident => self.expect_ident().into(),
+                TokenKind::Ident => {
+                    // Check if this is a qualified type: ident::Type
+                    let ident_span = case_span.clone();
+                    let ident_name: String = self.expect_ident().name;
+
+                    if self.has(TokenKind::Path) {
+                        // Qualified type in switch label: module::Type
+                        self.expect(TokenKind::Path);
+                        let ty = self.expect_type();
+                        Type {
+                            name: ty.name,
+                            params: ty.params,
+                            module: Some(ident_name),
+                            span: ident_span.merge(&ty.span),
+                        }
+                        .into()
+                    } else {
+                        // Plain ident
+                        Ident {
+                            name: ident_name,
+                            span: ident_span,
+                        }
+                        .into()
+                    }
+                }
                 TokenKind::Type => self.expect_type().into(),
                 TokenKind::Else => {
                     self.lexer.next(); // Consume 'else' token
@@ -956,6 +1124,8 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_constructor(&mut self) -> Constructor {
+        // Module prefix was already consumed and stored in module_prefix if present
+        let module = self.consume_module_prefix();
         let Token { kind: _, span } = self.expect(TokenKind::Type);
         let name = String::from(&self.source[RangeInclusive::from(span.clone())]);
 
@@ -987,6 +1157,7 @@ impl<'a> Parser<'a> {
         let r#type = Type {
             name,
             params: type_params,
+            module,
             span: span.clone(),
         };
         Constructor {
@@ -1007,6 +1178,7 @@ impl<'a> Parser<'a> {
             Type {
                 name: "_".into(),
                 params: Vec::new(),
+                module: None,
                 span: span.clone(),
             }
         };
@@ -2117,6 +2289,117 @@ mod tests {
                 }
             }
             _ => panic!("Expected Assignment"),
+        }
+    }
+
+    // --- Qualified name tests ---
+
+    fn parse_type(source: &str) -> Type {
+        let mut parser = Parser::new(source);
+        parser.expect_type()
+    }
+
+    #[test]
+    fn test_qualified_type() {
+        // hir::Type should parse with module = Some("hir")
+        let ty = parse_type("hir::Type");
+        assert_eq!(ty.name, "Type");
+        assert_eq!(ty.module, Some("hir".to_string()));
+    }
+
+    #[test]
+    fn test_unqualified_type() {
+        // Type should parse with module = None
+        let ty = parse_type("Type");
+        assert_eq!(ty.name, "Type");
+        assert_eq!(ty.module, None);
+    }
+
+    #[test]
+    fn test_qualified_type_with_params() {
+        // hir::Option(String) should parse with module and params
+        let ty = parse_type("hir::Option(String)");
+        assert_eq!(ty.name, "Option");
+        assert_eq!(ty.module, Some("hir".to_string()));
+        assert_eq!(ty.params.len(), 1);
+        assert_eq!(ty.params[0].name, "String");
+    }
+
+    #[test]
+    fn test_qualified_constructor() {
+        // hir::Node(name: x) should parse as a constructor with module
+        let expr = parse_expr("hir::Node(name: x)");
+
+        match expr {
+            Expression::Constructor(c) => {
+                assert_eq!(c.r#type.name, "Node");
+                assert_eq!(c.r#type.module, Some("hir".to_string()));
+                assert_eq!(c.args.len(), 1);
+                assert_eq!(c.args[0].label.name, "name");
+            }
+            _ => panic!("Expected Constructor, got {:?}", expr.print()),
+        }
+    }
+
+    #[test]
+    fn test_qualified_constructor_shorthand() {
+        // hir::Node(name:) should parse with shorthand
+        let expr = parse_expr("hir::Node(name:)");
+
+        match expr {
+            Expression::Constructor(c) => {
+                assert_eq!(c.r#type.name, "Node");
+                assert_eq!(c.r#type.module, Some("hir".to_string()));
+                assert_eq!(c.args.len(), 1);
+                assert_eq!(c.args[0].label.name, "name");
+                match c.args[0].init.as_ref() {
+                    Expression::Ident(ident) => assert_eq!(ident.name, "name"),
+                    _ => panic!("Expected Ident in constructor shorthand"),
+                }
+            }
+            _ => panic!("Expected Constructor, got {:?}", expr.print()),
+        }
+    }
+
+    #[test]
+    fn test_unqualified_constructor_still_works() {
+        // Person(name: x) should still work without module
+        let expr = parse_expr("Person(name: x)");
+
+        match expr {
+            Expression::Constructor(c) => {
+                assert_eq!(c.r#type.name, "Person");
+                assert_eq!(c.r#type.module, None);
+                assert_eq!(c.args.len(), 1);
+            }
+            _ => panic!("Expected Constructor, got {:?}", expr.print()),
+        }
+    }
+
+    #[test]
+    fn test_unqualified_ident_still_works() {
+        // Plain ident should still parse as ident (not confused by :: logic)
+        let expr = parse_expr("foo");
+
+        match expr {
+            Expression::Ident(ident) => {
+                assert_eq!(ident.name, "foo");
+            }
+            _ => panic!("Expected Ident, got {:?}", expr.print()),
+        }
+    }
+
+    #[test]
+    fn test_unqualified_call_still_works() {
+        // foo(a, b) should still parse as a function call
+        let expr = parse_expr("foo(a, b)");
+
+        match expr {
+            Expression::Call(call) => {
+                assert_eq!(call.name, "foo");
+                assert_eq!(call.args.len(), 2);
+            }
+            _ => panic!("Expected Call, got {:?}", expr.print()),
         }
     }
 }

@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::sync::RwLock;
 
 use interpreter::DEBUG;
-use interpreter::{Body, Builtin, ROOT, Registry, run_checked};
+use interpreter::{run_checked, Body, Builtin, Registry, ROOT};
 use parser::{Ast, Parser};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -451,6 +451,7 @@ fn collect_definitions(path: &Path) -> Vec<Ast> {
                     all_definitions.push(Ast {
                         defs: parser.collect(),
                         source: content,
+                        path: path.display().to_string(),
                     });
                 }
                 Err(e) => eprintln!("Failed to read file {}: {}", path.display(), e),
@@ -468,6 +469,7 @@ fn collect_definitions(path: &Path) -> Vec<Ast> {
                     all_definitions.push(Ast {
                         defs: parser.collect(),
                         source: content,
+                        path: file_path.display().to_string(),
                     });
                 }
                 Err(e) => eprintln!("Failed to read file {}: {}", file_path.display(), e),

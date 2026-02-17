@@ -80,8 +80,13 @@ impl Print for Case {
 
 impl Print for Type {
     fn print(&self) -> String {
+        let prefix = match &self.module {
+            Some(m) => format!("{}::", m),
+            None => String::new(),
+        };
         format!(
-            "{}({})",
+            "{}{}({})",
+            prefix,
             self.name,
             self.params
                 .iter()

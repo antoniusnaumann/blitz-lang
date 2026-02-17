@@ -75,6 +75,8 @@ union TokenKind {
 	dot
 	newline
 
+	path // ::
+
 	pipe
 
 	lbrace
