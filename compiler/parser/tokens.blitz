@@ -1,6 +1,6 @@
 struct Token {
 	kind TokenKind
-	span Span
+	span ast::Span
 }
 
 union TokenKind {

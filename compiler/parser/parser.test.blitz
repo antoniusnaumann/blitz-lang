@@ -3,7 +3,7 @@ test "Parse empty func" {
     var count = 0
     assert defs.len() == 1
     switch defs[0] {
-        Fn { count = 1 }
+        ast::Fn { count = 1 }
         else { panic("Expected function") }
     }
     assert count == 1
@@ -14,7 +14,7 @@ test "Parse type with qualified type field" {
     var count = 0
     assert defs.len() == 1
     switch defs[0] {
-        Struct {
+        ast::Struct {
         assert it.fields.len() == 1
             let field = it.fields[0]
             assert field.name.name == "bar"

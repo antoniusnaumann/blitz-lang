@@ -1,4 +1,4 @@
-fn parse_precedence(mut parser Parser, lhs Expression, min_prec Int) Option(Expression) {
+fn parse_precedence(mut parser Parser, lhs ast::Expression, min_prec Int) Option(ast::Expression) {
     var left = lhs
     parser.mut.skip_newlines()
 
@@ -12,12 +12,12 @@ fn parse_precedence(mut parser Parser, lhs Expression, min_prec Int) Option(Expr
             let end_bracket = try parser.mut.expect(rbracket)
             let span = left.span.merge(end_bracket.span)
 
-            left = Index(target: left, index:, span:)
+            left = ast::Index(target: left, index:, span:)
             continue
         }
 
         let op = switch peek_.kind {
-            Operator {
+            ast::Operator {
                 peek_.kind
             }
             else {
@@ -35,14 +35,14 @@ fn parse_precedence(mut parser Parser, lhs Expression, min_prec Int) Option(Expr
             dot {
                 switch parser.mut.accept(mut_) {
                     some {
-                        left = Mut(expr: left, span: parser.span(), ufcs: true)
+                        left = ast::Mut(expr: left, span: parser.span(), ufcs: true)
                         continue
                     }
                     none { }
                 }
                 switch parser.mut.accept(try_) {
                     some {
-                        left = Try(expr: left, span: parser.span(), ufcs: true)
+                        left = ast::Try(expr: left, span: parser.span(), ufcs: true)
                         continue
                     }
                     none { }
@@ -55,13 +55,13 @@ fn parse_precedence(mut parser Parser, lhs Expression, min_prec Int) Option(Expr
                         left = parser.mut.parse_member_call(left, member)
                     }
                     else {
-                        left = Member(parent: left, member:, span:)
+                        left = ast::Member(parent: left, member:, span:)
                     }
                 }
             }
             else {
                 let rhs = parser.mut.parse_expression_bp(prec.right)
-                left = BinaryOp(op:, left:, right: rhs, span: lhs.span.merge(rhs.span))
+                left = ast::BinaryOp(op:, left:, right: rhs, span: lhs.span.merge(rhs.span))
             }
         }
     }
@@ -69,11 +69,11 @@ fn parse_precedence(mut parser Parser, lhs Expression, min_prec Int) Option(Expr
     left
 }
 
-fn parse_expression(mut parser Parser) Option(Expression) {
+fn parse_expression(mut parser Parser) Option(ast::Expression) {
     parser.mut.parse_expression_bp(0)
 }
 
-fn parse_expression_bp(mut parser Parser, min_prec Int) Option(Expression) {
+fn parse_expression_bp(mut parser Parser, min_prec Int) Option(ast::Expression) {
     parser.mut.skip_newlines()
     let token = parser.peek()
 
@@ -87,7 +87,7 @@ fn parse_expression_bp(mut parser Parser, min_prec Int) Option(Expression) {
             parser.mut.tok()
             let peek = parser.peek()
             let span = token.span
-            let empty_return = Return(expr: Block(statements: [], span:), span:)
+            let empty_return = ast::Return(expr: ast::Block(statements: [], span:), span:)
             switch peek.kind {
                 var_ { empty_return }
                 let_ { empty_return }
@@ -96,34 +96,40 @@ fn parse_expression_bp(mut parser Parser, min_prec Int) Option(Expression) {
                 rbracket { empty_return }
                 rparen { empty_return }
                 newline { empty_return }
-                else { Return(expr: try parser.mut.parse_expression(), span: parser.span(span)) }
+                else { ast::Return(expr: try parser.mut.parse_expression(), span: parser.span(span)) }
             }
         }
         continue_ { 
             parser.mut.tok()
-            Continue(span: parser.span(token))
+            ast::Continue(span: parser.span(token))
         }
         break_ {
             parser.mut.tok()
-            Break(span: parser.span(token))
+            ast::Break(span: parser.span(token))
         }
         try_ {
             parser.mut.tok()
-            Try(expr: try parser.mut.parse_expression(), span: parser.span(token), ufcs: false)
+            ast::Try(expr: try parser.mut.parse_expression(), span: parser.span(token), ufcs: false)
         }
         assert_ {
             parser.mut.tok()
-            Assert(cond: try parser.mut.parse_expression(), span: parser.span(token), ufcs: false)
+            ast::Assert(cond: try parser.mut.parse_expression(), span: parser.span(token), ufcs: false)
         }
         mut_ {
             parser.mut.tok()
-            Mut(expr: try parser.mut.parse_expression(), span: parser.span(token), ufcs: false)
+            ast::Mut(expr: try parser.mut.parse_expression(), span: parser.span(token), ufcs: false)
         }
         lbrace { try parser.mut.parse_body() }
         ident {
             let span = token.span
             let name = parser.mut.parse_ident()
             switch parser.peek().kind {
+                path {
+                    // Qualified name: ident::Type(...)
+                    parser.mut.tok()
+                    let ty = try parser.mut.parse_type_ident()
+                    parser.mut.parse_constructor_with_module(ty, name)
+                }
                 lparen { parser.mut.parse_call(name) }
                 else { name }
             }
@@ -135,10 +141,10 @@ fn parse_expression_bp(mut parser Parser, min_prec Int) Option(Expression) {
         char { parser.mut.parse_char_lit() }
         int { parser.mut.parse_int_lit() }
         float { parser.mut.parse_float_lit() }
-        UnaryOperator {
+        ast::UnaryOperator {
             parser.mut.tok()
             let inner = try parser.mut.parse_expression()
-            UnaryOp(op: it, expr: inner, span: parser.span(token))                   
+            ast::UnaryOp(op: it, expr: inner, span: parser.span(token))                   
         }
         else {
             print(token.kind)
@@ -154,16 +160,16 @@ fn parse_expression_bp(mut parser Parser, min_prec Int) Option(Expression) {
             
             // Desugar compound assignments: a += b becomes a = a + b
             let desugared_right = switch assignment {
-                add { BinaryOp(op: add, left: expr, right:, span: expr.span.merge(right.span)) }
-                sub { BinaryOp(op: sub, left: expr, right:, span: expr.span.merge(right.span)) }
-                mul { BinaryOp(op: mul, left: expr, right:, span: expr.span.merge(right.span)) }
-                div { BinaryOp(op: div, left: expr, right:, span: expr.span.merge(right.span)) }
-                rem { BinaryOp(op: rem, left: expr, right:, span: expr.span.merge(right.span)) }
-                concat { BinaryOp(op: concat, left: expr, right:, span: expr.span.merge(right.span)) }
+                add { ast::BinaryOp(op: add, left: expr, right:, span: expr.span.merge(right.span)) }
+                sub { ast::BinaryOp(op: sub, left: expr, right:, span: expr.span.merge(right.span)) }
+                mul { ast::BinaryOp(op: mul, left: expr, right:, span: expr.span.merge(right.span)) }
+                div { ast::BinaryOp(op: div, left: expr, right:, span: expr.span.merge(right.span)) }
+                rem { ast::BinaryOp(op: rem, left: expr, right:, span: expr.span.merge(right.span)) }
+                concat { ast::BinaryOp(op: concat, left: expr, right:, span: expr.span.merge(right.span)) }
                 plain { right }
             }
 
-            Assignment(left: expr, right: desugared_right)
+            ast::Assignment(left: expr, right: desugared_right)
         }
         none { expr }
     }
@@ -194,7 +200,7 @@ fn consume_assignment(mut parser Parser) Option(Assignment) {
     }
 }
 
-fn parse_for(mut parser Parser) Option(For) {
+fn parse_for(mut parser Parser) Option(ast::For) {
     let kw = try parser.mut.expect(for_)
     let iter = try parser.mut.parse_expression()
 
@@ -205,26 +211,26 @@ fn parse_for(mut parser Parser) Option(For) {
 
     let body = try parser.mut.parse_body()
     
-    For(iter:, elem:, body:, span: parser.span(kw))
+    ast::For(iter:, elem:, body:, span: parser.span(kw))
 }
 
-fn parse_while(mut parser Parser) Option(While) {
+fn parse_while(mut parser Parser) Option(ast::While) {
     let kw = try parser.mut.expect(while_)
     let cond = try parser.mut.parse_expression()
     let body = try parser.mut.parse_body()
 
-    While(cond:, body:, span: parser.span(kw))
+    ast::While(cond:, body:, span: parser.span(kw))
 }
 
-fn parse_if(mut parser Parser) Option(If) {
+fn parse_if(mut parser Parser) Option(ast::If) {
     let kw = try parser.mut.expect(if_)
     let cond = try parser.mut.parse_expression()
     let body = try parser.mut.parse_body()
 
-    If(cond:, body:, span: parser.span(kw))
+    ast::If(cond:, body:, span: parser.span(kw))
 }
 
-fn parse_switch(mut parser Parser) Option(Switch) {
+fn parse_switch(mut parser Parser) Option(ast::Switch) {
     let token = try parser.mut.expect(switch_)
     let expr = try parser.mut.parse_expression()
     try parser.mut.expect(lbrace)
@@ -238,16 +244,29 @@ fn parse_switch(mut parser Parser) Option(Switch) {
         let body = try parser.mut.parse_body()
         parser.mut.skip_newlines()
 
-        cases ++= SwitchCase(label:, body:, span: parser.span(case_start))
+        cases ++= ast::SwitchCase(label:, body:, span: parser.span(case_start))
     }
     parser.mut.expect(rbrace)
 
-    Switch(cond: expr, cases:, span: parser.span(token))
+    ast::Switch(cond: expr, cases:, span: parser.span(token))
 }
 
-fn parse_switch_label(mut parser Parser) Option(SwitchLabel) {
+fn parse_switch_label(mut parser Parser) Option(ast::SwitchLabel) {
     switch parser.peek().kind {
-        ident { try parser.mut.parse_ident() }
+        ident {
+            // Check if this is a qualified type: ident::Type
+            let name = try parser.mut.parse_ident()
+            switch parser.peek().kind {
+                path {
+                    // Qualified type in switch label: module::Type
+                    parser.mut.tok()
+                    var ty = try parser.mut.parse_type()
+                    ty.module = name
+                    ty
+                }
+                else { name }
+            }
+        }
         type { try parser.mut.parse_qualified_type() }
         str { try parser.mut.parse_string_lit() }
         int { try parser.mut.parse_int_lit() }
@@ -261,29 +280,38 @@ fn parse_switch_label(mut parser Parser) Option(SwitchLabel) {
     }
 }
 
-fn parse_member_call(mut parser Parser, target Expression, method Ident) Option(Call) {
+fn parse_member_call(mut parser Parser, target ast::Expression, method ast::Ident) Option(ast::Call) {
     var call = parser.mut.parse_call(method)
     call.ufcs = true
-    call.args = [CallArg(label: none, init: target)] ++ call.args
+    call.args = [ast::CallArg(label: none, init: target)] ++ call.args
     call
 }
 
-fn parse_call(mut parser Parser, name Ident) Option(Call) {
+fn parse_call(mut parser Parser, name ast::Ident) Option(ast::Call) {
     let token = parser.peek()
     let args = parser.mut.parse_args() 
     
-    Call(name:, args:, ufcs: false, span: parser.span(token))
+    ast::Call(name:, args:, ufcs: false, span: parser.span(token))
 }
 
-fn parse_constructor(mut parser Parser) Option(Constructor) {
+fn parse_constructor(mut parser Parser) Option(ast::Constructor) {
     let token = parser.peek()
     let ty = try parser.mut.parse_type_ident()
     let args = try parser.mut.parse_args()
 
-    Constructor(type: ty, args:, ufcs: false, span: parser.span(token))
+    ast::Constructor(type: ty, args:, ufcs: false, span: parser.span(token))
 }
 
-fn parse_args(mut parser Parser) Option(List(CallArg)) {
+fn parse_constructor_with_module(mut parser Parser, ty ast::Type, mod ast::Ident) Option(ast::Constructor) {
+    let token = parser.peek()
+    var qualified_ty = ty
+    qualified_ty.module = mod
+    let args = try parser.mut.parse_args()
+
+    ast::Constructor(type: qualified_ty, args:, ufcs: false, span: parser.span(token))
+}
+
+fn parse_args(mut parser Parser) Option(List(ast::CallArg)) {
     try parser.mut.expect(lparen)
     var args = []
 
@@ -300,16 +328,16 @@ fn parse_args(mut parser Parser) Option(List(CallArg)) {
                             rparen { label }
                             else { try parser.mut.parse_expression() }
                         }
-                        args ++= CallArg(label:, init:)
+                        args ++= ast::CallArg(label:, init:)
                     }
                     else {
-                        args ++= CallArg(label: none, init: try parser.mut.parse_expression())
+                        args ++= ast::CallArg(label: none, init: try parser.mut.parse_expression())
                     }
                 }
             }
             else {
                 let init = try parser.mut.parse_expression()
-                args ++= CallArg(label: none, init:)
+                args ++= ast::CallArg(label: none, init:)
             }
         }
         parser.mut.accept(comma)
@@ -321,7 +349,7 @@ fn parse_args(mut parser Parser) Option(List(CallArg)) {
     args
 }
 
-fn parse_list(mut parser Parser) Option(List_) {
+fn parse_list(mut parser Parser) Option(ast::List_) {
     let start = try parser.mut.expect(lbracket)
     var elems = []
 
@@ -333,25 +361,25 @@ fn parse_list(mut parser Parser) Option(List_) {
     }
     parser.mut.expect(rbracket)
 
-    List_(elems:, span: parser.span(start))
+    ast::List_(elems:, span: parser.span(start))
 }
 
-fn parse_group(mut parser Parser) Option(Expression) {
+fn parse_group(mut parser Parser) Option(ast::Expression) {
     let token = try parser.mut.expect(lparen)
     let expr = try parser.mut.parse_expression()
     try parser.mut.expect(rparen)
 
-    Group(expr:, span: parser.span(token))
+    ast::Group(expr:, span: parser.span(token))
 }
 
-fn parse_string_lit(mut parser Parser) Option(Lit(String)) {
+fn parse_string_lit(mut parser Parser) Option(ast::Lit(String)) {
     let token = parser.mut.expect(str)
     let value = parser.source.substr(token.span.range.begin + 1, token.span.range.until - 1)
 
-    Lit(value:, span: parser.span(token))
+    ast::Lit(value:, span: parser.span(token))
 }
 
-fn parse_char_lit(mut parser Parser) Option(Lit(Rune)) {
+fn parse_char_lit(mut parser Parser) Option(ast::Lit(Rune)) {
     let token = parser.mut.expect(char)
     let chars = parser.source.substr(token.span.range.begin + 1, token.span.range.until - 1).chars()
     let value = switch chars.len() {
@@ -384,10 +412,10 @@ fn parse_char_lit(mut parser Parser) Option(Lit(Rune)) {
         }
     }
 
-    Lit(value:, span: parser.span(token))
+    ast::Lit(value:, span: parser.span(token))
 }
 
-fn parse_int_lit(mut parser Parser) Option(Lit(Int)) {
+fn parse_int_lit(mut parser Parser) Option(ast::Lit(Int)) {
     let token = parser.mut.expect(int)
     var index = token.span.range.begin
     var number = 0
@@ -410,14 +438,14 @@ fn parse_int_lit(mut parser Parser) Option(Lit(Int)) {
         index += 1
     }
 
-    Lit(value: number, span: parser.span(token))
+    ast::Lit(value: number, span: parser.span(token))
 }
 
-fn parse_float_lit(mut parser Parser) Option(Lit(Float)) {
+fn parse_float_lit(mut parser Parser) Option(ast::Lit(Float)) {
     todo("parse float lit")
 }
 
-fn parse_body(mut parser Parser) Option(Block) {
+fn parse_body(mut parser Parser) Option(ast::Block) {
     try parser.mut.expect(lbrace)
     let first = parser.peek()
     var body = []
@@ -429,5 +457,5 @@ fn parse_body(mut parser Parser) Option(Block) {
     }
     parser.mut.expect(rbrace)
 
-    Block(statements: body, span: parser.span(first))
+    ast::Block(statements: body, span: parser.span(first))
 }

@@ -3,7 +3,7 @@ struct Precedence {
     right Int
 }
 
-fn precedence(operator Operator) Precedence {
+fn precedence(operator ast::Operator) Precedence {
     switch operator {
         else_ { Precedence(left: 2, right: 2) }
         or_ { Precedence(left: 7, right: 8) }

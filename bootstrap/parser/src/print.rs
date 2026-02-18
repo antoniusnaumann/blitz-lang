@@ -112,10 +112,15 @@ impl Print for Expression {
                 )
             }
             Expression::Call(c) => {
+                let prefix = match &c.module {
+                    Some(m) => format!("{}::", m),
+                    None => String::new(),
+                };
                 if c.ufcs {
                     format!(
-                        "{}.{}({})",
+                        "{}.{}{}({})",
                         c.args[0].init.print(),
+                        prefix,
                         c.name,
                         c.args[1..]
                             .iter()
@@ -131,7 +136,8 @@ impl Print for Expression {
                     )
                 } else {
                     format!(
-                        "{}({})",
+                        "{}{}({})",
+                        prefix,
                         c.name,
                         c.args
                             .iter()

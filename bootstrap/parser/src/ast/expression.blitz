@@ -71,10 +71,11 @@ struct ConstructorArg {
 }
 
 struct Call {
-	name String
-	args Vec(CallArg)
-	ufcs Bool
-	span Span
+	name   String
+	module Option(String)
+	args   Vec(CallArg)
+	ufcs   Bool
+	span   Span
 }
 
 struct CallArg {

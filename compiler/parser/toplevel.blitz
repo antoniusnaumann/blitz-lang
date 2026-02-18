@@ -1,4 +1,4 @@
-fn parse_def(mut parser Parser) Option(Definition) {
+fn parse_def(mut parser Parser) Option(ast::Definition) {
     let token = parser.peek()
     let result = switch token.kind {
     	struct_ { parser.mut.parse_struct() }
@@ -8,7 +8,7 @@ fn parse_def(mut parser Parser) Option(Definition) {
     	fn_ { parser.mut.parse_fn() }
     	test_ { parser.mut.parse_test() }
     	pub_ {
-    	    Pub(item: parser.mut.parse_def.unwrap()) // TODO: generate an error instead of unwrapping
+    	    ast::Pub(item: parser.mut.parse_def.unwrap()) // TODO: generate an error instead of unwrapping
     	}
         else {
             print(token.kind)
@@ -23,15 +23,15 @@ fn parse_def(mut parser Parser) Option(Definition) {
     result
 }
 
-fn parse_struct(mut parser Parser) Option(Struct) {
+fn parse_struct(mut parser Parser) Option(ast::Struct) {
     let kw = try parser.mut.expect(struct_)
     let ty = try parser.mut.parse_type()
     let fields = try parser.mut.parse_fields()
 
-    Struct(sig: ty, fields:, span: parser.span(kw))
+    ast::Struct(sig: ty, fields:, span: parser.span(kw))
 }
 
-fn parse_fields(mut parser Parser) List(Field) {
+fn parse_fields(mut parser Parser) List(ast::Field) {
     parser.mut.expect(lbrace)
     var fields = []
 
@@ -42,22 +42,22 @@ fn parse_fields(mut parser Parser) List(Field) {
         let type = parser.mut.parse_qualified_type() else break
         parser.mut.accept(comma)
 
-        fields ++= Field(name:, type:, span: parser.span(span))
+        fields ++= ast::Field(name:, type:, span: parser.span(span))
     }
     parser.mut.expect(rbrace) // TODO recover
 
     fields
 }
 
-fn parse_union(mut parser Parser) Option(Union) {
+fn parse_union(mut parser Parser) Option(ast::Union) {
     let kw = try parser.mut.expect(union_)
     let ty = try parser.mut.parse_type()
     let cases = try parser.mut.parse_cases()
 
-    Union(sig: ty, cases:, span: parser.span(kw))
+    ast::Union(sig: ty, cases:, span: parser.span(kw))
 }
 
-fn parse_cases(mut parser Parser) List(Case) {
+fn parse_cases(mut parser Parser) List(ast::Case) {
     parser.mut.expect(lbrace)
     var cases = []
     parser.mut.skip_newlines()
@@ -70,31 +70,31 @@ fn parse_cases(mut parser Parser) List(Case) {
                 parser.mut.tok()
                 parser.mut.skip_newlines()
             } else {
-                cases ++= Case(label:, type: none)
+                cases ++= ast::Case(label:, type: none)
                 continue
             }
         }
         let ty = if parser.has([type, ident]) { parser.mut.parse_qualified_type() }
         parser.mut.skip_newlines()
 
-        cases ++= Case(label:, type: ty)
+        cases ++= ast::Case(label:, type: ty)
     }
     parser.mut.expect(rbrace) // TODO recover
 
     cases
 }
 
-fn parse_actor(mut parser Parser) Option(Actor) {
+fn parse_actor(mut parser Parser) Option(ast::Actor) {
     let kw = try parser.mut.expect(actor_)
     todo("Parse actor")
 }
 
-fn parse_alias(mut parser Parser) Option(Alias) {
+fn parse_alias(mut parser Parser) Option(ast::Alias) {
     let kw = try parser.mut.expect(alias_)
     todo("Parse alias")
 }
 
-fn parse_fn(mut parser Parser) Option(Fn) {
+fn parse_fn(mut parser Parser) Option(ast::Fn) {
     let kw = try parser.mut.expect(fn_)
     let ident_ = try parser.mut.parse_ident()
 
@@ -109,19 +109,19 @@ fn parse_fn(mut parser Parser) Option(Fn) {
     let type = if parser.has([type, ident]) { parser.mut.parse_qualified_type() }
     let body = parser.mut.parse_body()
     
-    Fn(name: ident_, args:, type:, body:, span: parser.span(kw))
+    ast::Fn(name: ident_, args:, type:, body:, span: parser.span(kw))
 }
 
-fn parse_arg(mut parser Parser) Option(Arg) {
+fn parse_arg(mut parser Parser) Option(ast::Arg) {
     let span = parser.span()
     let is_mut = parser.mut.accept(mut_) != none
     let ident = try parser.mut.parse_ident()
     let type = try parser.mut.parse_qualified_type()
 
-    Arg(name: ident, type:, is_mut:, span: parser.span(span))
+    ast::Arg(name: ident, type:, is_mut:, span: parser.span(span))
 }
 
-fn parse_statement(mut parser Parser) Option(Statement) {
+fn parse_statement(mut parser Parser) Option(ast::Statement) {
     parser.mut.skip_newlines()
     let token = parser.peek()
     switch token.kind {
@@ -131,7 +131,7 @@ fn parse_statement(mut parser Parser) Option(Statement) {
     }
 }
 
-fn parse_declaration(mut parser Parser) Option(Declaration) {
+fn parse_declaration(mut parser Parser) Option(ast::Declaration) {
     let modifier = parser.tok()
     let is_mut = switch modifier.kind {
         var_ { true }
@@ -143,17 +143,17 @@ fn parse_declaration(mut parser Parser) Option(Declaration) {
     try parser.mut.expect(assign)
     let init = try parser.mut.parse_expression()
     
-    Declaration(name:, type:, init:, is_mut:, span: parser.span(modifier))
+    ast::Declaration(name:, type:, init:, is_mut:, span: parser.span(modifier))
 }
 
-fn parse_ident(mut parser Parser) Option(Ident) {
+fn parse_ident(mut parser Parser) Option(ast::Ident) {
     let token = try parser.mut.expect(ident)
     let name = parser.source.substr(token.span)
 
-    Ident(name:, span: token.span)
+    ast::Ident(name:, span: token.span)
 }
 
-fn parse_qualified_type(mut parser Parser) Option(Type) {
+fn parse_qualified_type(mut parser Parser) Option(ast::Type) {
     let mod = if parser.has(ident) {
         let ident = parser.mut.parse_ident().unwrap()
         try parser.mut.expect(path) // TODO: Better error reporting here, i.e., reporting that a lower case type was encountered where upper case was expected
@@ -165,22 +165,22 @@ fn parse_qualified_type(mut parser Parser) Option(Type) {
     ty
 }
 
-fn parse_type(mut parser Parser) Option(Type) {
+fn parse_type(mut parser Parser) Option(ast::Type) {
     let token = try parser.mut.expect(type)
     let name = parser.source.substr(token.span)
     let params = if parser.has(lparen) { parser.mut.parse_type_params() } else { [] }
 
-    Type(name:, span: token.span, params:, module: none)
+    ast::Type(name:, span: token.span, params:, module: none)
 }
 
-fn parse_type_ident(mut parser Parser) Option(Type) {
+fn parse_type_ident(mut parser Parser) Option(ast::Type) {
     let token = try parser.mut.expect(type)
     let name = parser.source.substr(token.span)
 
-    Type(name:, span: token.span, params: [])
+    ast::Type(name:, span: token.span, params: [], module: none)
 }
 
-fn parse_type_params(mut parser Parser) List(Type) {
+fn parse_type_params(mut parser Parser) List(ast::Type) {
     let token = parser.mut.expect(lparen) else return []
 
     var params = []
@@ -193,7 +193,7 @@ fn parse_type_params(mut parser Parser) List(Type) {
     params
 }
 
-fn parse_test(mut parser Parser) Option(Test) {
+fn parse_test(mut parser Parser) Option(ast::Test) {
     let kw = try parser.mut.expect(test_)
     todo("Parse test")
 }

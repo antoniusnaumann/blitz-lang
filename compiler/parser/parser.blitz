@@ -1,6 +1,6 @@
 struct Parser {
     tokens List(Token)
-    errors List(Error)
+    errors List(ast::Error)
     index  Int
     source List(Rune)
 }
@@ -13,7 +13,7 @@ fn new_parser(source String) Parser {
     Parser(tokens:, errors: [], source: chars, index: 0)
 }
 
-fn parse(mut parser Parser) List(Definition) {
+fn parse(mut parser Parser) List(ast::Definition) {
     var result = []
     var def = parser.mut.next()
 
@@ -25,12 +25,12 @@ fn parse(mut parser Parser) List(Definition) {
     result
 }
 
-fn parse(source String) List(Definition) {
+fn parse(source String) List(ast::Definition) {
     var parser = new_parser(source)
     parser.mut.parse()
 }
 
-fn next(mut parser Parser) Option(Definition) {
+fn next(mut parser Parser) Option(ast::Definition) {
     var def = none
 
     parser.mut.skip_newlines()
@@ -80,23 +80,23 @@ fn eof(parser Parser) Bool {
     parser.index >= parser.tokens.len()
 }
 
-fn span(parser Parser) Span {
+fn span(parser Parser) ast::Span {
     parser.peek().span
 }
 
-fn span(parser Parser, from Token) Span {
+fn span(parser Parser, from Token) ast::Span {
     parser.span(from.span)
 }
 
-fn span(parser Parser, from Token, to Token) Span {
+fn span(parser Parser, from Token, to Token) ast::Span {
     parser.span(from.span, to.span)
 }
 
-fn span(parser Parser, from Span) Span {
+fn span(parser Parser, from ast::Span) ast::Span {
     parser.span(from, parser.last().span)    
 }
 
-fn span(parser Parser, from Span, to Span) Span {
+fn span(parser Parser, from ast::Span, to ast::Span) ast::Span {
     from.merge(to)
 }
 
@@ -165,6 +165,5 @@ fn err(mut parser Parser, msg String) {
     // TODO: for now, we panic, later we should maintain an error list
     print(parser.source.substr(parser.last().span))
     panic(msg)
-    parser.errors ++= Error(span: parser.last().span, msg: msg)
+    parser.errors ++= ast::Error(span: parser.last().span, msg: msg)
 } 
-

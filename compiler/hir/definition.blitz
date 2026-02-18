@@ -123,7 +123,7 @@ fn push(mut mod Module, def TypeDef) TypeId {
 }
 
 struct TypeDef {
-    name    Ident
+    name    ast::Ident
     generic List(TypeParam)
     kind    TypeDefKind
     vis     Visibility
@@ -139,22 +139,22 @@ struct StructDef {
 }
 
 struct FieldDef {
-    name Ident
+    name ast::Ident
     type TypeRef
 }
 
 struct UnionDef {
-    label Option(Ident)
+    label Option(ast::Ident)
     type  TypeRef
 }
 
 struct FuncDef {
-    name    Ident
+    name    ast::Ident
     module  ModId            
     generic List(GenericId)
     params  List(TypeRef)
     result  TypeRef
-    body    HirBody              
+    body    Body              
     vis     Visibility
 }
 

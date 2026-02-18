@@ -4,7 +4,7 @@ fn compile_file(path String) {
 
     // CODE -> AST
 	var parser = new_parser(content)
-	let ast = Ast(items: parser.mut.parse(), origin: "main.blitz")
+	let ast = ast::Ast(items: parser.mut.parse(), origin: "main.blitz")
 
 	// AST -> HIR
 	todo("AST -> HIR")

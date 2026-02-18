@@ -8,7 +8,7 @@ test "New HIR contains core module" {
 }
 
 test "Create module name from AST" {
-    let ast = Ast(origin: "some/mymodule/file.blitz", items: [])
+    let ast = ast::Ast(origin: "some/mymodule/file.blitz", items: [])
     var asts = []
     asts ++= ast
     let hir = asts.lower()
@@ -25,27 +25,27 @@ test "Create module name from AST" {
 
 test "Collect ASTs into module" {
     // Multiple files in same directory should go to same module
-    let fn1 = Fn(
-        name: Ident(name: "add", span: empty_span()),
+    let fn1 = ast::Fn(
+        name: ast::Ident(name: "add", span: ast::empty_span()),
         args: [],
         type: none,
-        body: Block(statements: [], span: empty_span()),
-        span: empty_span()
+        body: ast::Block(statements: [], span: ast::empty_span()),
+        span: ast::empty_span()
     )
     var items1 = []
     items1 ++= fn1
-    let ast1 = Ast(origin: "src/math/add.blitz", items: items1)
+    let ast1 = ast::Ast(origin: "src/math/add.blitz", items: items1)
     
-    let fn2 = Fn(
-        name: Ident(name: "subtract", span: empty_span()),
+    let fn2 = ast::Fn(
+        name: ast::Ident(name: "subtract", span: ast::empty_span()),
         args: [],
         type: none,
-        body: Block(statements: [], span: empty_span()),
-        span: empty_span()
+        body: ast::Block(statements: [], span: ast::empty_span()),
+        span: ast::empty_span()
     )
     var items2 = []
     items2 ++= fn2
-    let ast2 = Ast(origin: "src/math/subtract.blitz", items: items2)
+    let ast2 = ast::Ast(origin: "src/math/subtract.blitz", items: items2)
     
     var asts = []
     asts ++= ast1
@@ -63,9 +63,9 @@ test "Collect ASTs into module" {
 }
 
 test "Create module names from ASTs" {
-    let ast1 = Ast(origin: "src/module1/file.blitz", items: [])
-    let ast2 = Ast(origin: "src/module2/file.blitz", items: [])
-    let ast3 = Ast(origin: "src/module3/file.blitz", items: [])
+    let ast1 = ast::Ast(origin: "src/module1/file.blitz", items: [])
+    let ast2 = ast::Ast(origin: "src/module2/file.blitz", items: [])
+    let ast3 = ast::Ast(origin: "src/module3/file.blitz", items: [])
     
     var asts = []
     asts ++= ast1
@@ -81,26 +81,26 @@ test "Create module names from ASTs" {
 }
 
 test "Lower types" {
-    let struct_def = Struct(
-        sig: Type(name: "Point", params: [], span: empty_span()),
+    let struct_def = ast::Struct(
+        sig: ast::Type(name: "Point", params: [], span: ast::empty_span(), module: none),
         fields: [
-            Field(
-                name: Ident(name: "x", span: empty_span()),
-                type: Type(name: "Int", params: [], span: empty_span()),
-                span: empty_span()
+            ast::Field(
+                name: ast::Ident(name: "x", span: ast::empty_span()),
+                type: ast::Type(name: "Int", params: [], span: ast::empty_span(), module: none),
+                span: ast::empty_span()
             ),
-            Field(
-                name: Ident(name: "y", span: empty_span()),
-                type: Type(name: "Int", params: [], span: empty_span()),
-                span: empty_span()
+            ast::Field(
+                name: ast::Ident(name: "y", span: ast::empty_span()),
+                type: ast::Type(name: "Int", params: [], span: ast::empty_span(), module: none),
+                span: ast::empty_span()
             )
         ],
-        span: empty_span()
+        span: ast::empty_span()
     )
     
     var items = []
     items ++= struct_def
-    let ast = Ast(origin: "src/geometry/point.blitz", items:)
+    let ast = ast::Ast(origin: "src/geometry/point.blitz", items:)
     var asts = []
     asts ++= ast
     let hir = asts.lower()

@@ -610,6 +610,7 @@ impl<'a> Parser<'a> {
                         // Generate a call to _assert_cmp_failed with the values
                         let assert_call = Expression::Call(crate::Call {
                             name: "_assert_cmp_failed".into(),
+                            module: None,
                             args: vec![
                                 CallArg {
                                     label: None,
@@ -654,6 +655,7 @@ impl<'a> Parser<'a> {
                 let panic_message = format!("Assertion '{}' failed", condition_str);
                 let panic_call = Expression::Call(crate::Call {
                     name: "panic".into(),
+                    module: None,
                     args: vec![CallArg {
                         label: None,
                         init: Box::new(Expression::String(panic_message)),
@@ -730,6 +732,24 @@ impl<'a> Parser<'a> {
                                 "Expected '(' after qualified type name {}::{}\n\n{}",
                                 name,
                                 type_name,
+                                self.report_span(span)
+                            );
+                        }
+                    } else if self.has(TokenKind::Ident) {
+                        // module::func(...) - qualified function call
+                        let module = Some(name.clone());
+                        let func_ident = self.expect_ident();
+                        let func_name = func_ident.name;
+
+                        if self.has(TokenKind::Lparen) {
+                            let mut call = self.parse_call(&func_name);
+                            call.module = module;
+                            Expression::Call(call)
+                        } else {
+                            panic!(
+                                "Expected '(' after qualified function name {}::{}\n\n{}",
+                                name,
+                                func_name,
                                 self.report_span(span)
                             );
                         }
@@ -852,6 +872,7 @@ impl<'a> Parser<'a> {
 
         Call {
             name: method,
+            module: None,
             args,
             ufcs: true,
             span: parent.span().merge(&end_span),
@@ -1117,6 +1138,7 @@ impl<'a> Parser<'a> {
 
         Call {
             name: ident.into(),
+            module: None,
             args,
             ufcs: false,
             span: span.merge(&self.span),
@@ -2397,6 +2419,38 @@ mod tests {
         match expr {
             Expression::Call(call) => {
                 assert_eq!(call.name, "foo");
+                assert_eq!(call.module, None);
+                assert_eq!(call.args.len(), 2);
+            }
+            _ => panic!("Expected Call, got {:?}", expr.print()),
+        }
+    }
+
+    #[test]
+    fn test_qualified_function_call() {
+        // ast::empty_span() should parse as a qualified function call
+        let expr = parse_expr("ast::empty_span()");
+
+        match expr {
+            Expression::Call(call) => {
+                assert_eq!(call.name, "empty_span");
+                assert_eq!(call.module, Some("ast".to_string()));
+                assert_eq!(call.args.len(), 0);
+                assert!(!call.ufcs);
+            }
+            _ => panic!("Expected Call, got {:?}", expr.print()),
+        }
+    }
+
+    #[test]
+    fn test_qualified_function_call_with_args() {
+        // math::add(x, y) should parse as a qualified function call with args
+        let expr = parse_expr("math::add(x, y)");
+
+        match expr {
+            Expression::Call(call) => {
+                assert_eq!(call.name, "add");
+                assert_eq!(call.module, Some("math".to_string()));
                 assert_eq!(call.args.len(), 2);
             }
             _ => panic!("Expected Call, got {:?}", expr.print()),

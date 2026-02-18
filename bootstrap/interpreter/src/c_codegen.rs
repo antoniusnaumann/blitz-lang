@@ -25,12 +25,27 @@ pub fn transpile_to_c_with_tests(asts: &[Ast], output_dir: &Path) -> Result<(), 
     transpile_to_c_impl(asts, output_dir, true)
 }
 
+/// Extract the module name from a file path.
+/// The module is the immediate parent directory of the file.
+/// e.g., "../../compiler/hir/expression.blitz" -> "hir"
+/// e.g., "../../compiler/main.blitz" -> "compiler"
+/// e.g., "hir/lower.blitz" -> "hir"
+fn module_from_path(path: &str) -> String {
+    let path = std::path::Path::new(path);
+    path.parent()
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        .unwrap_or("_root")
+        .to_string()
+}
+
 /// Implementation for C transpilation with optional test support
 fn transpile_to_c_impl(asts: &[Ast], output_dir: &Path, include_tests: bool) -> Result<(), String> {
     let mut codegen = CCodegen::new(output_dir, include_tests);
 
     // First pass: collect all type definitions
     for ast in asts {
+        codegen.current_module = module_from_path(&ast.path);
         for def in &ast.defs {
             codegen.collect_definition(def)?;
         }
@@ -39,6 +54,7 @@ fn transpile_to_c_impl(asts: &[Ast], output_dir: &Path, include_tests: bool) -> 
     // Register variant-to-union mappings after all types have been collected.
     // This ensures type_name_for_instance returns consistent collision-resolved names.
     for ast in asts {
+        codegen.current_module = module_from_path(&ast.path);
         for def in &ast.defs {
             codegen.register_variants(def)?;
         }
@@ -46,6 +62,7 @@ fn transpile_to_c_impl(asts: &[Ast], output_dir: &Path, include_tests: bool) -> 
 
     // Second pass: analyze types to find generic instantiations needed
     for ast in asts {
+        codegen.current_module = module_from_path(&ast.path);
         for def in &ast.defs {
             codegen.analyze_definition(def)?;
         }
@@ -53,6 +70,7 @@ fn transpile_to_c_impl(asts: &[Ast], output_dir: &Path, include_tests: bool) -> 
 
     // Third pass: build dependency graph for type definitions
     for ast in asts {
+        codegen.current_module = module_from_path(&ast.path);
         for def in &ast.defs {
             codegen.build_type_dependencies(def)?;
         }
@@ -61,6 +79,7 @@ fn transpile_to_c_impl(asts: &[Ast], output_dir: &Path, include_tests: bool) -> 
     // Fourth pass: generate code in dependency order
     // First generate all enums (simple unions) - they have no dependencies
     for ast in asts {
+        codegen.current_module = module_from_path(&ast.path);
         for def in &ast.defs {
             if let Definition::Union(u) = def {
                 let is_simple_enum = !u.cases.iter().any(|c| c.r#type.is_some());
@@ -82,6 +101,10 @@ fn transpile_to_c_impl(asts: &[Ast], output_dir: &Path, include_tests: bool) -> 
     let ordered_types = codegen.topological_sort_types()?;
 
     for type_name in ordered_types {
+        // Set the module context for this type definition
+        if let Some(module) = codegen.c_name_to_module.get(&type_name).cloned() {
+            codegen.current_module = module;
+        }
         // Clone the definition to avoid borrow checker issues
         if let Some(def) = codegen.type_definitions.get(&type_name).cloned() {
             codegen.generate_definition(&def)?;
@@ -90,6 +113,7 @@ fn transpile_to_c_impl(asts: &[Ast], output_dir: &Path, include_tests: bool) -> 
 
     // Finally generate functions and other non-type definitions
     for ast in asts {
+        codegen.current_module = module_from_path(&ast.path);
         for def in &ast.defs {
             match def {
                 Definition::Fn(_) => {
@@ -108,6 +132,7 @@ fn transpile_to_c_impl(asts: &[Ast], output_dir: &Path, include_tests: bool) -> 
     // Generate test functions if in test mode
     if include_tests {
         for ast in asts {
+            codegen.current_module = module_from_path(&ast.path);
             for def in &ast.defs {
                 if let Definition::Test(_) = def {
                     codegen.generate_definition(def)?;
@@ -234,6 +259,12 @@ struct CCodegen {
     /// Accumulated codegen errors (e.g., unknown struct fields, undefined variables).
     /// Collected during code generation and reported before C compilation.
     codegen_errors: Vec<String>,
+    /// Current module name (derived from AST path, e.g., "ast", "hir", "parser")
+    /// Set before processing each AST's definitions to provide module context.
+    current_module: String,
+    /// Map from C type name to the module it was defined in.
+    /// Used to set current_module when generating types in topological sort order.
+    c_name_to_module: HashMap<String, String>,
 }
 
 impl CCodegen {
@@ -288,6 +319,8 @@ impl CCodegen {
             function_mut_params: HashMap::new(),
             mut_pointer_params: HashMap::new(),
             codegen_errors: Vec::new(),
+            current_module: String::new(),
+            c_name_to_module: HashMap::new(),
         }
     }
 
@@ -295,10 +328,14 @@ impl CCodegen {
     fn collect_definition(&mut self, def: &Definition) -> Result<(), String> {
         match def {
             Definition::Struct(s) => {
-                let c_name = self
-                    .type_name_registry
-                    .register_type(&s.sig.name, TypeKind::Struct);
+                let c_name = self.type_name_registry.register_type(
+                    &s.sig.name,
+                    TypeKind::Struct,
+                    &self.current_module,
+                );
                 self.seen_types.insert(c_name.clone());
+                self.c_name_to_module
+                    .insert(c_name.clone(), self.current_module.clone());
 
                 // Collect field types for this struct
                 let mut field_types = HashMap::new();
@@ -325,8 +362,12 @@ impl CCodegen {
                     TypeKind::Enum
                 };
 
-                let c_name = self.type_name_registry.register_type(&u.sig.name, kind);
+                let c_name =
+                    self.type_name_registry
+                        .register_type(&u.sig.name, kind, &self.current_module);
                 self.seen_types.insert(c_name.clone());
+                self.c_name_to_module
+                    .insert(c_name.clone(), self.current_module.clone());
 
                 if !has_typed_variants {
                     self.enum_types.insert(c_name);
@@ -415,9 +456,11 @@ impl CCodegen {
 
                 let has_typed_variants = u.cases.iter().any(|c| c.r#type.is_some());
                 if has_typed_variants {
-                    let c_name = self
-                        .type_name_registry
-                        .register_type(&u.sig.name, TypeKind::TaggedUnion);
+                    let c_name = self.type_name_registry.register_type(
+                        &u.sig.name,
+                        TypeKind::TaggedUnion,
+                        &self.current_module,
+                    );
 
                     // Track variant types to their parent union for constructor generation
                     for case in &u.cases {
@@ -516,9 +559,11 @@ impl CCodegen {
         match def {
             Definition::Struct(s) => {
                 let blitz_name = s.sig.name.clone();
-                let c_name = self
-                    .type_name_registry
-                    .register_type(&blitz_name, TypeKind::Struct);
+                let c_name = self.type_name_registry.register_type(
+                    &blitz_name,
+                    TypeKind::Struct,
+                    &self.current_module,
+                );
 
                 // Store the definition using C name as key
                 self.type_definitions.insert(c_name.clone(), def.clone());
@@ -544,7 +589,9 @@ impl CCodegen {
                 } else {
                     TypeKind::Enum
                 };
-                let c_name = self.type_name_registry.register_type(&blitz_name, kind);
+                let c_name =
+                    self.type_name_registry
+                        .register_type(&blitz_name, kind, &self.current_module);
 
                 // Store the definition using C name as key
                 self.type_definitions.insert(c_name.clone(), def.clone());
@@ -798,10 +845,87 @@ impl CCodegen {
             .or_insert(("List".to_string(), vec![elem_type]));
     }
 
+    /// Resolve the C name for a blitz type given its name and module.
+    /// Used by infer_expr_type and other places that work with raw type name strings
+    /// rather than Type AST nodes.
+    fn resolve_c_name_for(&self, blitz_name: &str, module: &str) -> String {
+        if let Some(c_name) = self
+            .type_name_registry
+            .get_c_name_for_module(blitz_name, module)
+        {
+            return c_name;
+        }
+        // Fall back to name-only lookup
+        self.type_name_registry.get_c_name(blitz_name)
+    }
+
+    /// Convenience: return `"Option_{c_name}"` for a blitz type in a given module.
+    fn option_c_name(&self, blitz_name: &str, module: &str) -> String {
+        format!("Option_{}", self.resolve_c_name_for(blitz_name, module))
+    }
+
+    /// Resolve a field type string from `struct_field_types` into the correct C type.
+    /// Field types are stored as blitz type signatures (e.g., "List_Expression", "Expression",
+    /// "Option_Ident"). The inner type names need module-aware resolution because the same
+    /// blitz name (e.g., "Expression") can map to different C names depending on the module
+    /// (e.g., "Expression" in hir vs "ast_Expression" in ast).
+    ///
+    /// `struct_c_name` is the C name of the struct that owns this field, used to determine
+    /// the module context for resolution.
+    fn resolve_field_type_to_c(&self, field_type: &str, struct_c_name: &str) -> String {
+        let module = self
+            .c_name_to_module
+            .get(struct_c_name)
+            .map(|s| s.as_str())
+            .unwrap_or(&self.current_module);
+
+        if field_type.starts_with("List_") {
+            let inner = &field_type[5..];
+            let resolved = self.resolve_c_name_for(inner, module);
+            format!("List_{}", resolved)
+        } else if field_type.starts_with("List(") && field_type.ends_with(")") {
+            let inner = &field_type[5..field_type.len() - 1];
+            let resolved = self.resolve_c_name_for(inner, module);
+            format!("List_{}", resolved)
+        } else if field_type.starts_with("Option_") {
+            let inner = &field_type[7..];
+            let resolved = self.resolve_c_name_for(inner, module);
+            format!("Option_{}", resolved)
+        } else if field_type.starts_with("Option(") && field_type.ends_with(")") {
+            let inner = &field_type[7..field_type.len() - 1];
+            let resolved = self.resolve_c_name_for(inner, module);
+            format!("Option_{}", resolved)
+        } else {
+            // Plain type name - resolve directly
+            self.resolve_c_name_for(field_type, module)
+        }
+    }
+
+    /// Resolve the C name for a type, taking its module qualifier into account.
+    /// If the type has an explicit module (e.g., `ast::Return`), use that for lookup.
+    /// If no explicit module, fall back to current_module for disambiguation.
+    /// Returns the original name if no module-specific registration is found.
+    fn resolve_c_name_for_type(&self, ty: &Type) -> String {
+        let module = ty.module.as_deref().unwrap_or(&self.current_module);
+
+        // Try module-aware lookup first
+        if let Some(c_name) = self
+            .type_name_registry
+            .get_c_name_for_module(&ty.name, module)
+        {
+            return c_name;
+        }
+
+        // If explicit module was given but not found, it might be that
+        // the type was registered from a different module name (e.g., path differences).
+        // Fall back to the default name-only lookup.
+        self.type_name_registry.get_c_name(&ty.name)
+    }
+
     /// Get a simple type name for use in instance names
     fn type_name_for_instance(&self, ty: &Type) -> String {
         if ty.params.is_empty() {
-            // For non-generic types, check for type name collisions
+            // For non-generic types, resolve the C name using module context
             let name = &ty.name;
 
             // Check if there's a collision suffix version that's an enum
@@ -821,22 +945,10 @@ impl CCodegen {
                 // we need to use the suffixed name that matches how the union was generated
                 // Look up what the struct was registered as
                 if let Some(instances) = self.type_name_registry.get_instances(name) {
-                    // The first instance is the struct (registered first),
-                    // and there may be a second instance (the enum with suffix)
-                    // For variant registration, we want the struct's name (first one)
-                    // But for consistency with header generation, we need to use what
-                    // the header generation will use
                     if instances.len() > 1 {
-                        // There's a collision - check if this is a struct being referenced
-                        // as a union variant. In this case, the header generation will
-                        // call type_name_for_instance AFTER enum_types is populated,
-                        // so it will return the suffixed name. We should do the same.
-                        // BUT: at this point enum_types isn't populated yet!
-                        // We need to check if ANY of the instances is an enum
-                        for (c_name, kind) in instances {
+                        // Check if ANY of the instances is an enum with suffix
+                        for (c_name, kind, _module) in instances {
                             if *kind == TypeKind::Enum && c_name.ends_with("_1") {
-                                // There's an enum with suffix - the struct should also use suffix
-                                // since that's how the header generation will treat it
                                 return suffixed_name;
                             }
                         }
@@ -844,8 +956,8 @@ impl CCodegen {
                 }
             }
 
-            // Otherwise, use the original name
-            ty.name.clone()
+            // Use module-aware name resolution
+            self.resolve_c_name_for_type(ty)
         } else {
             format!(
                 "{}_{}",
@@ -1252,9 +1364,11 @@ impl CCodegen {
             Definition::Struct(s) => {
                 let struct_name = &s.sig.name;
                 // Get the C name with potential collision suffix
-                let c_name = self
-                    .type_name_registry
-                    .register_type(struct_name, TypeKind::Struct);
+                let c_name = self.type_name_registry.register_type(
+                    struct_name,
+                    TypeKind::Struct,
+                    &self.current_module,
+                );
 
                 // Skip if already generated
                 if self.generated_types.contains(&c_name) {
@@ -1284,7 +1398,9 @@ impl CCodegen {
                 };
 
                 // Get the C name with potential collision suffix
-                let c_name = self.type_name_registry.register_type(union_name, kind);
+                let c_name =
+                    self.type_name_registry
+                        .register_type(union_name, kind, &self.current_module);
 
                 // Skip if already generated
                 if self.generated_types.contains(&c_name) {
@@ -1334,9 +1450,11 @@ impl CCodegen {
         let struct_name = &sig.name;
 
         // Get the C name for this struct
-        let c_name = self
-            .type_name_registry
-            .register_type(struct_name, TypeKind::Struct);
+        let c_name = self.type_name_registry.register_type(
+            struct_name,
+            TypeKind::Struct,
+            &self.current_module,
+        );
 
         // Skip if it's a built-in type
         if self.is_builtin_type(&c_name) {
@@ -1402,7 +1520,9 @@ impl CCodegen {
         } else {
             TypeKind::Enum
         };
-        let c_name = self.type_name_registry.register_type(union_name, kind);
+        let c_name = self
+            .type_name_registry
+            .register_type(union_name, kind, &self.current_module);
 
         if !has_typed_variants {
             // Generate simple enum for symbolic-only unions
@@ -1562,28 +1682,30 @@ impl CCodegen {
             if let Some(variant_type) = &case.r#type {
                 let type_name = &variant_type.name;
                 let c_type = self.map_type(variant_type);
+                let resolved_variant_c_name = self.resolve_c_name_for_type(variant_type);
 
                 // Check if this type doesn't have a span field
                 if types_without_span.contains(&type_name.as_str()) {
                     if type_name == "Expression" {
-                        // For Expression variant in Statement, recurse to Expression_span
+                        // For Expression variant in Statement, recurse to Expression's _span
                         code.push_str(&format!(
-                            "            return Expression_span(expr->data.as_{});\n",
-                            variant_name
+                            "            return {}_span(expr->data.as_{});\n",
+                            resolved_variant_c_name, variant_name
                         ));
                     } else {
                         // Assignment doesn't have span - return NULL or get from left expression
                         // left is Expression* (not Expression**), so no dereference needed
+                        // We recurse to the PARENT union's _span (i.e., c_name), not the variant's
                         code.push_str(&format!(
-                            "            return Expression_span(expr->data.as_{}->left);\n",
-                            variant_name
+                            "            return {}_span(expr->data.as_{}->left);\n",
+                            c_name, variant_name
                         ));
                     }
                 } else if nested_tagged_unions.contains(&type_name.as_str()) {
                     // For nested tagged unions like Literal, call their _span helper
                     code.push_str(&format!(
                         "            return {}_span(expr->data.as_{});\n",
-                        type_name, variant_name
+                        resolved_variant_c_name, variant_name
                     ));
                 } else if is_lit_type(&variant_name) {
                     // Lit variants store span as Span* pointer, access directly (no &)
@@ -2685,13 +2807,13 @@ impl CCodegen {
                                     arg.label.name, field_type
                                 );
                                     // field_type might be like "List(Statement)" or already "List_Statement"
+                                    // Resolve inner type names using module-aware lookup
                                     let list_type = if field_type.starts_with("List(")
                                         && field_type.ends_with(")")
                                     {
-                                        let inner = &field_type[5..field_type.len() - 1];
-                                        format!("List_{}", inner)
+                                        self.resolve_field_type_to_c(field_type, &type_name)
                                     } else if field_type.starts_with("List_") {
-                                        field_type.clone()
+                                        self.resolve_field_type_to_c(field_type, &type_name)
                                     } else {
                                         continue; // Not a list type
                                     };
@@ -3265,9 +3387,9 @@ impl CCodegen {
                     "span_Parser_Span_Span" => return "Span*".to_string(),
 
                     // Parser expression/statement functions
-                    "parse_expression" => return "Option_Expression".to_string(),
-                    "parse_expression_bp" => return "Option_Expression".to_string(),
-                    "parse_statement" => return "Option_Statement".to_string(),
+                    "parse_expression" => return self.option_c_name("Expression", "ast"),
+                    "parse_expression_bp" => return self.option_c_name("Expression", "ast"),
+                    "parse_statement" => return self.option_c_name("Statement", "ast"),
                     "parse_declaration" => return "Option_Declaration".to_string(),
 
                     // Parser definition functions
@@ -3291,25 +3413,25 @@ impl CCodegen {
                     "parse_body" => return "Option_Block".to_string(),
 
                     // Parser control flow functions
-                    "parse_if" => return "Option_If".to_string(),
+                    "parse_if" => return self.option_c_name("If", "ast"),
                     "parse_while" => return "Option_While".to_string(),
                     "parse_for" => return "Option_For".to_string(),
-                    "parse_switch" => return "Option_Switch".to_string(),
+                    "parse_switch" => return self.option_c_name("Switch", "ast"),
                     "parse_switch_label" => return "Option_SwitchLabel".to_string(),
-                    "parse_member_call" => return "Option_Expression".to_string(),
+                    "parse_member_call" => return self.option_c_name("Expression", "ast"),
 
                     // Parser literal functions - these return Expression variants, not standalone types
-                    "parse_int_lit" => return "Option_Expression".to_string(),
-                    "parse_float_lit" => return "Option_Expression".to_string(),
-                    "parse_string_lit" => return "Option_Expression".to_string(),
-                    "parse_char_lit" => return "Option_Expression".to_string(),
+                    "parse_int_lit" => return self.option_c_name("Expression", "ast"),
+                    "parse_float_lit" => return self.option_c_name("Expression", "ast"),
+                    "parse_string_lit" => return self.option_c_name("Expression", "ast"),
+                    "parse_char_lit" => return self.option_c_name("Expression", "ast"),
 
                     // Parser call/constructor functions - these return Expression variants
-                    "parse_call" => return "Option_Expression".to_string(),
-                    "parse_constructor" => return "Option_Expression".to_string(),
-                    "parse_group" => return "Option_Expression".to_string(),
-                    "parse_list" => return "Option_Expression".to_string(),
-                    "parse_precedence" => return "Option_Expression".to_string(),
+                    "parse_call" => return self.option_c_name("Expression", "ast"),
+                    "parse_constructor" => return self.option_c_name("Expression", "ast"),
+                    "parse_group" => return self.option_c_name("Expression", "ast"),
+                    "parse_list" => return self.option_c_name("Expression", "ast"),
+                    "parse_precedence" => return self.option_c_name("Expression", "ast"),
 
                     // Lexer functions
                     "new_lexer" => return "Lexer*".to_string(),
@@ -3394,8 +3516,8 @@ impl CCodegen {
                     "parse_union" => return "Option_Union".to_string(),
                     "parse_type" => return "Option_Type".to_string(),
                     "parse_ident" => return "Option_Ident".to_string(),
-                    "parse_expression" => return "Option_Expression".to_string(),
-                    "parse_statement" => return "Option_Statement".to_string(),
+                    "parse_expression" => return self.option_c_name("Expression", "ast"),
+                    "parse_statement" => return self.option_c_name("Statement", "ast"),
                     // Struct field types - these are pointer fields
                     "range" => return "Range*".to_string(),
                     "span" => return "Span*".to_string(),
@@ -3437,7 +3559,9 @@ impl CCodegen {
                         // Fallback to List_CallArg for backwards compatibility
                         return "List_CallArg".to_string();
                     }
-                    "elems" => return "List_Expression".to_string(),
+                    "elems" => {
+                        return format!("List_{}", self.resolve_c_name_for("Expression", "ast"))
+                    }
                     "cases" => {
                         // Could be List_SwitchCase or List_Case depending on context
                         let parent_type = self.infer_expr_type(&member.parent);
@@ -3514,8 +3638,8 @@ impl CCodegen {
                         "parse_def" => return "Option_Definition".to_string(),
                         "parse_ident" => return "Option_Ident".to_string(),
                         "parse_type" => return "Option_Type".to_string(),
-                        "parse_expression" => return "Option_Expression".to_string(),
-                        "parse_statement" => return "Option_Statement".to_string(),
+                        "parse_expression" => return self.option_c_name("Expression", "ast"),
+                        "parse_statement" => return self.option_c_name("Statement", "ast"),
                         _ => {}
                     }
                 }
@@ -3584,93 +3708,23 @@ impl CCodegen {
                             let inferred = self.infer_expr_type(last_expr);
                             // If we got a valid type (not the fallback), return it
                             if inferred != "int64_t" {
-                                // Check if this is an Option of an Expression variant
-                                // Expression variants: For, While, If, Switch, Return, etc.
-                                let expression_variants = [
-                                    "Option_For",
-                                    "Option_While",
-                                    "Option_If",
-                                    "Option_Switch",
-                                    "Option_Return",
-                                    "Option_Continue",
-                                    "Option_Break",
-                                    "Option_Assert",
-                                    "Option_Block",
-                                    "Option_Ident",
-                                    "Option_Call",
-                                    "Option_Member",
-                                    "Option_Index",
-                                    "Option_BinaryOp",
-                                    "Option_UnaryOp",
-                                    "Option_Constructor",
-                                    "Option_Group",
-                                    "Option_List_",
-                                    "Option_Lit",
-                                    "Option_Mut",
-                                    "Option_Assignment",
-                                ];
-                                if expression_variants.iter().any(|v| inferred.starts_with(v)) {
-                                    // This is an Option of an expression variant, unify to Option_Expression
-                                    return "Option_Expression".to_string();
+                                // Check if this is an Option of a variant type that belongs to a tagged union
+                                // e.g., Option_For -> Option_ast_Expression, Option_ast_If -> Option_ast_Expression
+                                if let Some(inner) = inferred.strip_prefix("Option_") {
+                                    let inner_base = inner.trim_end_matches('*');
+                                    if let Some(union_set) = self.variant_to_union.get(inner_base) {
+                                        let union_name = union_set.iter().next().cloned().unwrap();
+                                        return format!("Option_{}", union_name);
+                                    }
                                 }
 
-                                // Check if this is an Option of a Definition variant
-                                // Definition variants: Struct, Union, Actor, Alias, Fn, Test, Pub
-                                let definition_variants = [
-                                    "Option_Struct",
-                                    "Option_Union",
-                                    "Option_Actor",
-                                    "Option_Alias",
-                                    "Option_Fn",
-                                    "Option_Test",
-                                    "Option_Pub",
-                                ];
-                                if definition_variants.iter().any(|v| inferred == *v) {
-                                    // This is an Option of a definition variant, unify to Option_Definition
-                                    return "Option_Definition".to_string();
-                                }
-
-                                // Check if this is a pointer to an Expression variant
-                                // Expression variants: For, While, If, Switch, Return, etc.
-                                let expression_ptr_variants = [
-                                    "For*",
-                                    "While*",
-                                    "If*",
-                                    "Switch*",
-                                    "Return*",
-                                    "Continue*",
-                                    "Break*",
-                                    "Assert*",
-                                    "Block*",
-                                    "Ident*",
-                                    "Call*",
-                                    "Member*",
-                                    "Index*",
-                                    "BinaryOp*",
-                                    "UnaryOp*",
-                                    "Constructor*",
-                                    "Group*",
-                                    "List_*",
-                                    "Lit_Bool*",
-                                    "Lit_String*",
-                                    "Lit_Rune*",
-                                    "Lit_Float*",
-                                    "Lit_Int*",
-                                    "Mut*",
-                                    "Assignment*",
-                                ];
-                                if expression_ptr_variants.iter().any(|v| inferred == *v) {
-                                    // This is a pointer to an expression variant, unify to Expression*
-                                    return "Expression*".to_string();
-                                }
-
-                                // Check if this is a pointer to a Definition variant
-                                let definition_ptr_variants = [
-                                    "Struct*", "Union*", "Actor*", "Alias*", "Fn*", "Test*", "Pub*",
-                                ];
-                                if definition_ptr_variants.iter().any(|v| inferred == *v) {
-                                    // This is a pointer to a definition variant, unify to Definition*
-                                    return "Definition*".to_string();
+                                // Check if this is a pointer to a variant type that belongs to a tagged union
+                                // e.g., For* -> ast_Expression*, ast_If* -> ast_Expression*
+                                if let Some(base) = inferred.strip_suffix('*') {
+                                    if let Some(union_set) = self.variant_to_union.get(base) {
+                                        let union_name = union_set.iter().next().cloned().unwrap();
+                                        return format!("{}*", union_name);
+                                    }
                                 }
 
                                 return inferred;
@@ -5059,16 +5113,20 @@ impl CCodegen {
                 // Assignment enum). If this is a struct constructor (has field arguments), we need
                 // to use the correct C name from the registry.
                 //
-                // The registry maps original Blitz names to C names, handling collisions:
-                // - If struct is registered first: struct gets "Assignment", enum gets "Assignment_1"
-                // - If enum is registered first: enum gets "Assignment", struct gets "Assignment_1"
-                //
+                // The registry maps original Blitz names to C names, handling collisions.
                 // For constructors with named fields, we always want the struct version.
                 if !ctor.args.is_empty() {
                     // This constructor has field arguments, so it must be a struct
-                    // Look up the struct's C name from the registry
-                    if let Some(struct_c_name) =
-                        self.type_name_registry.get_struct_c_name(&type_name)
+                    // Look up the struct's C name from the registry using module context
+                    let module = ctor
+                        .r#type
+                        .module
+                        .as_deref()
+                        .unwrap_or(&self.current_module);
+                    if let Some(struct_c_name) = self
+                        .type_name_registry
+                        .get_struct_c_name_for_module(&ctor.r#type.name, module)
+                        .or_else(|| self.type_name_registry.get_struct_c_name(&ctor.r#type.name))
                     {
                         if struct_c_name != type_name {
                             debug_println!(self, 
@@ -5144,15 +5202,10 @@ impl CCodegen {
                             // Empty list - try to infer the correct List type from the struct field
                             // First, check if we have the expected field type from struct definition
                             let list_type = if let Some(ref eft) = expected_field_type {
-                                // Expected field type is from struct_field_types, e.g. "List(Error)"
-                                if eft.starts_with("List(") {
-                                    let inner = eft
-                                        .strip_prefix("List(")
-                                        .and_then(|s| s.strip_suffix(")"))
-                                        .unwrap_or("Int");
-                                    format!("List_{}", inner)
-                                } else if eft.starts_with("List_") {
-                                    eft.clone()
+                                // Expected field type is from struct_field_types, e.g. "List_Expression"
+                                // Resolve inner type names using module-aware lookup
+                                if eft.starts_with("List(") || eft.starts_with("List_") {
+                                    self.resolve_field_type_to_c(eft, &type_name)
                                 } else {
                                     "List_Int".to_string()
                                 }
@@ -5171,7 +5224,10 @@ impl CCodegen {
                                         "List_Field".to_string()
                                     }
                                     ("Union", "cases") | (_, "cases") => "List_Case".to_string(),
-                                    (_, "elems") => "List_Expression".to_string(),
+                                    (_, "elems") => format!(
+                                        "List_{}",
+                                        self.resolve_c_name_for("Expression", &self.current_module)
+                                    ),
                                     _ => "List_Int".to_string(), // Default fallback
                                 }
                             };
@@ -5560,7 +5616,11 @@ impl CCodegen {
                         .trim_end_matches('*')
                         .trim_start_matches("Option_");
 
-                    if base_type == "Expression" || base_type == "Statement" {
+                    if base_type == "Expression"
+                        || base_type == "ast_Expression"
+                        || base_type == "Statement"
+                        || base_type == "ast_Statement"
+                    {
                         // Use helper function: Expression_span(expr)
                         // If parent_type is Option, we need to unwrap/access value first with a safety check
                         if parent_type.starts_with("Option_") {
@@ -5711,10 +5771,27 @@ impl CCodegen {
                     parser::Lval::Ident(ident) => Some(self.get_variable_name(&ident.name)),
                     _ => None,
                 };
-                let lval_type = lval_var_name
+                let mut lval_type = lval_var_name
                     .as_ref()
                     .and_then(|name| self.variable_types.get(name))
                     .cloned();
+
+                // For member assignments (e.g., ty.module = name), infer the field type
+                // from the parent struct's field type information
+                if lval_type.is_none() {
+                    if let parser::Lval::Member(member) = &assign.left {
+                        let parent_type = self.infer_expr_type(&member.parent);
+                        let parent_base = parent_type.trim_end_matches('*');
+                        if let Some(fields) = self.struct_field_types.get(parent_base) {
+                            if let Some(field_type) = fields.get(&member.member) {
+                                // Resolve the field type to a proper C type
+                                let resolved =
+                                    self.resolve_field_type_to_c(field_type, parent_base);
+                                lval_type = Some(resolved);
+                            }
+                        }
+                    }
+                }
 
                 // Get the rhs type
                 let rhs_type = self.infer_expr_type(&assign.right);
@@ -5745,6 +5822,18 @@ impl CCodegen {
                         if option_inner == lval_base {
                             // Just unwrap the option
                             return format!("{} = {}.value", lval_code, rhs);
+                        }
+                    }
+
+                    // Check if lval is Option_X and rhs is X* (or X) — wrap rhs in Option
+                    if lval_t.starts_with("Option_") && !rhs_type.starts_with("Option_") {
+                        let option_inner = &lval_t[7..]; // e.g., "Ident"
+                        let rhs_base = rhs_type.trim_end_matches('*');
+                        if rhs_base == option_inner {
+                            return format!(
+                                "{} = ({}){{.tag = {}_tag_some, .value = {}}}",
+                                lval_code, lval_t, lval_t, rhs
+                            );
                         }
                     }
                 } else {
@@ -6443,10 +6532,15 @@ impl CCodegen {
                     debug_println!(self, "DEBUG: Unified to Option_{}", parent);
                     return format!("Option_{}", parent);
                 } else if common.len() > 1 {
-                    // Multiple common parents - prefer "Expression" if it's there
-                    if common.contains("Expression") {
-                        debug_println!(self, "DEBUG: Unified to Option_Expression (preferred)");
-                        return "Option_Expression".to_string();
+                    // Multiple common parents - prefer the ast Expression union if it's there
+                    let ast_expr_c_name = self.resolve_c_name_for("Expression", "ast");
+                    if common.contains(&ast_expr_c_name) {
+                        debug_println!(
+                            self,
+                            "DEBUG: Unified to Option_{} (preferred)",
+                            ast_expr_c_name
+                        );
+                        return format!("Option_{}", ast_expr_c_name);
                     }
                     // Otherwise, just pick one
                     let parent = common.iter().next().unwrap();
@@ -6492,11 +6586,12 @@ impl CCodegen {
             }
             if let Some(common) = common_unions {
                 if !common.is_empty() {
-                    // Prefer "Expression" if available
-                    let parent = if common.contains("Expression") {
-                        "Expression"
+                    // Prefer the ast Expression union if available
+                    let ast_expr_c_name = self.resolve_c_name_for("Expression", "ast");
+                    let parent = if common.contains(&ast_expr_c_name) {
+                        ast_expr_c_name
                     } else {
-                        common.iter().next().unwrap()
+                        common.iter().next().unwrap().clone()
                     };
                     debug_println!(self, "DEBUG: Mixed types unified to Option_{}", parent);
                     return format!("Option_{}", parent);
@@ -6523,33 +6618,20 @@ impl CCodegen {
             if common.len() == 1 {
                 let parent = common.iter().next().unwrap();
                 return format!("{}*", parent);
-            } else if common.len() > 1 && common.contains("Expression") {
-                return "Expression*".to_string();
+            } else if common.len() > 1 {
+                let ast_expr_c_name = self.resolve_c_name_for("Expression", "ast");
+                if common.contains(&ast_expr_c_name) {
+                    return format!("{}*", ast_expr_c_name);
+                }
             }
         }
 
-        // Check if it's an Expression variant that should unify to Expression*
-        let expression_types = [
-            "For*",
-            "While*",
-            "If*",
-            "Return*",
-            "Block*",
-            "BinaryOp*",
-            "UnaryOp*",
-            "Call*",
-            "Member*",
-            "Index*",
-            "Constructor*",
-            "Mut*",
-            "Assignment*",
-            "Ident*",
-            "Lit_*",
-        ];
+        // Check if any collected type is a pointer to a variant of a tagged union
         for t in &collected_types {
-            for etype in expression_types {
-                if etype.ends_with("*") && t.starts_with(etype.trim_end_matches('*')) {
-                    return "Expression*".to_string();
+            if let Some(base) = t.strip_suffix('*') {
+                if let Some(union_set) = self.variant_to_union.get(base) {
+                    let union_name = union_set.iter().next().cloned().unwrap();
+                    return format!("{}*", union_name);
                 }
             }
         }
@@ -7425,9 +7507,10 @@ impl CCodegen {
 
             // Check if the inferred type is an enum that's a variant inside an Option return type
             if mapped_return.starts_with("Option_") {
-                let inner = &mapped_return[7..]; // e.g., "Assignment_1"
-                                                 // If the inferred type matches the inner type of the Option, use the Option type
-                if result_type == inner {
+                let inner = &mapped_return[7..]; // e.g., "ast_Expression"
+                let result_base = result_type.trim_end_matches('*');
+                // If the inferred type matches the inner type of the Option, use the Option type
+                if result_base == inner {
                     debug_println!(
                         self,
                         "DEBUG generate_c_switch: using function return type '{}' instead of '{}'",
@@ -8462,7 +8545,9 @@ impl CCodegen {
                                     let should_unwrap = expr_type.starts_with("Option_")
                                         && !var_type.starts_with("Option_");
 
-                                    if expr_type == "Option_Expression" {
+                                    if expr_type.starts_with("Option_")
+                                        && expr_type.contains("Expression")
+                                    {
                                         debug_println!(self, "DEBUG: should_unwrap={}, expr_code first 200 chars: {}", should_unwrap, &expr_code[..std::cmp::min(200, expr_code.len())]);
                                     }
 
@@ -8555,9 +8640,9 @@ impl CCodegen {
                 }
             }
             _ => {
-                // For non-parameterized types, just return the name without pointer
+                // For non-parameterized types, just return the resolved C name without pointer
                 if ty.params.is_empty() {
-                    ty.name.clone()
+                    self.resolve_c_name_for_type(ty)
                 } else {
                     // Monomorphize: Option(Type) -> Option_Type, etc.
                     format!(
@@ -8597,25 +8682,52 @@ impl CCodegen {
                 if ty.params.is_empty() {
                     // Look up the C name for this type using the registry
                     // This handles collision resolution (e.g., Assignment struct vs Assignment enum)
+                    // Use module-aware lookup when module qualifier is available
 
-                    // First, check if this is a struct type (gets pointer treatment)
-                    if let Some(struct_c_name) = self.type_name_registry.get_struct_c_name(&ty.name)
+                    let module = ty.module.as_deref().unwrap_or(&self.current_module);
+
+                    // Try module-aware lookups first (struct, then tagged union)
+                    if let Some(c_name) = self
+                        .type_name_registry
+                        .get_struct_c_name_for_module(&ty.name, module)
                     {
-                        // It's a registered struct - use the C name with pointer
-                        return format!("{}*", struct_c_name);
+                        return format!("{}*", c_name);
+                    }
+                    if let Some(c_name) = self
+                        .type_name_registry
+                        .get_tagged_union_c_name_for_module(&ty.name, module)
+                    {
+                        return format!("{}*", c_name);
                     }
 
-                    // Check if it's a tagged union type (also gets pointer treatment)
+                    // If we have an explicit module qualifier and module-aware lookup failed,
+                    // don't fall back to name-only lookup (which could find wrong module's type).
+                    // Instead, try the general module-aware lookup for enums etc.
+                    if let Some(c_name) = self
+                        .type_name_registry
+                        .get_c_name_for_module(&ty.name, module)
+                    {
+                        // Check if this is a pointer type (seen_types minus enum_types)
+                        if self.seen_types.contains(&c_name) && !self.enum_types.contains(&c_name) {
+                            return format!("{}*", c_name);
+                        }
+                        return c_name;
+                    }
+
+                    // Fall back to name-only lookups (for types not in any specific module)
+                    if let Some(struct_c_name) = self.type_name_registry.get_struct_c_name(&ty.name)
+                    {
+                        return format!("{}*", struct_c_name);
+                    }
                     if let Some(union_c_name) =
                         self.type_name_registry.get_tagged_union_c_name(&ty.name)
                     {
                         return format!("{}*", union_c_name);
                     }
 
-                    // For enums or unregistered types, use the original name
+                    // For enums or unregistered types, use the resolved name
                     // (enums are value types, not pointers)
-                    let c_name = self.type_name_registry.get_c_name(&ty.name);
-                    c_name
+                    self.resolve_c_name_for_type(ty)
                 } else {
                     // Monomorphize: Option(Type) -> Option_Type, Lit(Bool) -> Lit_Bool
                     let mono_name = format!(

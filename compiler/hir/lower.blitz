@@ -1,10 +1,10 @@
 struct ModuleStub {
-    asts List(Ast)
+    asts List(ast::Ast)
     path String
     name String
 }
 
-fn lower(asts List(Ast)) Hir {
+fn lower(asts List(ast::Ast)) Hir {
     var stubs = []
     for asts |ast| {
         stubs.mut.insert(ast)        
@@ -39,7 +39,7 @@ fn lower(asts List(Ast)) Hir {
     hir
 }
 
-fn insert(mut stubs List(ModuleStub), ast Ast) {
+fn insert(mut stubs List(ModuleStub), ast ast::Ast) {
     var index = 0 
     while index < stubs.len() {
         if stubs[index].path == ast.origin.mod_path() {
@@ -80,32 +80,32 @@ test "Extract mod path from path" {
     assert "this/is/a/module/with_a_file.blitz".mod_path() == "this/is/a/module/"
 }
 
-fn push_type(mut mod Module, mut types List(TypeKind), item Definition) {
+fn push_type(mut mod Module, mut types List(TypeKind), item ast::Definition) {
     // TODO: intern referenced types here
     switch item {
-        Pub { todo("HIR: pub") }
-        Struct { mod.mut.push(item.lower(mut types)) }
-        Union { mod.mut.push(item.lower(mut types)) }
-        Alias { mod.mut.push(item.lower(mut types)) }
-        Actor { mod.mut.push(item.lower(mut types)) }
+        ast::Pub { todo("HIR: pub") }
+        ast::Struct { mod.mut.push(item.lower(mut types)) }
+        ast::Union { mod.mut.push(item.lower(mut types)) }
+        ast::Alias { mod.mut.push(item.lower(mut types)) }
+        ast::Actor { mod.mut.push(item.lower(mut types)) }
         else {
             // tests and functions will be handled in a second pass later
         }
     }
 }
 
-fn push_func(mut mod Module, mut types List(TypeKind), item Definition) {
+fn push_func(mut mod Module, mut types List(TypeKind), item ast::Definition) {
     switch item {
-        Pub { todo("HIR: pub") }
-        Fn { mod.mut.push(item.lower(mut types)) }
-        Test { mod.mut.push(item.lower(mut types)) }
+        ast::Pub { todo("HIR: pub") }
+        ast::Fn { mod.mut.push(item.lower(mut types)) }
+        ast::Test { mod.mut.push(item.lower(mut types)) }
         else {
             // nothing to do, types should've already been pushed
         }
     }
 }
 
-fn lower(ty Type, mut types List(TypeKind)) TypeRef {
+fn lower(ty ast::Type, mut types List(TypeKind)) TypeRef {
     let chars = ty.name.chars()
     let result = if ty.params.len() == 0 and chars.len() == 1 {
         GenericId(letter: chars[0])
@@ -119,8 +119,8 @@ fn lower(ty Type, mut types List(TypeKind)) TypeRef {
     types.mut.insert(result)    
 }
 
-fn lower(def Struct, mut types List(TypeKind)) TypeDef {
-    let name = Ident(name: def.sig.name, span: def.sig.span)
+fn lower(def ast::Struct, mut types List(TypeKind)) TypeDef {
+    let name = ast::Ident(name: def.sig.name, span: def.sig.span)
     var fields = []
     for def.fields |field| {
         fields ++= FieldDef(name: field.name, type: TypeRef(id: 0))
@@ -130,15 +130,15 @@ fn lower(def Struct, mut types List(TypeKind)) TypeDef {
     TypeDef(name:, generic: [], kind: StructDef(fields:), vis: module)
 }
 
-fn lower(def Union, mut types List(TypeKind)) TypeDef {
-    let name = Ident(name: def.sig.name, span: def.sig.span)
+fn lower(def ast::Union, mut types List(TypeKind)) TypeDef {
+    let name = ast::Ident(name: def.sig.name, span: def.sig.span)
     let kind = UnionDef(label: none, type: TypeRef(id: 0))
 
     // TODO: type parameters
     TypeDef(name:, generic: [], kind:, vis: module)
 }
 
-fn lower(def Fn, mut types List(TypeKind)) FuncDef {
+fn lower(def ast::Fn, mut types List(TypeKind)) FuncDef {
     let name = def.name
     var params = []
     for def.args |arg| {
@@ -147,17 +147,17 @@ fn lower(def Fn, mut types List(TypeKind)) FuncDef {
 
     // TODO: type parameters
     // TODO: lower expressions
-    FuncDef(name:, module: ModId(id: 0), generic: [], params:, result: TypeRef(id: 0), body: HirBody(expressions: []), vis: module)
+    FuncDef(name:, module: ModId(id: 0), generic: [], params:, result: TypeRef(id: 0), body: Body(expressions: []), vis: module)
 }
 
-fn lower(def Alias, mut types List(TypeKind)) TypeDef {
+fn lower(def ast::Alias, mut types List(TypeKind)) TypeDef {
     todo("HIR: alias")
 }
 
-fn lower(def Actor, mut types List(TypeKind)) TypeDef {
+fn lower(def ast::Actor, mut types List(TypeKind)) TypeDef {
     todo("HIR: actor")
 }
 
-fn lower(def Test, mut types List(TypeKind)) FuncDef {
+fn lower(def ast::Test, mut types List(TypeKind)) FuncDef {
     todo("HIR: test")
 }
