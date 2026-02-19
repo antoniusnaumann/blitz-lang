@@ -1,5 +1,5 @@
 test "New HIR contains core module" {
-    let hir = new_hir()
+    let hir = hir::new_hir()
     assert hir.mods.len() == 1
 
     let mod_id = hir.find("core")
@@ -115,7 +115,7 @@ test "Lower types" {
     assert type_def.name.name == "Point"
     
     switch type_def.kind {
-        StructDef { 
+        hir::StructDef { 
             assert it.fields.len() == 2
         }
         else { panic("Expected StructDef") }
@@ -129,4 +129,3 @@ test "Extract mod name from path" {
 test "Extract mod path from path" {
     assert "this/is/a/module/with_a_file.blitz".mod_path() == "this/is/a/module/"
 }
-

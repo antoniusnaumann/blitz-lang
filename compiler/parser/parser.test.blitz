@@ -62,6 +62,9 @@ test "Parse std/bool.blitz" { parse_file("std/bool.blitz") }
 test "Parse hir/expression.blitz" { parse_file("hir/expression.blitz") }
 test "Parse hir/definition.blitz" { parse_file("hir/definition.blitz") }
 
+test "Parse resolver/toplevel.blitz" { parse_file("resolver/toplevel.blitz") }
+test "Parse resolver/expression.blitz" { parse_file("resolver/expression.blitz") }
+
 test "Parse compile.blitz" { parse_file("compile.blitz") }
 
 // test "Should be slow" {
