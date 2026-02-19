@@ -480,6 +480,21 @@ impl<'a> Parser<'a> {
                 // Check if this is a method call
                 if self.has(TokenKind::Lparen) {
                     lhs = self.parse_member_call(lhs, member).into();
+                } else if self.has(TokenKind::Path) {
+                    // UFCS with module namespace: expr.module::method(args)
+                    self.expect(TokenKind::Path);
+                    let method: String = self.expect_ident().name.into();
+                    let mut call = self.parse_call(&method);
+                    call.module = Some(member);
+                    call.ufcs = true;
+                    call.args.insert(
+                        0,
+                        crate::CallArg {
+                            label: None,
+                            init: Box::new(lhs),
+                        },
+                    );
+                    lhs = Expression::Call(call);
                 } else {
                     lhs = Member {
                         parent: Box::new(lhs),

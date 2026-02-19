@@ -54,6 +54,12 @@ fn parse_precedence(mut parser Parser, lhs ast::Expression, min_prec Int) Option
                     lparen {
                         left = parser.mut.parse_member_call(left, member)
                     }
+                    path {
+                        // UFCS with module namespace: expr.module::method(args)
+                        parser.mut.tok()
+                        let method = parser.mut.parse_ident()
+                        left = parser.mut.parse_member_call_with_module(left, method, member)
+                    }
                     else {
                         left = ast::Member(parent: left, member:, span:)
                     }
@@ -125,10 +131,21 @@ fn parse_expression_bp(mut parser Parser, min_prec Int) Option(ast::Expression) 
             let name = parser.mut.parse_ident()
             switch parser.peek().kind {
                 path {
-                    // Qualified name: ident::Type(...)
+                    // Qualified name: module::Type(...) or module::function(...)
                     parser.mut.tok()
-                    let ty = try parser.mut.parse_type_ident()
-                    parser.mut.parse_constructor_with_module(ty, name)
+                    switch parser.peek().kind {
+                        type {
+                            let ty = try parser.mut.parse_type_ident()
+                            parser.mut.parse_constructor_with_module(ty, name)
+                        }
+                        ident {
+                            let func_name = parser.mut.parse_ident()
+                            parser.mut.parse_call_with_module(func_name, name)
+                        }
+                        else {
+                            parser.mut.err("Expected type or function name after '::'")
+                        }
+                    }
                 }
                 lparen { parser.mut.parse_call(name) }
                 else { name }
@@ -287,11 +304,25 @@ fn parse_member_call(mut parser Parser, target ast::Expression, method ast::Iden
     call
 }
 
+fn parse_member_call_with_module(mut parser Parser, target ast::Expression, method ast::Ident, mod ast::Ident) Option(ast::Call) {
+    var call = parser.mut.parse_call_with_module(method, mod)
+    call.ufcs = true
+    call.args = [ast::CallArg(label: none, init: target)] ++ call.args
+    call
+}
+
 fn parse_call(mut parser Parser, name ast::Ident) Option(ast::Call) {
     let token = parser.peek()
     let args = parser.mut.parse_args() 
     
-    ast::Call(name:, args:, ufcs: false, span: parser.span(token))
+    ast::Call(name:, module: none, args:, ufcs: false, span: parser.span(token))
+}
+
+fn parse_call_with_module(mut parser Parser, name ast::Ident, mod ast::Ident) Option(ast::Call) {
+    let token = parser.peek()
+    let args = parser.mut.parse_args()
+
+    ast::Call(name:, module: mod, args:, ufcs: false, span: parser.span(token))
 }
 
 fn parse_constructor(mut parser Parser) Option(ast::Constructor) {
