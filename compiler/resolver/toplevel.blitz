@@ -14,7 +14,7 @@ fn lower(asts List(ast::Ast)) hir::Hir {
     var index = hir.mods.len()
 
     for stubs |stub| {
-        let mod = new_module(stub.name)
+        let mod = new_module(stub.name, hir::ModId(id: index))
 
         for stub.asts |ast| {
             for ast.items |item| {
@@ -23,7 +23,10 @@ fn lower(asts List(ast::Ast)) hir::Hir {
         }
 
         hir.mut.push(mod)
+        index += 1
     }
+
+    index = hir.mods.len() - stubs.len()
 
     for stubs |stub| {
         let mod_id = hir::ModId(id: index)

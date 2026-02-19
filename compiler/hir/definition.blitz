@@ -9,7 +9,7 @@ fn new_hir() Hir {
         define_builtin("Int"),
         define_builtin("Float"),
     ]
-    let core_module = Module(name: "core", funcs: [], types: [], func_export: [], type_export: [])
+    let core_module = Module(id: ModId(id: 0), name: "core", funcs: [], types: [], func_export: [], type_export: [])
     // TODO: insert builtin types as part of the "core" module
 
     Hir(mods: [core_module], types: [])
@@ -103,6 +103,7 @@ struct Nominal {
 }
 
 struct Module {
+   id     ModId
    name   String
    // parent Option(ModId)
    // childs List(ModId) 
@@ -113,14 +114,14 @@ struct Module {
    type_export List(TypeId)
 }
 
-fn new_module(name String) Module {
-    Module(name:, funcs: [], types: [], func_export: [], type_export: [])
+fn new_module(name String, id ModId) Module {
+    Module(id:, name:, funcs: [], types: [], func_export: [], type_export: [])
 }
 
 fn find_type(mod Module, name String) Option(TypeId) {
     var index = 0
     while index < mod.types.len() {
-        if mod.types[index].name.name == name { return TypeId(module: ModId(id: 0), id: index) }
+        if mod.types[index].name.name == name { return TypeId(module: mod.id, id: index) }
         index += 1
     }
     none
@@ -129,7 +130,7 @@ fn find_type(mod Module, name String) Option(TypeId) {
 fn find_func(mod Module, name String) Option(FuncId) {
     var index = 0
     while index < mod.funcs.len() {
-        if mod.funcs[index].name.name == name { return FuncId(module: ModId(id: 0), id: index) }
+        if mod.funcs[index].name.name == name { return FuncId(module: mod.id, id: index) }
         index += 1
     }
     none
@@ -161,12 +162,12 @@ fn find_type(hir Hir, mod_id ModId, name String) Option(TypeId) {
 
 fn push(mut mod Module, def FuncDef) FuncId {
     mod.funcs ++= def
-    FuncId(module: def.module, id: mod.funcs.len() - 1)
+    FuncId(module: mod.id, id: mod.funcs.len() - 1)
 }
 
 fn push(mut mod Module, def TypeDef) TypeId {
     mod.types ++= def
-    TypeId(module: ModId(id: 0), id: mod.types.len() - 1)
+    TypeId(module: mod.id, id: mod.types.len() - 1)
 }
 
 fn set_type(mut mod Module, id Int, def TypeDef) {

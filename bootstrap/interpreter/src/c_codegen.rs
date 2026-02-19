@@ -3786,6 +3786,13 @@ impl CCodegen {
                     }
                 }
 
+                // General fallback: infer from first element
+                if !list.elems.is_empty() {
+                    let elem_type = self.infer_expr_type(&list.elems[0]);
+                    let base_type = elem_type.trim_end_matches('*');
+                    return format!("List_{}", base_type);
+                }
+
                 // Fallback to generic list
                 "List_Int".to_string()
             }
@@ -4012,6 +4019,22 @@ impl CCodegen {
                             let expr_code = self.generate_expression(expr, is_main);
                             result.push_str(&format!("_if_result = {};", expr_code));
                         }
+                    } else if let parser::Expression::Ident(ident_expr) = expr {
+                        if ident_expr.name == "none" && expected_type.starts_with("Option_") {
+                            // 'none' in an if-else branch — use the expected Option type
+                            result.push_str(&format!(
+                                "_if_result = ({}){{.tag = {}_tag_none}};",
+                                expected_type, expected_type
+                            ));
+                        } else {
+                            let expr_code = self.generate_expression(expr, is_main);
+                            let expr_type = self.infer_expr_type(expr);
+                            if expr_type == "void" {
+                                result.push_str(&format!("{};", expr_code));
+                            } else {
+                                result.push_str(&format!("_if_result = {};", expr_code));
+                            }
+                        }
                     } else {
                         let expr_code = self.generate_expression(expr, is_main);
                         // Check if expression returns void
@@ -4190,6 +4213,16 @@ impl CCodegen {
             }
             _ => {
                 // Single expression as final else
+                // Handle 'none' by generating proper Option none constructor
+                if let parser::Expression::Ident(ident_expr) = expr {
+                    if ident_expr.name == "none" && result_type.starts_with("Option_") {
+                        *final_else = Some(format!(
+                            "_if_result = ({}){{.tag = {}_tag_none}};",
+                            result_type, result_type
+                        ));
+                        return;
+                    }
+                }
                 let expr_code = self.generate_expression(expr, is_main);
                 *final_else = Some(format!("_if_result = {};", expr_code));
             }
@@ -5335,24 +5368,41 @@ impl CCodegen {
                                 );
                                 // If the identifier wasn't resolved as an enum variant
                                 // (qualify_identifier_with_hint returned it unchanged),
-                                // and it's not a known tagged union label, it's likely
-                                // an undefined variable reference (e.g., shorthand `def_id:`
-                                // expanding to `def_id: def_id` where def_id doesn't exist).
+                                // check if it's a label-only tagged union variant and
+                                // generate the proper constructor.
                                 if qualified == ident.name {
-                                    let is_tagged_label = self
-                                        .tagged_union_labels
-                                        .values()
-                                        .any(|labels| labels.contains(&ident.name));
-                                    let is_constructor_type = self.seen_types.contains(&ident.name)
-                                        || self.tagged_union_types.contains(&ident.name);
-                                    if !is_tagged_label && !is_constructor_type {
-                                        self.codegen_errors.push(format!(
-                                            "undefined variable '{}' used in constructor field '{}' of struct '{}'",
-                                            ident.name, field_name, type_name
-                                        ));
+                                    // Check if this is a label-only tagged union variant
+                                    // e.g., `builtin` in TypeDefKind union
+                                    let mut found_tagged_union: Option<String> = None;
+                                    for (union_name, labels) in &self.tagged_union_labels {
+                                        if labels.contains(&ident.name) {
+                                            found_tagged_union = Some(union_name.clone());
+                                            break;
+                                        }
                                     }
+                                    if let Some(union_name) = found_tagged_union {
+                                        // Generate tagged union constructor for label-only variant
+                                        // e.g., builtin -> memcpy(malloc(sizeof(TypeDefKind)), &((TypeDefKind){.tag = TypeDefKind_tag_builtin}), sizeof(TypeDefKind))
+                                        format!(
+                                            "memcpy(malloc(sizeof({union})), &(({union}){{.tag = {union}_tag_{label}}}), sizeof({union}))",
+                                            union = union_name,
+                                            label = ident.name
+                                        )
+                                    } else {
+                                        let is_constructor_type =
+                                            self.seen_types.contains(&ident.name)
+                                                || self.tagged_union_types.contains(&ident.name);
+                                        if !is_constructor_type {
+                                            self.codegen_errors.push(format!(
+                                                "undefined variable '{}' used in constructor field '{}' of struct '{}'",
+                                                ident.name, field_name, type_name
+                                            ));
+                                        }
+                                        qualified
+                                    }
+                                } else {
+                                    qualified
                                 }
-                                qualified
                             } else {
                                 // Mapped variable name
                                 var_name
@@ -5762,7 +5812,13 @@ impl CCodegen {
                     parser::Lval::Index(index) => {
                         let target = self.generate_expression(&index.target, is_main);
                         let idx = self.generate_expression(&index.index, is_main);
-                        format!("{}[{}]", target, idx)
+                        // For List types, use .data accessor (same as Expression::Index)
+                        let target_type = self.infer_expr_type(&index.target);
+                        if target_type.starts_with("List_") {
+                            format!("{}.data[{}]", target, idx)
+                        } else {
+                            format!("{}[{}]", target, idx)
+                        }
                     }
                 };
 
@@ -6169,7 +6225,14 @@ impl CCodegen {
                             if let Some(init_expr) = &decl.init {
                                 let inferred = self.infer_expr_type(init_expr);
                                 let var_name = self.compute_mangled_name(&decl.name);
-                                self.variable_types.insert(var_name, inferred);
+                                // Insert under both original and mangled names so
+                                // infer_expr_type can find the type regardless of
+                                // whether it looks up the original or mangled name.
+                                self.variable_types
+                                    .insert(decl.name.clone(), inferred.clone());
+                                if var_name != decl.name {
+                                    self.variable_types.insert(var_name, inferred);
+                                }
                             }
                         }
                     }
@@ -6411,11 +6474,38 @@ impl CCodegen {
                                         code.push_str("        (void*){{}};\n");
                                     }
                                 } else {
-                                    // Mixed/complex types - we can't infer the type properly
-                                    // Just generate a stub for now
-                                    code.push_str("        /* TODO: non-integer list literal requires type inference */\n");
-                                    code.push_str(&format!("        void* _tmp = NULL;\n"));
-                                    code.push_str("        (void*){{}};\n");
+                                    // Mixed/complex types - use infer_expr_type on the first element
+                                    // to determine the list element type
+                                    if !list.elems.is_empty() {
+                                        let elem_type = self.infer_expr_type(&list.elems[0]);
+                                        let is_pointer = elem_type.ends_with('*');
+                                        let base_type = elem_type.trim_end_matches('*');
+                                        let list_type = format!("List_{}", base_type);
+                                        let c_elem_type = &elem_type;
+
+                                        code.push_str(&format!(
+                                            "        {}* _tmp = malloc(sizeof({}) * {});\n",
+                                            c_elem_type, c_elem_type, len
+                                        ));
+                                        for (i, elem) in list.elems.iter().enumerate() {
+                                            let elem_code = self.generate_expression(elem, is_main);
+                                            code.push_str(&format!(
+                                                "        _tmp[{}] = {};\n",
+                                                i, elem_code
+                                            ));
+                                        }
+                                        code.push_str(&format!(
+                                            "        ({}){{.data = _tmp, .len = {}, .cap = {}}};\n",
+                                            list_type, len, len
+                                        ));
+
+                                        // Ensure we have a list append function for this element type
+                                        self.list_append_needed.insert(base_type.to_string());
+                                    } else {
+                                        code.push_str("        /* TODO: non-integer list literal requires type inference */\n");
+                                        code.push_str(&format!("        void* _tmp = NULL;\n"));
+                                        code.push_str("        (void*){{}};\n");
+                                    }
                                 }
                             }
                         } // Close the `if all_strings { ... } else { ... }` block
