@@ -121,3 +121,12 @@ test "Lower types" {
         else { panic("Expected StructDef") }
     }
 }
+
+test "Extract mod name from path" {
+    assert "some/module/with/a/name/file.blitz".mod_name() == "name"
+}
+
+test "Extract mod path from path" {
+    assert "this/is/a/module/with_a_file.blitz".mod_path() == "this/is/a/module/"
+}
+

@@ -144,6 +144,10 @@ struct FieldDef {
 }
 
 struct UnionDef {
+    cases List(CaseDef)
+}
+
+struct CaseDef {
     label Option(ast::Ident)
     type  TypeRef
 }

@@ -18,18 +18,17 @@ fn lower(asts List(ast::Ast)) Hir {
 
         for stub.asts |ast| {
             for ast.items |item| {
-                mod.mut.push_type(mut hir.types, item)
+                mod.mut.push_sig(mut hir.types, item)
             }
         }
 
         hir.mut.push(mod)
     }
 
-    // TODO: once pass for func signatures first maybe? or supply AST func signatures?
     for stubs |stub| {
         for stub.asts |ast| {
             for ast.items |item| {
-                hir.mods[index].mut.push_func(mut hir.types, item)
+                hir.mods[index].mut.push(mut hir.types, item)
             }
         }
         
@@ -72,36 +71,59 @@ fn mod_path(path String) String {
     result
 }
 
-test "Extract mod name from path" {
-    assert "some/module/with/a/name/file.blitz".mod_name() == "name"
+fn push_sig(mut mod Module, item ast::Definition) {
+    switch item {
+        ast::Pub { todo("HIR: pub") }
+        ast::Struct { mod.mut.push(item.sig()) }
+        ast::Union { mod.mut.push(item.sig()) }
+        ast::Alias { mod.mut.push(item.sig()) }
+        ast::Actor { mod.mut.push(item.sig()) }
+        ast::Pub { todo("HIR: pub") }
+        ast::Fn { mod.mut.push(item.sig()) }
+        ast::Test { mod.mut.push(item.sig()) }
+    }
 }
 
-test "Extract mod path from path" {
-    assert "this/is/a/module/with_a_file.blitz".mod_path() == "this/is/a/module/"
+fn sig(def ast::Struct, mut types List(TypeKind)) TypeDef {
+    let name = ast::Ident(name: def.sig.name, span: def.sig.span)
+
+    // TODO: type parameters
+    TypeDef(name:, generic: [], kind: StructDef(fields: []), vis: module)
 }
 
-fn push_type(mut mod Module, mut types List(TypeKind), item ast::Definition) {
-    // TODO: intern referenced types here
+fn sig(def ast::Union, mut types List(TypeKind)) TypeDef {
+    let name = ast::Ident(name: def.sig.name, span: def.sig.span)
+
+    // TODO: type parameters
+    TypeDef(name:, generic: [], kind: UnionDef(cases: []), vis: module)
+}
+
+fn sig(def ast::Fn, mut types List(TypeKind)) FuncDef {
+    FuncDef(name: def.name, generic: [], params: [], result: none, body: Body(expressions: []), vis: module)
+}
+
+fn sig(def ast::Alias, mut types List(TypeKind)) TypeDef {
+    todo("HIR: alias")
+}
+
+fn sig(def ast::Actor, mut types List(TypeKind)) TypeDef {
+    todo("HIR: actor")
+}
+
+fn sig(def ast::Test, mut types List(TypeKind)) FuncDef {
+    todo("HIR: test")
+}
+
+fn push(mut mod Module, mut types List(TypeKind), item ast::Definition) {
     switch item {
         ast::Pub { todo("HIR: pub") }
         ast::Struct { mod.mut.push(item.lower(mut types)) }
         ast::Union { mod.mut.push(item.lower(mut types)) }
         ast::Alias { mod.mut.push(item.lower(mut types)) }
         ast::Actor { mod.mut.push(item.lower(mut types)) }
-        else {
-            // tests and functions will be handled in a second pass later
-        }
-    }
-}
-
-fn push_func(mut mod Module, mut types List(TypeKind), item ast::Definition) {
-    switch item {
         ast::Pub { todo("HIR: pub") }
         ast::Fn { mod.mut.push(item.lower(mut types)) }
         ast::Test { mod.mut.push(item.lower(mut types)) }
-        else {
-            // nothing to do, types should've already been pushed
-        }
     }
 }
 
@@ -113,12 +135,14 @@ fn lower(ty ast::Type, mut types List(TypeKind)) TypeRef {
         let args = for ty.params |param| {
             param.lower(mut types)
         }
-        // TODO: find type definition and replace
+        // TODO LLM: find type definition and replace
         Nominal(def_id: TypeId(id: 0), args:)
     }
     types.mut.insert(result)    
 }
 
+
+// TODO LLM: These lower functions should take the relevant module, find and update the already existing stub of the type or function (these stubs will only contain the name and be in the correct module so far) and edit that instead of returning something new
 fn lower(def ast::Struct, mut types List(TypeKind)) TypeDef {
     let name = ast::Ident(name: def.sig.name, span: def.sig.span)
     var fields = []
@@ -142,12 +166,14 @@ fn lower(def ast::Fn, mut types List(TypeKind)) FuncDef {
     let name = def.name
     var params = []
     for def.args |arg| {
+        // TODO LLM: find type id in hir. since there is no unqualified use, finding out the correct module should be rather straighforward (if unqualified, it is either this module or std or core)
         params ++= TypeRef(id: 0)
     }
 
     // TODO: type parameters
     // TODO: lower expressions
-    FuncDef(name:, module: ModId(id: 0), generic: [], params:, result: TypeRef(id: 0), body: Body(expressions: []), vis: module)
+    // TODO LLM: find the existing definition stub here and update it
+    FuncDef(name:, module:, generic: [], params:, result: TypeRef(id: 0), body: Body(expressions: []), vis: module)
 }
 
 fn lower(def ast::Alias, mut types List(TypeKind)) TypeDef {
