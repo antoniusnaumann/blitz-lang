@@ -4,10 +4,19 @@ struct Hir {
 }
 
 fn new_hir() Hir {
+    let core_types = [
+        define_builtin("Void"),
+        define_builtin("Int"),
+        define_builtin("Float"),
+    ]
     let core_module = Module(name: "core", funcs: [], types: [], func_export: [], type_export: [])
     // TODO: insert builtin types as part of the "core" module
 
     Hir(mods: [core_module], types: [])
+}
+
+fn void_type() TypeRef {
+    TypeRef(id: 0)
 }
 
 fn get(reg Hir, name String) Option(Module) {
@@ -93,10 +102,6 @@ struct Nominal {
     args   List(TypeRef)
 }
 
-struct TypeParam {
-    local_id Int
-}
-
 struct Module {
    name   String
    // parent Option(ModId)
@@ -112,6 +117,48 @@ fn new_module(name String) Module {
     Module(name:, funcs: [], types: [], func_export: [], type_export: [])
 }
 
+fn find_type(mod Module, name String) Option(TypeId) {
+    var index = 0
+    while index < mod.types.len() {
+        if mod.types[index].name.name == name { return TypeId(module: ModId(id: 0), id: index) }
+        index += 1
+    }
+    none
+}
+
+fn find_func(mod Module, name String) Option(FuncId) {
+    var index = 0
+    while index < mod.funcs.len() {
+        if mod.funcs[index].name.name == name { return FuncId(module: ModId(id: 0), id: index) }
+        index += 1
+    }
+    none
+}
+
+fn find_type(hir Hir, name String) Option(TypeId) {
+    var mod_index = 0
+    while mod_index < hir.mods.len() {
+        let mod = hir.mods[mod_index]
+        let result = mod.find_type(name)
+        if result != none {
+            let type_id = result.unwrap()
+            return TypeId(module: ModId(id: mod_index), id: type_id.id)
+        }
+        mod_index += 1
+    }
+    none
+}
+
+fn find_type(hir Hir, mod_id ModId, name String) Option(TypeId) {
+    let mod = hir.get(mod_id)
+    let result = mod.find_type(name)
+    if result != none {
+        let type_id = result.unwrap()
+        return TypeId(module: mod_id, id: type_id.id)
+    }
+    none
+}
+
 fn push(mut mod Module, def FuncDef) FuncId {
     mod.funcs ++= def
     FuncId(module: def.module, id: mod.funcs.len() - 1)
@@ -122,9 +169,17 @@ fn push(mut mod Module, def TypeDef) TypeId {
     TypeId(module: ModId(id: 0), id: mod.types.len() - 1)
 }
 
+fn set_type(mut mod Module, id Int, def TypeDef) {
+    mod.types[id] = def
+}
+
+fn set_func(mut mod Module, id Int, def FuncDef) {
+    mod.funcs[id] = def
+}
+
 struct TypeDef {
     name    ast::Ident
-    generic List(TypeParam)
+    generic List(GenericId)
     kind    TypeDefKind
     vis     Visibility
 }
@@ -132,6 +187,11 @@ struct TypeDef {
 union TypeDefKind {
     StructDef
     UnionDef
+    builtin
+}
+
+fn define_builtin(name String) TypeDef {
+    TypeDef(name: name.ident(), generic: [], kind: builtin, vis: public)
 }
 
 struct StructDef {
@@ -154,7 +214,6 @@ struct CaseDef {
 
 struct FuncDef {
     name    ast::Ident
-    module  ModId            
     generic List(GenericId)
     params  List(TypeRef)
     result  TypeRef

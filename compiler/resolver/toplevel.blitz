@@ -26,9 +26,10 @@ fn lower(asts List(ast::Ast)) hir::Hir {
     }
 
     for stubs |stub| {
+        let mod_id = hir::ModId(id: index)
         for stub.asts |ast| {
             for ast.items |item| {
-                hir.mods[index].mut.push(mut hir.types, item)
+                item.lower_into(mut hir, mod_id)
             }
         }
         
@@ -113,75 +114,90 @@ fn sig(def ast::Test, mut types List(hir::TypeKind)) hir::FuncDef {
     todo("HIR: test")
 }
 
-fn push(mut mod hir::Module, mut types List(hir::TypeKind), item ast::Definition) {
+fn lower_into(item ast::Definition, mut hir hir::Hir, mod_id hir::ModId) {
     switch item {
         ast::Pub { todo("HIR: pub") }
-        ast::Struct { mod.mut.push(item.lower(mut types)) }
-        ast::Union { mod.mut.push(item.lower(mut types)) }
-        ast::Alias { mod.mut.push(item.lower(mut types)) }
-        ast::Actor { mod.mut.push(item.lower(mut types)) }
-        ast::Fn { mod.mut.push(item.lower(mut types)) }
-        ast::Test { mod.mut.push(item.lower(mut types)) }
+        ast::Struct { it.lower_into(mut hir, mod_id) }
+        ast::Union { it.lower_into(mut hir, mod_id) }
+        ast::Alias { todo("HIR: alias") }
+        ast::Actor { todo("HIR: actor") }
+        ast::Fn { it.lower_into(mut hir, mod_id) }
+        ast::Test { todo("HIR: test") }
     }
 }
 
-fn lower(ty ast::Type, mut types List(hir::TypeKind)) hir::TypeRef {
+fn resolve_type(hir hir::Hir, mod_id hir::ModId, ty ast::Type, mut types List(hir::TypeKind)) hir::TypeRef {
     let chars = ty.name.chars()
     let result = if ty.params.len() == 0 and chars.len() == 1 {
         hir::GenericId(letter: chars[0])
     } else {
         let args = for ty.params |param| {
-            param.lower(mut types)
+            resolve_type(hir, mod_id, param, mut types)
         }
-        // TODO LLM: find type definition and replace
-        hir::Nominal(def_id: hir::TypeId(id: 0), args:)
+
+        // Resolve type: check qualified module, then current module, then core
+        let def_id = if ty.module != none {
+            let mod_name = ty.module.unwrap().name
+            let target_mod = hir.find(mod_name)
+            if target_mod != none {
+                hir.find_type(target_mod.unwrap(), ty.name)
+            } else {
+                none
+            }
+        } else {
+            // Try current module first, then core
+            let in_mod = hir.find_type(mod_id, ty.name)
+            if in_mod != none { in_mod }
+            else { hir.find_type(hir::ModId(id: 0), ty.name) }
+        }
+
+        hir::Nominal(def_id: def_id else { hir::TypeId(module: mod_id, id: 0) }, args:)
     }
     types.mut.insert(result)    
 }
 
-
-// TODO LLM: These lower functions should take the relevant module, find and update the already existing stub of the type or function (these stubs will only contain the name and be in the correct module so far) and edit that instead of returning something new
-fn lower(def ast::Struct, mut types List(hir::TypeKind)) hir::TypeDef {
+fn lower_into(def ast::Struct, mut hir hir::Hir, mod_id hir::ModId) {
     let name = ast::Ident(name: def.sig.name, span: def.sig.span)
     var fields = []
     for def.fields |field| {
-        fields ++= hir::FieldDef(name: field.name, type: hir::TypeRef(id: 0))
+        let field_type = resolve_type(hir, mod_id, field.type, mut hir.types)
+        fields ++= hir::FieldDef(name: field.name, type: field_type)
     }
 
+    // Find the existing stub and update it
+    let id = hir.mods[mod_id.id].find_type(def.sig.name).unwrap().id
     // TODO: type parameters
-    hir::TypeDef(name:, generic: [], kind: hir::StructDef(fields:), vis: module)
+    hir.mods[mod_id.id].mut.set_type(id, hir::TypeDef(name:, generic: [], kind: hir::StructDef(fields:), vis: module))
+    
 }
 
-fn lower(def ast::Union, mut types List(hir::TypeKind)) hir::TypeDef {
+fn lower_into(def ast::Union, mut hir hir::Hir, mod_id hir::ModId) {
     let name = ast::Ident(name: def.sig.name, span: def.sig.span)
     let kind = hir::UnionDef(cases: [])
 
+    // Find the existing stub and update it
+    let id = hir.mods[mod_id.id].find_type(def.sig.name).unwrap().id
     // TODO: type parameters
-    hir::TypeDef(name:, generic: [], kind:, vis: module)
+    hir.mods[mod_id.id].mut.set_type(id, hir::TypeDef(name:, generic: [], kind:, vis: module))
 }
 
-fn lower(def ast::Fn, mut types List(hir::TypeKind)) hir::FuncDef {
+fn lower_into(def ast::Fn, mut hir hir::Hir, mod_id hir::ModId) {
     let name = def.name
     var params = []
     for def.args |arg| {
-        // TODO LLM: find type id in hir. since there is no unqualified use, finding out the correct module should be rather straighforward (if unqualified, it is either this module or std or core)
-        params ++= hir::TypeRef(id: 0)
+        let param_type = resolve_type(hir, mod_id, arg.type, mut hir.types)
+        params ++= param_type
     }
 
+    let result = if def.type != none {
+        resolve_type(hir, mod_id, def.type.unwrap(), mut hir.types)
+    } else {
+        hir::void_type()
+    }
+
+    // Find the existing function stub and update it
+    let id = hir.mods[mod_id.id].find_func(name.name).unwrap().id
     // TODO: type parameters
     // TODO: lower expressions
-    // TODO LLM: find the existing definition stub here and update it
-    hir::FuncDef(name:, module: hir::ModId(id: 0), generic: [], params:, result: hir::TypeRef(id: 0), body: hir::Body(expressions: []), vis: module)
-}
-
-fn lower(def ast::Alias, mut types List(hir::TypeKind)) hir::TypeDef {
-    todo("HIR: alias")
-}
-
-fn lower(def ast::Actor, mut types List(hir::TypeKind)) hir::TypeDef {
-    todo("HIR: actor")
-}
-
-fn lower(def ast::Test, mut types List(hir::TypeKind)) hir::FuncDef {
-    todo("HIR: test")
+    hir.mods[mod_id.id].mut.set_func(id, hir::FuncDef(name:, generic: [], params:, result:, body: hir::Body(expressions: []), vis: module))
 }

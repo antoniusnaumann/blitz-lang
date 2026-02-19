@@ -48,6 +48,10 @@ struct Ident {
 	span Span
 }
 
+fn ident(name String) Ident {
+	Ident(name:, span: empty_span())
+}
+
 struct Member {
 	parent Box(Expression)
 	member Ident
