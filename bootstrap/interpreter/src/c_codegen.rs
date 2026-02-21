@@ -9448,11 +9448,13 @@ void todo(char* msg) __attribute__((noreturn));
         full_impl.push_str("    return result;\n");
         full_impl.push_str("}\n\n");
 
-        // todo implementation
+        // todo implementation - delegates to panic() for test-awareness
         full_impl.push_str("void todo(char* msg) {\n");
-        full_impl
-            .push_str("    fprintf(stderr, \"TODO: %s\\n\", msg ? msg : \"not implemented\");\n");
-        full_impl.push_str("    abort();\n");
+        full_impl.push_str("    char _buf[256];\n");
+        full_impl.push_str(
+            "    snprintf(_buf, sizeof(_buf), \"TODO: %s\", msg ? msg : \"not implemented\");\n",
+        );
+        full_impl.push_str("    panic(_buf);\n");
         full_impl.push_str("}\n\n");
 
         // panic implementation
