@@ -45,6 +45,23 @@ fn module_from_path(path: &str) -> String {
         .to_string()
 }
 
+/// Extract a unique file identifier from a path, combining parent dir and file stem.
+/// Used to namespace C test function names so tests in different files never collide.
+/// e.g., "../../compiler/parser/lexer.test.blitz" -> "parser_lexer_test"
+/// e.g., "../../compiler/parser/parser.test.blitz" -> "parser_parser_test"
+fn file_id_from_path(path: &str) -> String {
+    let p = std::path::Path::new(path);
+    let module = p
+        .parent()
+        .and_then(|d| d.file_name())
+        .and_then(|n| n.to_str())
+        .unwrap_or("_root");
+    let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("_unknown");
+    // Replace dots in stem (e.g. "lexer.test" -> "lexer_test") and join with module
+    let safe_stem = stem.replace('.', "_");
+    format!("{}_{}", module, safe_stem)
+}
+
 /// Implementation for C transpilation with optional test support
 fn transpile_to_c_impl(
     asts: &[Ast],
@@ -145,6 +162,7 @@ fn transpile_to_c_impl(
     if include_tests {
         for ast in asts {
             codegen.current_module = module_from_path(&ast.path);
+            codegen.current_path = ast.path.clone();
             for def in &ast.defs {
                 if let Definition::Test(_) = def {
                     codegen.generate_definition(def)?;
@@ -2086,14 +2104,19 @@ impl CCodegen {
         self.variable_name_mappings.clear();
         self.variable_types.clear();
 
-        // Generate a safe function name from the test name
+        // Generate a safe function name from the test name, namespaced by file
+        // to avoid collisions when different test files share the same test name.
         // Replace spaces and special chars with underscores
         let safe_name: String = test
             .name
             .chars()
             .map(|c| if c.is_alphanumeric() { c } else { '_' })
             .collect();
-        let c_func_name = format!("blitz_test_{}", safe_name);
+        let safe_file_id: String = file_id_from_path(&self.current_path)
+            .chars()
+            .map(|c| if c.is_alphanumeric() { c } else { '_' })
+            .collect();
+        let c_func_name = format!("blitz_test_{}_{}", safe_file_id, safe_name);
 
         // Store return type (tests have no return type, so void)
         self.current_return_type = None;
@@ -9936,7 +9959,11 @@ void todo(char* msg) __attribute__((noreturn));
                 .chars()
                 .map(|c| if c.is_alphanumeric() { c } else { '_' })
                 .collect();
-            let c_func_name = format!("blitz_test_{}", safe_name);
+            let safe_file_id: String = file_id_from_path(path)
+                .chars()
+                .map(|c| if c.is_alphanumeric() { c } else { '_' })
+                .collect();
+            let c_func_name = format!("blitz_test_{}_{}", safe_file_id, safe_name);
 
             // Escape the test name for C string literal
             let escaped_name = test.name.replace("\\", "\\\\").replace("\"", "\\\"");
