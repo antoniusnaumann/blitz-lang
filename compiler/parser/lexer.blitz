@@ -146,9 +146,9 @@ fn next(mut lexer Lexer) Option(Token) {
 						"alias" { alias_ }
 						"fn" { fn_ }
 						"pub" { pub_ }
-					"let" { let_ }
-					"var" { var_ }
-					"mut" { mut_ }
+						"let" { let_ }
+						"var" { var_ }
+						"mut" { mut_ }
 						"for" { for_ }
 						"while" { while_ }
 						"if" { if_ }

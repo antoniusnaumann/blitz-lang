@@ -36,3 +36,18 @@ test "Lex int with ufcs" {
     let tokens = "2137.print()".lex().kinds()
     assert tokens == [int, ident, lparen, rparen]
 }
+
+test "Lex keyword-like ident" {
+    let tokens = "leta varother".lex().kinds()
+    assert tokens == [ident, ident]
+}
+
+test "Lex keyword-ident with number" {
+    let tokens = "if98 = 5".lex().kinds()
+    assert tokens == [ident, assign, int]
+}
+
+test "Lex keyword with delimiter" {
+    let tokens = "if(other)".lex().kinds()
+    assert tokens == [if_, lparen, ident, rparen]
+}
