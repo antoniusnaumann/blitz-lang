@@ -1,4 +1,4 @@
-test "Parse empty func" {
+test "Empty func" {
     let defs = "fn foo() {}".parse()
     var count = 0
     assert defs.len() == 1
@@ -9,7 +9,7 @@ test "Parse empty func" {
     assert count == 1
 }
 
-test "Parse type with qualified type field" {
+test "Type with qualified type field" {
     let defs = "struct Foo { bar wibble::Baz }".parse()
     var count = 0
     assert defs.len() == 1
@@ -38,40 +38,40 @@ fn parse_file(path String) {
 	let ast = parser.mut.parse()
 }
 
-test "Parse main.blitz" { parse_file("main.blitz") }
+test "main.blitz" { parse_file("main.blitz") }
 
-test "Parse parser/parser.blitz" { parse_file("parser/parser.blitz") }
-test "Parse parser/toplevel.blitz" { parse_file("parser/toplevel.blitz") }
-test "Parse parser/expression.blitz" { parse_file("parser/expression.blitz") }
-test "Parse parser/lexer.blitz" { parse_file("parser/lexer.blitz") }
-test "Parse parser/precedence.blitz" { parse_file("parser/precedence.blitz") }
-test "Parse parser/tokens.blitz" { parse_file("parser/tokens.blitz") }
-test "Parse parser/parser.test.blitz" { parse_file("parser/parser.test.blitz") }
-test "Parse parser/lexer.test.blitz" { parse_file("parser/lexer.test.blitz") }
+test "parser/parser.blitz" { parse_file("parser/parser.blitz") }
+test "parser/toplevel.blitz" { parse_file("parser/toplevel.blitz") }
+test "parser/expression.blitz" { parse_file("parser/expression.blitz") }
+test "parser/lexer.blitz" { parse_file("parser/lexer.blitz") }
+test "parser/precedence.blitz" { parse_file("parser/precedence.blitz") }
+test "parser/tokens.blitz" { parse_file("parser/tokens.blitz") }
+test "parser/parser.test.blitz" { parse_file("parser/parser.test.blitz") }
+test "parser/lexer.test.blitz" { parse_file("parser/lexer.test.blitz") }
 
-test "Parse ast/expression.blitz" { parse_file("ast/expression.blitz") }
-test "Parse ast/definition.blitz" { parse_file("ast/definition.blitz") }
-test "Parse ast/operator.blitz" { parse_file("ast/operator.blitz") }
-test "Parse ast/span.blitz" { parse_file("ast/span.blitz") }
-test "Parse ast/error.blitz" { parse_file("ast/error.blitz") }
+test "ast/expression.blitz" { parse_file("ast/expression.blitz") }
+test "ast/definition.blitz" { parse_file("ast/definition.blitz") }
+test "ast/operator.blitz" { parse_file("ast/operator.blitz") }
+test "ast/span.blitz" { parse_file("ast/span.blitz") }
+test "ast/error.blitz" { parse_file("ast/error.blitz") }
 
-test "Parse std/number.blitz" { parse_file("std/number.blitz") }
-test "Parse std/heap.blitz" { parse_file("std/heap.blitz") }
-test "Parse std/range.blitz" { parse_file("std/range.blitz") }
-test "Parse std/result.blitz" { parse_file("std/result.blitz") }
-test "Parse std/bool.blitz" { parse_file("std/bool.blitz") }
-test "Parse std/string.blitz" { parse_file("std/string.blitz") }
-test "Parse std/list.blitz" { parse_file("std/list.blitz") }
-test "Parse std/string.test.blitz" { parse_file("std/string.test.blitz") }
+test "std/number.blitz" { parse_file("std/number.blitz") }
+test "std/heap.blitz" { parse_file("std/heap.blitz") }
+test "std/range.blitz" { parse_file("std/range.blitz") }
+test "std/result.blitz" { parse_file("std/result.blitz") }
+test "std/bool.blitz" { parse_file("std/bool.blitz") }
+test "std/string.blitz" { parse_file("std/string.blitz") }
+test "std/list.blitz" { parse_file("std/list.blitz") }
+test "std/string.test.blitz" { parse_file("std/string.test.blitz") }
 
-test "Parse hir/expression.blitz" { parse_file("hir/expression.blitz") }
-test "Parse hir/definition.blitz" { parse_file("hir/definition.blitz") }
+test "hir/expression.blitz" { parse_file("hir/expression.blitz") }
+test "hir/definition.blitz" { parse_file("hir/definition.blitz") }
 
-test "Parse resolver/toplevel.blitz" { parse_file("resolver/toplevel.blitz") }
-test "Parse resolver/expression.blitz" { parse_file("resolver/expression.blitz") }
-test "Parse resolver/resolver.test.blitz" { parse_file("resolver/resolver.test.blitz") }
+test "resolver/toplevel.blitz" { parse_file("resolver/toplevel.blitz") }
+test "resolver/expression.blitz" { parse_file("resolver/expression.blitz") }
+test "resolver/resolver.test.blitz" { parse_file("resolver/resolver.test.blitz") }
 
-test "Parse compile.blitz" { parse_file("compile.blitz") }
+test "compile.blitz" { parse_file("compile.blitz") }
 
 // test "Should be slow" {
 //     var s = "s"

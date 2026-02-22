@@ -2,52 +2,52 @@ fn kinds(tokens List(Token)) List(TokenKind) {
     for tokens |token| { token.kind }
 }
 
-test "Lex empty func" {
+test "Empty func" {
     let tokens = "fn foo() {}".lex().kinds()
     assert tokens == [fn_, ident, lparen, rparen, lbrace, rbrace]
 }
 
-test "Lex empty struct" {
+test "Empty struct" {
     let tokens = "struct Foo {}".lex().kinds()
     assert tokens == [struct_, type, lbrace, rbrace]
 }
 
-test "Lex operators" {
+test "Operators" {
     let tokens = "+++-*/%".lex().kinds()
     assert tokens == [concat, add, sub, mul, div, rem]
 }
 
-test "Lex assignment operators" {
+test "Assignment operators" {
     let tokens = "++=+=-=*= /=%=".lex().kinds()
     assert tokens == [concat_assign, add_assign, sub_assign, mul_assign, div_assign, rem_assign]
 }
 
-test "Lex int" {
+test "Int" {
     let tokens = "123".lex().kinds()
     assert tokens == [int]
 }
 
-test "Lex float" {
+test "Float" {
     let tokens = "2137.1238".lex().kinds()
     assert tokens == [float]
 }
 
-test "Lex int with ufcs" {
+test "Int with ufcs" {
     let tokens = "2137.print()".lex().kinds()
     assert tokens == [int, ident, lparen, rparen]
 }
 
-test "Lex keyword-like ident" {
+test "Keyword-like ident" {
     let tokens = "leta varother".lex().kinds()
     assert tokens == [ident, ident]
 }
 
-test "Lex keyword-ident with number" {
+test "Keyword-ident with number" {
     let tokens = "if98 = 5".lex().kinds()
     assert tokens == [ident, assign, int]
 }
 
-test "Lex keyword with delimiter" {
+test "Keyword with delimiter" {
     let tokens = "if(other)".lex().kinds()
     assert tokens == [if_, lparen, ident, rparen]
 }

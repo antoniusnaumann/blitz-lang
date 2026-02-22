@@ -347,12 +347,32 @@ fn parse_args(mut parser Parser) Option(List(ast::CallArg)) {
     var args = []
 
     while !parser.has(rparen) {
+        parser.mut.skip_newlines()
         let param = parser.peek()
         switch param.kind {
             ident {
                 switch parser.peek(2).kind {
                     colon {
                         let label = try parser.mut.parse_ident()
+                        try parser.mut.expect(colon)
+                        let init = switch parser.peek().kind {
+                            comma { label }
+                            rparen { label }
+                            else { try parser.mut.parse_expression() }
+                        }
+                        args ++= ast::CallArg(label:, init:)
+                    }
+                    else {
+                        args ++= ast::CallArg(label: none, init: try parser.mut.parse_expression())
+                    }
+                }
+            }
+            type {
+                switch parser.peek(2).kind {
+                    colon {
+                        let token = parser.mut.tok()
+                        let label_name = parser.source.substr(token.span)
+                        let label = ast::Ident(name: label_name, span: token.span)
                         try parser.mut.expect(colon)
                         let init = switch parser.peek().kind {
                             comma { label }

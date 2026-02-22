@@ -64,7 +64,9 @@ struct Actor {
 }
 
 struct Test {
-	
+	name String
+	body Block
+	span Span
 }
 
 struct Type {

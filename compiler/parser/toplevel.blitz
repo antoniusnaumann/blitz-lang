@@ -195,5 +195,9 @@ fn parse_type_params(mut parser Parser) List(ast::Type) {
 
 fn parse_test(mut parser Parser) Option(ast::Test) {
     let kw = try parser.mut.expect(test_)
-    todo("Parse test")
+    let token = try parser.mut.expect(str)
+    let name = parser.source.substr(token.span.range.begin + 1, token.span.range.until - 1)
+    let body = try parser.mut.parse_body()
+
+    ast::Test(name:, body:, span: parser.span(kw))
 }
