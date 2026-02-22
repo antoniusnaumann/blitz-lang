@@ -359,7 +359,7 @@ fn run_c_tests(asts: &[Ast], base_dir: &Path) -> i32 {
 
     // Step 1: Transpile to C with test support
     eprintln!("Transpiling to C with test support...");
-    match interpreter::c_codegen::transpile_to_c_with_tests(asts, output_dir) {
+    match interpreter::c_codegen::transpile_to_c_with_tests(asts, output_dir, base_dir) {
         Ok(()) => {}
         Err(e) => {
             eprintln!("\x1b[91mTranspilation failed: {}\x1b[0m", e);

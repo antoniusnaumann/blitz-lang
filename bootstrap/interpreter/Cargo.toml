@@ -4,4 +4,4 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-parser = { path = "../parser" }
+parser = { path = "../parser" }  

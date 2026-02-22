@@ -17,12 +17,18 @@ macro_rules! debug_println {
 
 /// Main entry point for C transpilation (without tests)
 pub fn transpile_to_c(asts: &[Ast], output_dir: &Path) -> Result<(), String> {
-    transpile_to_c_impl(asts, output_dir, false)
+    transpile_to_c_impl(asts, output_dir, false, None)
 }
 
-/// Transpile to C with test support - generates test functions and a test runner main
-pub fn transpile_to_c_with_tests(asts: &[Ast], output_dir: &Path) -> Result<(), String> {
-    transpile_to_c_impl(asts, output_dir, true)
+/// Transpile to C with test support - generates test functions and a test runner main.
+/// `source_dir` is the root directory that was passed as the compilation input;
+/// file paths in test output will be shown relative to it.
+pub fn transpile_to_c_with_tests(
+    asts: &[Ast],
+    output_dir: &Path,
+    source_dir: &Path,
+) -> Result<(), String> {
+    transpile_to_c_impl(asts, output_dir, true, Some(source_dir))
 }
 
 /// Extract the module name from a file path.
@@ -40,12 +46,18 @@ fn module_from_path(path: &str) -> String {
 }
 
 /// Implementation for C transpilation with optional test support
-fn transpile_to_c_impl(asts: &[Ast], output_dir: &Path, include_tests: bool) -> Result<(), String> {
-    let mut codegen = CCodegen::new(output_dir, include_tests);
+fn transpile_to_c_impl(
+    asts: &[Ast],
+    output_dir: &Path,
+    include_tests: bool,
+    source_dir: Option<&Path>,
+) -> Result<(), String> {
+    let mut codegen = CCodegen::new(output_dir, include_tests, source_dir);
 
     // First pass: collect all type definitions
     for ast in asts {
         codegen.current_module = module_from_path(&ast.path);
+        codegen.current_path = ast.path.clone();
         for def in &ast.defs {
             codegen.collect_definition(def)?;
         }
@@ -233,8 +245,8 @@ struct CCodegen {
     in_switch_depth: usize,
     /// Whether to include test code generation
     include_tests: bool,
-    /// Collected test definitions for test mode
-    test_definitions: Vec<Test>,
+    /// Collected test definitions for test mode, stored with their source file path
+    test_definitions: Vec<(Test, String)>,
     /// Track which list equality functions need to be generated (element_type_name)
     list_eq_needed: HashSet<String>,
     /// Expected list element type for list literal generation (used in comparisons)
@@ -262,13 +274,29 @@ struct CCodegen {
     /// Current module name (derived from AST path, e.g., "ast", "hir", "parser")
     /// Set before processing each AST's definitions to provide module context.
     current_module: String,
+    /// Current file path (e.g., "../../compiler/parser/lexer.test.blitz")
+    /// Set before processing each AST's definitions; used to associate tests with their source file.
+    current_path: String,
+    /// Source directory prefix to strip from file paths in test output.
+    /// When set, paths like "../../compiler/parser/foo.blitz" become "parser/foo.blitz".
+    source_dir_prefix: Option<String>,
     /// Map from C type name to the module it was defined in.
     /// Used to set current_module when generating types in topological sort order.
     c_name_to_module: HashMap<String, String>,
 }
 
 impl CCodegen {
-    fn new(output_dir: &Path, include_tests: bool) -> Self {
+    fn new(output_dir: &Path, include_tests: bool, source_dir: Option<&Path>) -> Self {
+        // Normalize the source dir prefix for path stripping.
+        // Ensure it ends with '/' so stripping produces clean relative paths.
+        let source_dir_prefix = source_dir.map(|p| {
+            let s = p.display().to_string();
+            if s.ends_with('/') {
+                s
+            } else {
+                format!("{}/", s)
+            }
+        });
         Self {
             output_dir: output_dir.to_path_buf(),
             forward_decls: String::new(),
@@ -320,6 +348,8 @@ impl CCodegen {
             mut_pointer_params: HashMap::new(),
             codegen_errors: Vec::new(),
             current_module: String::new(),
+            current_path: String::new(),
+            source_dir_prefix,
             c_name_to_module: HashMap::new(),
         }
     }
@@ -423,7 +453,8 @@ impl CCodegen {
             Definition::Test(test) => {
                 // Collect tests if in test mode
                 if self.include_tests {
-                    self.test_definitions.push(test.clone());
+                    self.test_definitions
+                        .push((test.clone(), self.current_path.clone()));
                 }
             }
             _ => {}
@@ -8842,7 +8873,7 @@ impl CCodegen {
         }
     }
 
-    fn write_files(&self) -> Result<(), String> {
+    fn write_files(&mut self) -> Result<(), String> {
         debug_println!(
             self,
             "DEBUG: forward_decls length = {} bytes",
@@ -9838,8 +9869,11 @@ void todo(char* msg) __attribute__((noreturn));
     }
 
     /// Generate a test runner main function that runs all tests with setjmp/longjmp for panic recovery
-    fn generate_test_runner_main(&self) -> String {
+    fn generate_test_runner_main(&mut self) -> String {
         let mut code = String::new();
+
+        // Sort tests by file path for grouped output
+        self.test_definitions.sort_by(|a, b| a.1.cmp(&b.1));
 
         // Add test runner banner and timing helper
         code.push_str(
@@ -9876,8 +9910,26 @@ void todo(char* msg) __attribute__((noreturn));
             self.test_definitions.len()
         ));
 
-        // Generate test invocations
-        for test in &self.test_definitions {
+        // Generate test invocations, grouped by file path
+        let mut current_file: Option<&str> = None;
+
+        for (test, path) in &self.test_definitions {
+            // Print file header when the file path changes
+            if current_file != Some(path.as_str()) {
+                current_file = Some(path.as_str());
+                // Strip the source directory prefix to show relative paths
+                let display_path = if let Some(prefix) = &self.source_dir_prefix {
+                    path.strip_prefix(prefix.as_str()).unwrap_or(path)
+                } else {
+                    path.as_str()
+                };
+                let escaped_path = display_path.replace("\\", "\\\\").replace("\"", "\\\"");
+                code.push_str(&format!(
+                    "    printf(\"\\n\\x1b[2m{}\\x1b[0m\\n\");\n",
+                    escaped_path
+                ));
+            }
+
             // Generate safe function name (same as in generate_test_function)
             let safe_name: String = test
                 .name
@@ -9912,7 +9964,7 @@ void todo(char* msg) __attribute__((noreturn));
             code.push_str(&escaped_name);
             code.push_str("\");\n");
             code.push_str(
-                "            printf(\"  -> \\x1b[91m%s (signal %d)\\x1b[0m\\n\", sig_name, sig);\n",
+                "            printf(\"          -> \\x1b[91m%s (signal %d)\\x1b[0m\\n\", sig_name, sig);\n",
             );
             code.push_str("            failed++;\n");
             // Inner: panic recovery (blitz panic() calls)
@@ -9939,7 +9991,7 @@ void todo(char* msg) __attribute__((noreturn));
             code.push_str("\");\n");
             code.push_str("            if (blitz_test_panic_msg) {\n");
             code.push_str(
-                "                printf(\"  -> \\x1b[91m%s\\x1b[0m\\n\", blitz_test_panic_msg);\n",
+                "                printf(\"          -> \\x1b[91m%s\\x1b[0m\\n\", blitz_test_panic_msg);\n",
             );
             code.push_str("                free(blitz_test_panic_msg);\n");
             code.push_str("                blitz_test_panic_msg = NULL;\n");
