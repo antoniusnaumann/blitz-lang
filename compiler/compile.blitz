@@ -1,21 +1,23 @@
-fn compile_file(path String) {
+fn compile_file(path String) ast::Ast {
 	// TODO: proper error handling
 	let content = read(path).unwrap()
 
-    // CODE -> AST
+	// CODE -> AST
 	var parser = new_parser(content)
-	let ast = ast::Ast(items: parser.mut.parse(), origin: "main.blitz")
-
-	// AST -> HIR
-	todo("AST -> HIR")
-
-	// HIR -> TIR
-
-	// TIR -> MIR
-
-    // MIR -> LIR
+	ast::Ast(items: parser.mut.parse(), origin: path)
 }
 
 fn compile(path String) {
-    todo("check if path or dir and then call the appropriate function")
+	todo("check if path or dir and then call the appropriate function")
+	let asts = todo("lower individual files")
+
+	// AST -> HIR
+	let hir = asts.lower()
+
+	// HIR -> TIR
+	todo("HIR -> TIR")
+
+	// TIR -> MIR
+
+	// MIR -> LIR
 }

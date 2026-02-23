@@ -1051,7 +1051,30 @@ impl<'a> Parser<'a> {
     fn parse_string_lit(&mut self) -> String {
         let Token { kind: _, span } = self.expect(TokenKind::Str);
 
-        self.source[(span.start + 1)..(span.end)].into()
+        let raw = &self.source[(span.start + 1)..(span.end)];
+        if !raw.contains('\\') {
+            return raw.into();
+        }
+
+        let mut result = String::with_capacity(raw.len());
+        let mut chars = raw.chars();
+        while let Some(ch) = chars.next() {
+            if ch == '\\' {
+                match chars.next() {
+                    Some('n') => result.push('\n'),
+                    Some('r') => result.push('\r'),
+                    Some('t') => result.push('\t'),
+                    Some('0') => result.push('\0'),
+                    Some('\\') => result.push('\\'),
+                    Some('"') => result.push('"'),
+                    Some(c) => panic!("Invalid escape sequence \\{c} in string literal"),
+                    None => panic!("Unexpected end of string after backslash"),
+                }
+            } else {
+                result.push(ch);
+            }
+        }
+        result
     }
 
     fn parse_char_lit(&mut self) -> Rune {

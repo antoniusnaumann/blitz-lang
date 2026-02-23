@@ -5,7 +5,7 @@ fn substr(source List(Rune), start Int, until Int) String {
 	var index = start
 	while index < until {
 	    str ++= source[index]
-	    index = index + 1
+	    index += 1
 	}
 
 	str

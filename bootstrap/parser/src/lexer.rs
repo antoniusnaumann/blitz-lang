@@ -258,7 +258,7 @@ impl<'a> Lexer<'a> {
                     return curr;
                 }
                 ch if escape => match ch {
-                    'n' | 'r' | 't' | '\'' | '\\' | '0' => {
+                    'n' | 'r' | 't' | '\'' | '\\' | '0' | '"' => {
                         _ = self.chars.next();
                         escape = false;
                     }

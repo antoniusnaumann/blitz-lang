@@ -190,3 +190,7 @@ struct Lit(T) {
 	value T
 	span  Span
 }
+
+fn empty_block() Block {
+	Block(statements: [], span: empty_span())
+}

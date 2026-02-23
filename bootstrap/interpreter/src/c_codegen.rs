@@ -267,6 +267,8 @@ struct CCodegen {
     test_definitions: Vec<(Test, String)>,
     /// Track which list equality functions need to be generated (element_type_name)
     list_eq_needed: HashSet<String>,
+    /// Track which struct equality functions need to be generated (c_type_name)
+    struct_eq_needed: HashSet<String>,
     /// Expected list element type for list literal generation (used in comparisons)
     expected_list_elem_type: Option<String>,
     /// Expected type for the current expression being generated (set by outer constructor when
@@ -358,6 +360,7 @@ impl CCodegen {
             include_tests,
             test_definitions: Vec::new(),
             list_eq_needed: HashSet::new(),
+            struct_eq_needed: HashSet::new(),
             expected_list_elem_type: None,
             expected_expr_type: None,
             display_needed: HashSet::new(),
@@ -950,6 +953,75 @@ impl CCodegen {
         }
     }
 
+    /// Normalize a switch condition type: if it is a `Box_X` typedef (which is `X*` in C),
+    /// resolve it to the underlying tagged-union pointer type so that switch generation
+    /// can correctly check `X->tag` instead of the non-existent `Box_X->tag`.
+    ///
+    /// Example: `"Box_Expression"` → `"ast_Expression*"` (when `Expression` resolves to
+    /// `ast_Expression` and `ast_Expression` is a tagged union).
+    fn normalize_switch_cond_type(&self, cond_type: &str) -> String {
+        if cond_type.starts_with("Box_") {
+            let inner_name = &cond_type[4..]; // e.g. "Expression"
+            debug_println!(
+                self,
+                "DEBUG normalize_switch_cond_type: Box_ detected, inner='{}'",
+                inner_name
+            );
+            // First try with current module context.
+            let c_name = self.resolve_c_name_for(inner_name, &self.current_module);
+            debug_println!(
+                self,
+                "DEBUG normalize_switch_cond_type: resolved='{}' in module='{}'",
+                c_name,
+                self.current_module
+            );
+            // Prefer tagged union over plain struct: only return if it's a tagged union.
+            if self.tagged_union_types.contains(c_name.as_str()) {
+                debug_println!(
+                    self,
+                    "DEBUG normalize_switch_cond_type: tagged union match '{}'",
+                    c_name
+                );
+                return format!("{}*", c_name);
+            }
+            // If not found as tagged union under current module, search all tagged_union_types
+            // for a name that ends with the inner name (e.g., "ast_Expression" for "Expression").
+            // This handles the case where e.g. `Box_Expression` refers to `ast_Expression`
+            // but we are currently in a different module (e.g. `resolver`).
+            for prefix in &["ast_", "hir_", "parser_"] {
+                let candidate = format!("{}{}", prefix, inner_name);
+                debug_println!(
+                    self,
+                    "DEBUG normalize_switch_cond_type: trying candidate='{}'",
+                    candidate
+                );
+                if self.tagged_union_types.contains(candidate.as_str()) {
+                    debug_println!(
+                        self,
+                        "DEBUG normalize_switch_cond_type: tagged union match '{}'",
+                        candidate
+                    );
+                    return format!("{}*", candidate);
+                }
+            }
+            // Last resort: plain struct
+            if self.seen_types.contains(c_name.as_str()) {
+                debug_println!(
+                    self,
+                    "DEBUG normalize_switch_cond_type: struct match '{}'",
+                    c_name
+                );
+                return format!("{}*", c_name);
+            }
+            debug_println!(
+                self,
+                "DEBUG normalize_switch_cond_type: no match found, returning '{}'",
+                cond_type
+            );
+        }
+        cond_type.to_string()
+    }
+
     /// Resolve the C name for a type, taking its module qualifier into account.
     /// If the type has an explicit module (e.g., `ast::Return`), use that for lookup.
     /// If no explicit module, fall back to current_module for disambiguation.
@@ -1098,6 +1170,21 @@ impl CCodegen {
     /// Pointer types (ending with *) are already indirected, so `mut` doesn't change them.
     fn is_c_value_type(&self, c_type: &str) -> bool {
         !c_type.ends_with('*')
+    }
+
+    /// Check if a union variant is stored by value (not by pointer) in its parent union's
+    /// data field.  These types appear as `T as_T` (not `T* as_T`) in the generated C struct.
+    fn is_union_variant_stored_by_value(variant_c_name: &str) -> bool {
+        const VALUE_STORED: &[&str] = &[
+            "Lit_Bool",
+            "Lit_String",
+            "Lit_Rune",
+            "Lit_Float",
+            "Lit_Int",
+            "BinaryOperator",
+            "UnaryOperator",
+        ];
+        VALUE_STORED.contains(&variant_c_name)
     }
 
     /// Check if a type is a built-in type defined in blitz_types.h
@@ -4769,6 +4856,24 @@ impl CCodegen {
                                     format!("(strcmp({}, {}) != 0)", left_expr, right)
                                 };
                             }
+
+                            // Special handling for struct equality comparisons
+                            // Structs are stored as pointers in C, so == compares addresses.
+                            // Generate a per-type deep equality function instead.
+                            let left_type_base = left_type.strip_suffix('*').unwrap_or(&left_type);
+                            if self.struct_field_types.contains_key(left_type_base) {
+                                let right = self.generate_expression(&binop.right, is_main);
+                                self.struct_eq_needed.insert(left_type_base.to_string());
+                                let eq_call = format!(
+                                    "blitz_struct_eq_{}({}, {})",
+                                    left_type_base, left_expr, right
+                                );
+                                return if matches!(binop.op, parser::Operator::Ne) {
+                                    format!("(!{})", eq_call)
+                                } else {
+                                    eq_call
+                                };
+                            }
                         }
 
                         let right = self.generate_expression(&binop.right, is_main);
@@ -4899,6 +5004,16 @@ impl CCodegen {
                         if let Some((param_types, _)) = &signature {
                             if i < param_types.len() {
                                 let param_type = &param_types[i];
+
+                                // Handle bare `none` argument: infer the Option type from the parameter
+                                if arg_code == "none" && param_type.starts_with("Option_") {
+                                    arg_code = format!(
+                                        "({}){{.tag = {}_tag_none}}",
+                                        param_type, param_type
+                                    );
+                                    return arg_code;
+                                }
+
                                 // Check if param is Ptr type and arg is Option
                                 // param_type is a Blitz type signature (e.g., "Ident", not "Ident*")
                                 // A struct type in Blitz becomes a pointer in C
@@ -5579,11 +5694,16 @@ impl CCodegen {
                         } else {
                             false
                         }
-                    } else if return_type.name == type_name {
-                        // Return type directly matches (e.g., fn lower() -> TypeDef returns TypeDef)
+                    } else if return_type.name == type_name
+                        || self.type_name_for_instance(return_type) == type_name
+                    {
+                        // Return type directly matches (e.g., fn lower() -> TypeDef returns TypeDef,
+                        // or fn empty_block() -> ast::Block returns ast_Block).
+                        // We compare both the raw Blitz name and the module-prefixed C name
+                        // because the constructor's type_name is already the C name.
                         debug_println!(self,
-                            "DEBUG Constructor: skipping union wrap because return type '{}' matches type_name={}",
-                            return_type.name, type_name
+                            "DEBUG Constructor: skipping union wrap because return type '{}' (c: '{}') matches type_name={}",
+                            return_type.name, self.type_name_for_instance(return_type), type_name
                         );
                         true
                     } else {
@@ -6532,7 +6652,7 @@ impl CCodegen {
                                     // to determine the list element type
                                     if !list.elems.is_empty() {
                                         let elem_type = self.infer_expr_type(&list.elems[0]);
-                                        let is_pointer = elem_type.ends_with('*');
+                                        let _is_pointer = elem_type.ends_with('*');
                                         let base_type = elem_type.trim_end_matches('*');
                                         let list_type = format!("List_{}", base_type);
                                         let c_elem_type = &elem_type;
@@ -7229,7 +7349,9 @@ impl CCodegen {
         is_main: bool,
     ) -> String {
         let cond = self.generate_expression(&switch_expr.cond, is_main);
-        let cond_type = self.infer_expr_type(&switch_expr.cond);
+        let raw_cond_type = self.infer_expr_type(&switch_expr.cond);
+        // Dereference Box(T) types so we switch on the underlying tagged union pointer.
+        let cond_type = self.normalize_switch_cond_type(&raw_cond_type);
 
         // Check if this is an Option switch
         let is_option_switch = switch_expr.cases.iter().any(|case| {
@@ -7440,9 +7562,12 @@ impl CCodegen {
                         } else if ty.name == "UnaryOperator" {
                             format!("{} == TokenKind_not || {} == TokenKind_sub", cond, cond)
                         } else {
-                            // Use cond_base_type for the tag enum, and ty.name for the variant
-                            // e.g., switch on Definition* with case Fn -> item->tag == Definition_tag_Fn
-                            format!("{}->tag == {}_tag_{}", cond, cond_base_type, ty.name)
+                            // Use cond_base_type for the tag enum prefix, and the C variant name
+                            // (resolved via type_name_for_instance) for the suffix.
+                            // e.g., switch on Statement* with case ast::Expression ->
+                            //   stmt->tag == Statement_tag_ast_Expression
+                            let variant_c_name = self.type_name_for_instance(ty);
+                            format!("{}->tag == {}_tag_{}", cond, cond_base_type, variant_c_name)
                         }
                     }
                     _ => continue,
@@ -7489,15 +7614,24 @@ impl CCodegen {
 
                     // Generate the shadowing assignment using a temp for the outer value
                     // First save the outer pointer, then create the inner typed value
+                    let variant_c_name = self.type_name_for_instance(ty);
+                    let data_access = if Self::is_union_variant_stored_by_value(&variant_c_name) {
+                        format!("&_outer_{}->data.as_{}", safe_var_name, variant_c_name)
+                    } else {
+                        format!("_outer_{}->data.as_{}", safe_var_name, variant_c_name)
+                    };
                     code.push_str(&format!(
                         "        {}* _outer_{} = {};\n",
                         cond_base_type, safe_var_name, cond
                     ));
                     code.push_str(&format!(
-                        "        {}* {} = _outer_{}->data.as_{};\n",
-                        ty.name, safe_var_name, safe_var_name, ty.name
+                        "        {}* {} = {};\n",
+                        variant_c_name, safe_var_name, data_access
                     ));
-                    code.push_str(&format!("        {}* it = {};\n", ty.name, safe_var_name));
+                    code.push_str(&format!(
+                        "        {}* it = {};\n",
+                        variant_c_name, safe_var_name
+                    ));
                 }
             } else if let parser::SwitchLabel::Ident(ident) = &case.label {
                 // For Ident labels on tagged unions (e.g., StructDef in `switch type_def.kind`),
@@ -7585,7 +7719,9 @@ impl CCodegen {
 
     fn generate_switch(&mut self, switch_expr: &parser::Switch, is_main: bool) -> String {
         let cond = self.generate_expression(&switch_expr.cond, is_main);
-        let cond_type = self.infer_expr_type(&switch_expr.cond);
+        let raw_cond_type = self.infer_expr_type(&switch_expr.cond);
+        // Dereference Box(T) types so we switch on the underlying tagged union pointer.
+        let cond_type = self.normalize_switch_cond_type(&raw_cond_type);
 
         // Check if we can use a C switch statement or need if-else chain
         // C switch only works with integer/char constants, not strings or complex patterns
@@ -8057,8 +8193,11 @@ impl CCodegen {
                             // Generate check for unary operator TokenKind variants
                             format!("{} == TokenKind_not || {} == TokenKind_sub", cond, cond)
                         } else {
-                            // Normal tagged union check
-                            format!("{}->tag == {}_tag_{}", cond, ty.name, ty.name)
+                            // Normal tagged union check: use cond_base_type as prefix and
+                            // the C variant name (resolved via type_name_for_instance) as suffix.
+                            let cond_base_type = cond_type.trim_end_matches('*').trim();
+                            let variant_c_name = self.type_name_for_instance(ty);
+                            format!("{}->tag == {}_tag_{}", cond, cond_base_type, variant_c_name)
                         }
                     }
                     parser::SwitchLabel::Else(_) => unreachable!(), // handled above
@@ -8097,6 +8236,24 @@ impl CCodegen {
                     code.push_str(&format!("        TokenKind it = {};\n", cond));
                     self.variable_types
                         .insert("it".to_string(), "TokenKind".to_string());
+                } else {
+                    // General tagged union case: extract inner variant data and bind to 'it'
+                    let cond_base_type = cond_type.trim_end_matches('*').trim();
+                    if self.tagged_union_types.contains(cond_base_type) {
+                        let variant_c_name = self.type_name_for_instance(ty);
+                        let data_access = if Self::is_union_variant_stored_by_value(&variant_c_name)
+                        {
+                            format!("&{}->data.as_{}", cond, variant_c_name)
+                        } else {
+                            format!("{}->data.as_{}", cond, variant_c_name)
+                        };
+                        code.push_str(&format!(
+                            "        {}* it = {};\n",
+                            variant_c_name, data_access
+                        ));
+                        self.variable_types
+                            .insert("it".to_string(), format!("{}*", variant_c_name));
+                    }
                 }
             }
 
@@ -8179,7 +8336,9 @@ impl CCodegen {
         var_name: &str,
     ) -> String {
         let cond = self.generate_expression(&switch_expr.cond, is_main);
-        let cond_type = self.infer_expr_type(&switch_expr.cond);
+        let raw_cond_type = self.infer_expr_type(&switch_expr.cond);
+        // Dereference Box(T) types so we switch on the underlying tagged union pointer.
+        let cond_type = self.normalize_switch_cond_type(&raw_cond_type);
 
         // Check if this is an Option switch (has some/none cases)
         let is_option_switch = switch_expr.cases.iter().any(|case| {
@@ -8614,7 +8773,10 @@ impl CCodegen {
                         } else if ty.name == "UnaryOperator" {
                             format!("{} == TokenKind_not || {} == TokenKind_sub", cond, cond)
                         } else {
-                            format!("{}->tag == {}_tag_{}", cond, ty.name, ty.name)
+                            // Use cond_base_type as prefix and C variant name as suffix.
+                            let cond_base_type = cond_type.trim_end_matches('*').trim();
+                            let variant_c_name = self.type_name_for_instance(ty);
+                            format!("{}->tag == {}_tag_{}", cond, cond_base_type, variant_c_name)
                         }
                     }
                     parser::SwitchLabel::Else(_) => unreachable!(),
@@ -8652,6 +8814,24 @@ impl CCodegen {
                     code.push_str(&format!("        TokenKind it = {};\n", cond));
                     self.variable_types
                         .insert("it".to_string(), "TokenKind".to_string());
+                } else {
+                    // General tagged union case: extract inner variant data and bind to 'it'
+                    let cond_base_type = cond_type.trim_end_matches('*').trim();
+                    if self.tagged_union_types.contains(cond_base_type) {
+                        let variant_c_name = self.type_name_for_instance(ty);
+                        let data_access = if Self::is_union_variant_stored_by_value(&variant_c_name)
+                        {
+                            format!("&{}->data.as_{}", cond, variant_c_name)
+                        } else {
+                            format!("{}->data.as_{}", cond, variant_c_name)
+                        };
+                        code.push_str(&format!(
+                            "        {}* it = {};\n",
+                            variant_c_name, data_access
+                        ));
+                        self.variable_types
+                            .insert("it".to_string(), format!("{}*", variant_c_name));
+                    }
                 }
             }
 
@@ -8752,6 +8932,19 @@ impl CCodegen {
             "Rune" => "uint32_t".to_string(),
             "Void" => "void".to_string(),
             _ => {
+                // Box(T) is stored as "Box_T" in struct_field_types.
+                // Box is just a pointer in C: resolve the inner type and add one indirection.
+                if type_name.starts_with("Box_") {
+                    // normalize_switch_cond_type already handles the module-qualified lookup
+                    // and returns "InnerType*". Re-use it here.
+                    let normalized = self.normalize_switch_cond_type(type_name);
+                    if normalized != type_name {
+                        return normalized;
+                    }
+                    // Fallback: strip prefix and return inner + "*"
+                    let inner = &type_name[4..];
+                    return format!("{}*", inner);
+                }
                 // For other types, check if it's a struct type or tagged union (should be pointer)
                 // or an enum type (should be value)
                 if self.seen_types.contains(type_name) && !self.enum_types.contains(type_name) {
@@ -9378,6 +9571,42 @@ void todo(char* msg) __attribute__((noreturn));
             full_header.push_str("\n");
         }
 
+        // Compute the transitive closure of struct types needing equality functions.
+        // A struct with a field of another struct type also needs that type's equality function.
+        if !self.struct_eq_needed.is_empty() {
+            let mut changed = true;
+            while changed {
+                changed = false;
+                let current: Vec<String> = self.struct_eq_needed.iter().cloned().collect();
+                for struct_type in &current {
+                    if let Some(fields) = self.struct_field_types.get(struct_type) {
+                        for (_field_name, field_blitz_type) in fields {
+                            let resolved_c_type =
+                                self.resolve_field_type_to_c(field_blitz_type, struct_type);
+                            if self.struct_field_types.contains_key(&resolved_c_type)
+                                && !self.struct_eq_needed.contains(&resolved_c_type)
+                            {
+                                self.struct_eq_needed.insert(resolved_c_type);
+                                changed = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Add struct equality function declarations
+        if !self.struct_eq_needed.is_empty() {
+            full_header.push_str("// Struct equality function declarations\n");
+            for struct_type in &self.struct_eq_needed {
+                full_header.push_str(&format!(
+                    "bool blitz_struct_eq_{}({}* a, {}* b);\n",
+                    struct_type, struct_type, struct_type
+                ));
+            }
+            full_header.push_str("\n");
+        }
+
         // Add type definitions
         full_header.push_str(&self.header);
 
@@ -9730,14 +9959,71 @@ void todo(char* msg) __attribute__((noreturn));
                     } else {
                         full_impl.push_str("        if (a.data[i] != b.data[i]) return false;\n");
                     }
+                } else if self.struct_field_types.contains_key(elem_type.as_str()) {
+                    // For struct types, use deep equality function
+                    self.struct_eq_needed.insert(elem_type.clone());
+                    full_impl.push_str(&format!(
+                        "        if (!blitz_struct_eq_{}(a.data[i], b.data[i])) return false;\n",
+                        elem_type
+                    ));
                 } else {
                     // For enum types (like TokenKind), direct comparison works
-                    // For struct types that are stored as pointers, compare pointers
-                    // TODO: For proper deep equality, we'd need per-type eq functions
+                    // For other pointer types, compare pointers
                     full_impl.push_str("        if (a.data[i] != b.data[i]) return false;\n");
                 }
 
                 full_impl.push_str("    }\n");
+                full_impl.push_str("    return true;\n");
+                full_impl.push_str("}\n\n");
+            }
+        }
+
+        // Generate struct equality function implementations
+        if !self.struct_eq_needed.is_empty() {
+            full_impl.push_str("// Struct equality function implementations\n");
+            full_impl.push_str("// These functions compare two structs for deep equality\n\n");
+
+            for struct_type in &self.struct_eq_needed.clone() {
+                full_impl.push_str(&format!(
+                    "bool blitz_struct_eq_{}({}* a, {}* b) {{\n",
+                    struct_type, struct_type, struct_type
+                ));
+                // Pointer identity short-circuit
+                full_impl.push_str("    if (a == b) return true;\n");
+                full_impl.push_str("    if (!a || !b) return false;\n");
+
+                if let Some(fields) = self.struct_field_types.get(struct_type.as_str()) {
+                    // Sort fields for deterministic output
+                    let mut sorted_fields: Vec<_> = fields.iter().collect();
+                    sorted_fields.sort_by_key(|(name, _)| (*name).clone());
+
+                    for (field_name, field_blitz_type) in &sorted_fields {
+                        let resolved_c_type =
+                            self.resolve_field_type_to_c(field_blitz_type, struct_type);
+
+                        if field_blitz_type.as_str() == "String" || resolved_c_type == "char*" {
+                            // String comparison
+                            full_impl.push_str(&format!(
+                                "    if (strcmp(a->{f}, b->{f}) != 0) return false;\n",
+                                f = field_name
+                            ));
+                        } else if self.struct_field_types.contains_key(&resolved_c_type) {
+                            // Nested struct — recursive deep equality
+                            full_impl.push_str(&format!(
+                                "    if (!blitz_struct_eq_{t}(a->{f}, b->{f})) return false;\n",
+                                t = resolved_c_type,
+                                f = field_name
+                            ));
+                        } else {
+                            // Primitive, enum, or pointer — direct comparison
+                            full_impl.push_str(&format!(
+                                "    if (a->{f} != b->{f}) return false;\n",
+                                f = field_name
+                            ));
+                        }
+                    }
+                }
+
                 full_impl.push_str("    return true;\n");
                 full_impl.push_str("}\n\n");
             }
