@@ -1,61 +1,267 @@
 struct Body {
-    expressions List(Expression) // index by ExpressionId
-}
-
-fn get(body Body, id ExpressionId) Expression {
-    body.expressions[id.id]
-}
-
-fn push(mut body Body, expr Expression) ExpressionId {
-    body.expressions ++= expr
-    ExpressionId(id: body.expressions.len() - 1)
+	expressions List(Expression) // arena indexed by ExpressionId
 }
 
 struct ExpressionId {
-    id Int
+	id Int
+}
+
+fn get(body Body, id ExpressionId) Expression {
+	body.expressions[id.id]
+}
+
+fn push(mut body Body, expr Expression) ExpressionId {
+	body.expressions ++= expr
+	ExpressionId(id: body.expressions.len() - 1)
 }
 
 struct Expression {
-    kind ExpressionKind
-    span ast::Span
+	kind ExpressionKind
+	span ast::Span
 }
 
 union ExpressionKind {
-    Loop
-    If
-    Else
-    Constructor
-    Call
-    Return
-    Break
-    Switch
-    // ...
+	// Literals
+	LitInt
+	LitFloat
+	LitString
+	LitRune
+
+	// Variable reference (resolved to a local binding)
+	LocalRef
+
+	// Operations
+	BinaryOp
+	UnaryOp
+
+	// Calls — candidates are resolved by name; the type checker selects one
+	Call
+	// TODO LLM: don't need to preserve this, the rules for ufcs calls are the same, i.e., no unqualified call, so something like span.ast::merge(other) foer calling a function from another module in method style. so desugar from ast -> already
+	UfcsCall
+	Constructor
+
+	// Access
+	Member
+	Index
+
+	// Control flow
+	If
+	While
+	For
+	Switch
+	Block
+	Return
+	Break
+	Continue
+
+	// Declarations (live in the body arena alongside expressions)
+	Let
+
+	// Assignment
+	Assign
+
+	// Special
+	Assert
+	Mut
+	Try
+	ListLit
+	Group
 }
 
-struct Loop {
-    body ExpressionId
+// --- Literals ---
+
+struct LitInt {
+	value Int
 }
+
+struct LitFloat {
+	value Float
+}
+
+struct LitString {
+	value String
+}
+
+struct LitRune {
+	value Rune
+}
+
+// --- Variable reference ---
+
+struct LocalRef {
+	name       ast::Ident
+	binding_id Int // unique ID assigned when the binding was declared
+}
+
+// --- Operations ---
+
+struct BinaryOp {
+	op    ast::BinaryOperator
+	left  ExpressionId
+	right ExpressionId
+}
+
+struct UnaryOp {
+	op   ast::UnaryOperator
+	expr ExpressionId
+}
+
+// --- Calls ---
+
+// Regular call: func(args) or module::func(args)
+// candidates is populated by the resolver and narrowed by the type checker.
+struct Call {
+	name       ast::Ident
+	module     Option(ast::Ident) // qualified module if present
+	candidates List(FuncId)
+	args       List(Argument)
+}
+	// UFCS call: receiver.func(args) or receiver.module::func(args)
+// The receiver is the implicit first argument; candidates include it.
+// TODO: the resolver currently produces regular Call nodes for UFCS calls
+// (the parser prepends the receiver to the args list).  Either produce
+// UfcsCall nodes by checking ast::Call.ufcs, or remove this variant.
+// TODO LLM: remove this variant, ufcs is just syntactic sugar for method calls and does not resolve differently
+struct UfcsCall {
+	name       ast::Ident
+	module     Option(ast::Ident)
+	candidates List(FuncId)
+	receiver   ExpressionId
+	args       List(Argument)
+}
+
+struct Argument {
+	label Option(ast::Ident)
+	value ExpressionId
+}
+
+// Constructor call: Type(field: value, ...)
+struct Constructor {
+	type_id    TypeId
+	type_name  ast::Ident  // kept for diagnostics
+	args       List(FieldInit)
+	// TODO LLM: we don't need info about ufcs anymore in hir, it does not lead to different resolution
+	ufcs       Bool        // true when used as UFCS receiver
+}
+
+struct FieldInit {
+	label Option(ast::Ident)
+	value ExpressionId
+}
+
+// --- Access ---
+
+struct Member {
+	expr  ExpressionId
+	field ast::Ident
+}
+
+struct Index {
+	target ExpressionId
+	index  ExpressionId
+}
+
+// --- Control flow ---
 
 struct If {
-    cond ExpressionId
-    body ExpressionId
+	cond      ExpressionId
+	then_body ExpressionId
+	else_body Option(ExpressionId)
 }
 
-struct Else {
-    recv ExpressionId
-    body ExpressionId
+struct While {
+	cond ExpressionId
+	body ExpressionId
 }
 
-struct Constructor {}
+struct For {
+	iter    ExpressionId
+	binding ast::Ident
+	body    ExpressionId
+}
 
-struct Call {}
+struct Switch {
+	cond  ExpressionId
+	cases List(SwitchCase)
+}
+
+struct SwitchCase {
+	label SwitchLabel
+	body  ExpressionId
+	span  ast::Span
+}
+
+union SwitchLabel {
+	TypeCase
+	IdentCase
+	LiteralCase
+	DefaultCase
+}
+
+struct TypeCase {
+	type_id   TypeId
+	type_name ast::Ident // kept for diagnostics
+}
+
+struct IdentCase {
+	name ast::Ident
+}
+
+struct LiteralCase {
+	value ExpressionId
+}
+
+struct DefaultCase {}
+
+struct Block {
+	stmts List(ExpressionId)
+}
 
 struct Return {
-    expr ExpressionId
+	expr Option(ExpressionId)
 }
 
-struct Break {
-    loop ExpressionId
+struct Break {}
+
+struct Continue {}
+
+// --- Declarations ---
+
+struct Let {
+	name    ast::Ident
+	type_   Option(TypeRef)  // explicit type annotation if present
+	init    ExpressionId
+	is_mut  Bool
+	binding_id Int           // unique ID assigned by the scope tracker
 }
 
-struct Switch {}
+// --- Assignment ---
+
+struct Assign {
+	target ExpressionId
+	value  ExpressionId
+}
+
+// --- Special ---
+
+struct Assert {
+	cond ExpressionId
+}
+
+struct Mut {
+	expr ExpressionId
+	ufcs Bool
+}
+
+struct Try {
+	expr ExpressionId
+	ufcs Bool
+}
+
+struct ListLit {
+	elems List(ExpressionId)
+}
+
+struct Group {
+	expr ExpressionId
+}

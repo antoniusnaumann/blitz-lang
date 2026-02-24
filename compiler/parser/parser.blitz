@@ -44,7 +44,7 @@ fn next(mut parser Parser) Option(ast::Definition) {
 fn tok(mut parser Parser) Token {
     if !parser.eof() {
         let token = parser.tokens[parser.index]
-    	parser.index = parser.index + 1
+    	parser.index += 1
     	token
 	} else {
 	    Token(kind: eof, span: parser.last().span)
