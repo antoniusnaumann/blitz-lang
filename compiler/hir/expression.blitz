@@ -36,8 +36,6 @@ union ExpressionKind {
 
 	// Calls — candidates are resolved by name; the type checker selects one
 	Call
-	// TODO LLM: don't need to preserve this, the rules for ufcs calls are the same, i.e., no unqualified call, so something like span.ast::merge(other) foer calling a function from another module in method style. so desugar from ast -> already
-	UfcsCall
 	Constructor
 
 	// Access
@@ -69,6 +67,7 @@ union ExpressionKind {
 }
 
 // --- Literals ---
+// TODO: make these generic types
 
 struct LitInt {
 	value Int
@@ -116,20 +115,6 @@ struct Call {
 	candidates List(FuncId)
 	args       List(Argument)
 }
-	// UFCS call: receiver.func(args) or receiver.module::func(args)
-// The receiver is the implicit first argument; candidates include it.
-// TODO: the resolver currently produces regular Call nodes for UFCS calls
-// (the parser prepends the receiver to the args list).  Either produce
-// UfcsCall nodes by checking ast::Call.ufcs, or remove this variant.
-// TODO LLM: remove this variant, ufcs is just syntactic sugar for method calls and does not resolve differently
-struct UfcsCall {
-	name       ast::Ident
-	module     Option(ast::Ident)
-	candidates List(FuncId)
-	receiver   ExpressionId
-	args       List(Argument)
-}
-
 struct Argument {
 	label Option(ast::Ident)
 	value ExpressionId
@@ -140,8 +125,6 @@ struct Constructor {
 	type_id    TypeId
 	type_name  ast::Ident  // kept for diagnostics
 	args       List(FieldInit)
-	// TODO LLM: we don't need info about ufcs anymore in hir, it does not lead to different resolution
-	ufcs       Bool        // true when used as UFCS receiver
 }
 
 struct FieldInit {
@@ -195,7 +178,8 @@ union SwitchLabel {
 	TypeCase
 	IdentCase
 	LiteralCase
-	DefaultCase
+	// TODO LLM: it should work to call this default, unfortunately the bootstrap compiler codegen chokes on it (maybe because the name exists elsewhere), please fix the underlying issue
+	defaultCase
 }
 
 struct TypeCase {
@@ -210,8 +194,6 @@ struct IdentCase {
 struct LiteralCase {
 	value ExpressionId
 }
-
-struct DefaultCase {}
 
 struct Block {
 	stmts List(ExpressionId)
@@ -250,12 +232,10 @@ struct Assert {
 
 struct Mut {
 	expr ExpressionId
-	ufcs Bool
 }
 
 struct Try {
 	expr ExpressionId
-	ufcs Bool
 }
 
 struct ListLit {

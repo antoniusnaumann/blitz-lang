@@ -66,6 +66,7 @@ test "std/string.test.blitz" { parse_file("std/string.test.blitz") }
 
 test "hir/expression.blitz" { parse_file("hir/expression.blitz") }
 test "hir/definition.blitz" { parse_file("hir/definition.blitz") }
+test "hir/scope.blitz" { parse_file("hir/scope.blitz") }
 
 test "resolver/toplevel.blitz" { parse_file("resolver/toplevel.blitz") }
 test "resolver/expression.blitz" { parse_file("resolver/expression.blitz") }

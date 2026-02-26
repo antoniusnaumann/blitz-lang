@@ -9,8 +9,7 @@ test "New HIR contains core module" {
 
 test "Create module name from AST" {
     let ast = ast::Ast(origin: "some/mymodule/file.blitz", items: [])
-    var asts = []
-    asts ++= ast
+    let asts = [ast]
     let hir = asts.lower()
     
     // Should create a module named "mymodule" (plus core module = 2 total)
@@ -29,27 +28,23 @@ test "Collect ASTs into module" {
         name: ast::Ident(name: "add", span: ast::empty_span()),
         args: [],
         type: none,
-        body: ast::Block(statements: [], span: ast::empty_span()),
+        body: ast::empty_block(),
         span: ast::empty_span()
     )
-    var items1 = []
-    items1 ++= fn1
+    let items1 = [fn1]
     let ast1 = ast::Ast(origin: "src/math/add.blitz", items: items1)
     
     let fn2 = ast::Fn(
         name: ast::Ident(name: "subtract", span: ast::empty_span()),
         args: [],
         type: none,
-        body: ast::Block(statements: [], span: ast::empty_span()),
+        body: ast::empty_block(),
         span: ast::empty_span()
     )
-    var items2 = []
-    items2 ++= fn2
+    let items2 = [fn2]
     let ast2 = ast::Ast(origin: "src/math/subtract.blitz", items: items2)
     
-    var asts = []
-    asts ++= ast1
-    asts ++= ast2
+    let asts = [ast1, ast2]
     let hir = asts.lower()
     
     // Should have only one "math" module (plus core) = 2 total
@@ -67,10 +62,7 @@ test "Create module names from ASTs" {
     let ast2 = ast::Ast(origin: "src/module2/file.blitz", items: [])
     let ast3 = ast::Ast(origin: "src/module3/file.blitz", items: [])
     
-    var asts = []
-    asts ++= ast1
-    asts ++= ast2
-    asts ++= ast3
+    let asts = [ast1, ast2, ast3]
     let hir = asts.lower()
     
     // Should have 3 modules + core = 4 total
@@ -98,11 +90,9 @@ test "Lower types" {
         span: ast::empty_span()
     )
     
-    var items = []
-    items ++= struct_def
+    let items = [struct_def]
     let ast = ast::Ast(origin: "src/geometry/point.blitz", items:)
-    var asts = []
-    asts ++= ast
+    let asts = [ast]
     let hir = asts.lower()
     
     let mod_id = hir.find("geometry")
@@ -129,3 +119,185 @@ test "Extract mod name from path" {
 test "Extract mod path from path" {
     assert "this/is/a/module/with_a_file.blitz".mod_path() == "this/is/a/module/"
 }
+
+// ── Expression lowering helpers ───────────────────────────────────────────────
+
+// Lower a function source string into a hir::Body.
+// The source should be a complete function definition like: "fn f() { <body> }"
+// The function lives in a module named "test_mod".
+fn lower_fn(source String) hir::Body {
+    let defs = source.parse()
+    let items = [defs[0]]
+    let file = ast::Ast(origin: "src/test_mod/f.blitz", items:)
+    let asts = [file]
+    let hir = asts.lower()
+    let mod_id = hir.find("test_mod").unwrap()
+    hir.get(mod_id).funcs[0].body
+}
+
+// ── Expression lowering tests ─────────────────────────────────────────────────
+
+test "Lower int literal" {
+    // Body has 2 nodes: the literal (id 0) and the block (id 1)
+    let body = lower_fn("fn f() { 42 }")
+    assert body.expressions.len() == 2
+    let expr = body.get(hir::ExpressionId(id: 0))
+    switch expr.kind {
+        hir::LitInt { assert it.value == 42 }
+        else { panic("Expected LitInt") }
+    }
+}
+
+test "Lower rune literal" {
+    let body = lower_fn("fn f() { 'a' }")
+    assert body.expressions.len() == 2
+    let expr = body.get(hir::ExpressionId(id: 0))
+    switch expr.kind {
+        hir::LitRune { assert it.value == 'a' }
+        else { panic("Expected LitRune") }
+    }
+}
+
+test "Lower let declaration" {
+    // 3 nodes: init literal (0), Let node (1), Block (2)
+    let body = lower_fn("fn f() { let x = 7 }")
+    assert body.expressions.len() == 3
+    let let_expr = body.get(hir::ExpressionId(id: 1))
+    switch let_expr.kind {
+        hir::Let {
+            assert it.name.name == "x"
+            assert it.is_mut == false
+        }
+        else { panic("Expected Let") }
+    }
+}
+
+test "Lower mutable let declaration" {
+    let body = lower_fn("fn f() { var counter = 0 }")
+    let let_expr = body.get(hir::ExpressionId(id: 1))
+    switch let_expr.kind {
+        hir::Let { assert it.is_mut == true }
+        else { panic("Expected Let") }
+    }
+}
+
+test "Lower binary op" {
+    // 4 nodes: left (0), right (1), BinaryOp (2), Block (3)
+    let body = lower_fn("fn f() { 3 + 4 }")
+    assert body.expressions.len() == 4
+    let bin_expr = body.get(hir::ExpressionId(id: 2))
+	switch bin_expr.kind {
+		hir::BinaryOp {
+			assert it.left  == hir::ExpressionId(id: 0)
+			assert it.right == hir::ExpressionId(id: 1)
+		}
+        else { panic("Expected BinaryOp") }
+    }
+}
+
+test "Lower return with value" {
+    // 3 nodes: value (0), Return (1), Block (2)
+    let body = lower_fn("fn f() { return 1 }")
+    assert body.expressions.len() == 3
+    let ret_expr = body.get(hir::ExpressionId(id: 1))
+    switch ret_expr.kind {
+        hir::Return { assert it.expr != none }
+        else { panic("Expected Return") }
+    }
+}
+
+test "Lower ident resolves to call for unknown name" {
+    // 2 nodes: call/ident (0), Block (1)
+    let body = lower_fn("fn f() { foo }")
+    assert body.expressions.len() == 2
+    let expr = body.get(hir::ExpressionId(id: 0))
+    switch expr.kind {
+        hir::Call {
+            assert it.name.name == "foo"
+            assert it.args.len() == 0
+        }
+        else { panic("Expected Call for unresolved ident") }
+    }
+}
+
+test "Lower let then ident resolves to local ref" {
+    // Nodes: init-lit(0), Let(1), LocalRef(2), Block(3)
+    let body = lower_fn("fn f() { let y = 5; y }")
+    assert body.expressions.len() == 4
+    let ref_expr = body.get(hir::ExpressionId(id: 2))
+    switch ref_expr.kind {
+        hir::LocalRef { assert it.name.name == "y" }
+        else { panic("Expected LocalRef") }
+    }
+}
+
+test "Empty function body lowers to single Block node" {
+    let body = lower_fn("fn f() {}")
+    // Just the Block node for the empty body
+    assert body.expressions.len() == 1
+    let block_expr = body.get(hir::ExpressionId(id: 0))
+    switch block_expr.kind {
+        hir::Block { assert it.stmts.len() == 0 }
+        else { panic("Expected Block") }
+    }
+}
+
+test "Lower empty return" {
+    let body = lower_fn("fn f() { return }")
+    assert body.expressions.len() == 2
+    let ret_expr = body.get(hir::ExpressionId(id: 0))
+    switch ret_expr.kind {
+        hir::Return { assert it.expr == none }
+        else { panic("Expected Return") }
+    }
+}
+
+test "Lower assert" {
+    // 3 nodes: cond (0), Assert (1), Block (2)
+    let body = lower_fn("fn f() { assert true }")
+    assert body.expressions.len() == 3
+    let assert_expr = body.get(hir::ExpressionId(id: 1))
+    switch assert_expr.kind {
+		hir::Assert { assert it.cond == hir::ExpressionId(id: 0) }
+        else { panic("Expected Assert") }
+    }
+}
+
+test "Lower while loop" {
+    // 3 nodes: cond (0), body-block (1), While (2), outer-Block (3)
+    let body = lower_fn("fn f() { while true {} }")
+    assert body.expressions.len() == 4
+    let while_expr = body.get(hir::ExpressionId(id: 2))
+	switch while_expr.kind {
+		hir::While {
+			assert it.cond == hir::ExpressionId(id: 0)
+			assert it.body == hir::ExpressionId(id: 1)
+		}
+        else { panic("Expected While") }
+    }
+}
+
+test "Lower nested scope shadows outer binding" {
+    // fn f() { let x = 1; { let x = 2; x }; x }
+    let body = lower_fn("fn f() { let x = 1; { let x = 2; x }; x }")
+    // Outer x ref and inner x ref should both be LocalRef but with different binding_ids
+    // Nodes: lit1(0), Let-outer(1), lit2(2), Let-inner(3), LocalRef-inner(4), Block-inner(5), LocalRef-outer(6), Block-outer(7)
+    assert body.expressions.len() == 8
+
+    let inner_ref = body.get(hir::ExpressionId(id: 4))
+    let outer_ref = body.get(hir::ExpressionId(id: 6))
+    switch inner_ref.kind {
+        hir::LocalRef {
+            let inner_binding = it.binding_id
+            switch outer_ref.kind {
+                hir::LocalRef {
+                    // Inner and outer x should have different binding IDs (shadowing)
+                    assert inner_binding != it.binding_id
+                }
+                else { panic("Expected LocalRef for outer x") }
+            }
+        }
+        else { panic("Expected LocalRef for inner x") }
+    }
+}
+

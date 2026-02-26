@@ -1,0 +1,84 @@
+// Lexical scope chain used during expression lowering.
+//
+// Scopes are stored in a flat list (arena) indexed by ScopeId.  Each scope
+// records the bindings declared at that level and the ID of its parent scope.
+// Using an ID avoids recursive struct definitions (Box(Scope) inside Scope).
+//
+// The resolver allocates scopes into a `ScopeArena` and passes the current
+// `ScopeId` around.  When entering a block it calls `push_child`; when leaving
+// it simply discards the child ID (the arena retains all scopes for the
+// lifetime of expression lowering, which is fine for correctness).
+
+struct ScopeArena {
+	scopes          List(Scope)
+	next_binding_id Int  // unique, monotonically increasing across the whole function
+}
+
+struct ScopeId {
+	id Int
+}
+
+struct Scope {
+	bindings List(Binding)
+	parent   Option(ScopeId)
+}
+
+struct Binding {
+	name       ast::Ident
+	binding_id Int
+	is_mut     Bool
+}
+
+// Create an empty arena ready for a new function body.
+fn new_scope_arena() ScopeArena {
+	ScopeArena(scopes: [], next_binding_id: 0)
+}
+
+// Push the root scope (no parent) and return its ID.
+fn push_root(mut arena ScopeArena) ScopeId {
+	arena.scopes ++= Scope(bindings: [], parent: none)
+	ScopeId(id: arena.scopes.len() - 1)
+}
+
+// Push a child scope of `parent` and return its ID.
+fn push_child(mut arena ScopeArena, parent ScopeId) ScopeId {
+	arena.scopes ++= Scope(bindings: [], parent:)
+	ScopeId(id: arena.scopes.len() - 1)
+}
+
+// Declare a new binding in scope `id` and return the assigned binding ID.
+fn define(mut arena ScopeArena, scope_id ScopeId, name ast::Ident, is_mut Bool) Int {
+	let binding_id = arena.next_binding_id
+	arena.next_binding_id += 1
+	add_binding(arena.scopes[scope_id.id], Binding(name:, binding_id:, is_mut:))
+	binding_id
+}
+
+// Helper: append a binding to a scope.  Receives the scope by pointer (via
+// list indexing) so the mutation is visible through the arena.
+fn add_binding(mut scope Scope, b Binding) {
+	scope.bindings ++= b
+}
+
+// Look up `name` starting from `scope_id` and walking up the parent chain.
+// Returns `none` if the name is not bound anywhere in the chain.
+fn lookup(arena ScopeArena, scope_id ScopeId, name String) Option(Binding) {
+	var current_id = scope_id.id
+	while true {
+		let scope = arena.scopes[current_id]
+		var index = scope.bindings.len() - 1
+		while index >= 0 {
+			let b = scope.bindings[index]
+			if b.name.name == name { return b }
+			index -= 1
+		}
+
+		// Walk up to the parent scope.
+		if scope.parent != none {
+			current_id = scope.parent.unwrap().id
+		} else {
+			break
+		}
+	}
+	none
+}

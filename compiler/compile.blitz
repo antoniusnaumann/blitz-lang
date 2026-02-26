@@ -8,16 +8,10 @@ fn compile_file(path String) ast::Ast {
 }
 
 fn compile(path String) {
-	todo("check if path or dir and then call the appropriate function")
-	let asts = todo("lower individual files")
-
-	// AST -> HIR
-	let hir = asts.lower()
-
+	// CODE -> AST (parse individual files)
+	// AST -> HIR (lower)
 	// HIR -> TIR
-	todo("HIR -> TIR")
-
 	// TIR -> MIR
-
 	// MIR -> LIR
+	todo("compile pipeline")
 }
