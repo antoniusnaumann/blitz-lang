@@ -151,7 +151,7 @@ fn resolve_type(hir hir::Hir, mod_id hir::ModId, ty ast::Type, mut types List(hi
             // Try current module first, then core
             let in_mod = hir.find_type(mod_id, ty.name)
             if in_mod != none { in_mod }
-            else { hir.find_type(hir::ModId(id: 0), ty.name) }
+			else { hir.find_type(hir::core_mod_id(), ty.name) }
         }
 
         hir::Nominal(def_id: def_id else { hir::TypeId(module: mod_id, id: 0) }, args:)
@@ -199,7 +199,7 @@ fn lower_into(def ast::Fn, mut hir hir::Hir, mod_id hir::ModId) {
     }
 
     // Lower the function body into HIR expression arena
-    let body = lower_body_with_params(def.body, def.args, hir, mod_id)
+    let body = lower_body(def.body, def.args, hir, mod_id)
 
     // Find the existing function stub and update it
     let id = hir.mods[mod_id.id].find_func(name.name).unwrap().id

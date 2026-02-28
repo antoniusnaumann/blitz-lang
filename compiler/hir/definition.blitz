@@ -9,10 +9,14 @@ fn new_hir() Hir {
         define_builtin("Int"),
         define_builtin("Float"),
     ]
-    let core_module = Module(id: ModId(id: 0), name: "core", funcs: [], types: [], func_export: [], type_export: [])
+    let core_module = Module(id: core_mod_id(), name: "core", funcs: [], types: [], func_export: [], type_export: [])
     // TODO: insert builtin types as part of the "core" module
 
     Hir(mods: [core_module], types: [])
+}
+
+fn core_mod_id() ModId {
+    ModId(id: 0)
 }
 
 fn void_type() TypeRef {

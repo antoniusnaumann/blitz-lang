@@ -27,8 +27,7 @@ fn new_ctx(hir hir::Hir, mod_id hir::ModId) ResolverCtx {
 	ResolverCtx(hir:, mod_id:, errors: [])
 }
 
-// TODO LLM: rename this into err, to be consistent with the parser
-fn emit(mut ctx ResolverCtx, msg String, span ast::Span) {
+fn err(mut ctx ResolverCtx, msg String, span ast::Span) {
 	ctx.errors ++= ast::Error(span:, msg:)
 }
 
@@ -55,10 +54,9 @@ fn find_candidates(ctx ResolverCtx, name String, module Option(ast::Ident)) List
 	// Current module
 	collect_func_candidates(ctx.hir, ctx.mod_id, name, mut candidates)
 
-	// Core module (id 0), unless current module is core
-	// TODO LLM: use the hir helper function that has the core ID instead of hardcoding this
-	if ctx.mod_id.id != 0 {
-		collect_func_candidates(ctx.hir, hir::ModId(id: 0), name, mut candidates)
+	// Core module, unless current module is core
+	if ctx.mod_id.id != hir::core_mod_id().id {
+		collect_func_candidates(ctx.hir, hir::core_mod_id(), name, mut candidates)
 	}
 
 	// All other modules (to handle UFCS where receiver's module is unknown
@@ -94,12 +92,12 @@ fn resolve_type_id(mut ctx ResolverCtx, ty ast::Type) Option(hir::TypeId) {
 		let mod_name = ty.module.unwrap().name
 		let target = ctx.hir.find(mod_name)
 		if target == none {
-			ctx.mut.emit("Unknown module '" ++ mod_name ++ "'", ty.span)
+			ctx.mut.err("Unknown module '" ++ mod_name ++ "'", ty.span)
 			return none
 		}
 		let found = ctx.hir.find_type(target.unwrap(), ty.name)
 		if found == none {
-			ctx.mut.emit("Unknown type '" ++ ty.name ++ "' in module '" ++ mod_name ++ "'", ty.span)
+			ctx.mut.err("Unknown type '" ++ ty.name ++ "' in module '" ++ mod_name ++ "'", ty.span)
 			return none
 		}
 		return found.unwrap()
@@ -109,9 +107,9 @@ fn resolve_type_id(mut ctx ResolverCtx, ty ast::Type) Option(hir::TypeId) {
 	let in_mod = ctx.hir.find_type(ctx.mod_id, ty.name)
 	if in_mod != none { return in_mod.unwrap() }
 
-	let in_core = ctx.hir.find_type(hir::ModId(id: 0), ty.name)
+	let in_core = ctx.hir.find_type(hir::core_mod_id(), ty.name)
 	if in_core == none {
-		ctx.mut.emit("Unknown type '" ++ ty.name ++ "'", ty.span)
+		ctx.mut.err("Unknown type '" ++ ty.name ++ "'", ty.span)
 	}
 	in_core
 }
@@ -119,7 +117,7 @@ fn resolve_type_id(mut ctx ResolverCtx, ty ast::Type) Option(hir::TypeId) {
 // ── Body lowering ─────────────────────────────────────────────────────────────
 
 // Lower an ast::Block into a hir::Body. Populates a fresh ScopeArena for
-// the function body.  For functions with parameters, use lower_body_with_params.
+// the function body.
 fn lower_body(block ast::Block, hir hir::Hir, mod_id hir::ModId) hir::Body {
 	var body = hir::Body(expressions: [])
 	var arena = hir::new_scope_arena()
@@ -132,8 +130,7 @@ fn lower_body(block ast::Block, hir hir::Hir, mod_id hir::ModId) hir::Body {
 }
 
 // Lower an ast::Block that also takes parameters as pre-declared bindings.
-// TODO LLM: rename to just lower_body and rely on overload resolution
-fn lower_body_with_params(block ast::Block, params List(ast::Arg), hir hir::Hir, mod_id hir::ModId) hir::Body {
+fn lower_body(block ast::Block, params List(ast::Arg), hir hir::Hir, mod_id hir::ModId) hir::Body {
 	var body = hir::Body(expressions: [])
 	var arena = hir::new_scope_arena()
 	let root_scope = arena.mut.push_root()
@@ -268,10 +265,10 @@ fn lower_call(call ast::Call, mut body hir::Body, mut arena hir::ScopeArena, sco
 }
 
 // ── Constructors ──────────────────────────────────────────────────────────────
-// TODO LLM: you abbreviated to aggressively here and in a few cases below, prefer readable names such as constructor or member. common abbreviations like ctx and op are okay
-fn lower_constructor(ctor ast::Constructor, mut body hir::Body, mut arena hir::ScopeArena, scope hir::ScopeId, mut ctx ResolverCtx) hir::ExpressionId {
+
+fn lower_constructor(constructor ast::Constructor, mut body hir::Body, mut arena hir::ScopeArena, scope hir::ScopeId, mut ctx ResolverCtx) hir::ExpressionId {
 	// Resolve the type name to a TypeId (best-effort; unknown types get id 0)
-	let type_id = ctx.mut.resolve_type_id(ctor.type)
+	let type_id = ctx.mut.resolve_type_id(constructor.type)
 	let resolved_id = if type_id != none {
 		type_id.unwrap()
 	} else {
@@ -279,22 +276,22 @@ fn lower_constructor(ctor ast::Constructor, mut body hir::Body, mut arena hir::S
 	}
 
 	var args = []
-	for ctor.args |arg| {
+	for constructor.args |arg| {
 		let value = lower_expr(arg.init, mut body, mut arena, scope, mut ctx)
 		args ++= hir::FieldInit(label: arg.label, value:)
 	}
 
 	body.mut.push(hir::Expression(
-		kind: hir::Constructor(type_id: resolved_id, type_name: ast::Ident(name: ctor.type.name, span: ctor.type.span), args:),
-		span: ctor.span
+		kind: hir::Constructor(type_id: resolved_id, type_name: ast::Ident(name: constructor.type.name, span: constructor.type.span), args:),
+		span: constructor.span
 	))
 }
 
 // ── Member access ─────────────────────────────────────────────────────────────
 
-fn lower_member(mem ast::Member, mut body hir::Body, mut arena hir::ScopeArena, scope hir::ScopeId, mut ctx ResolverCtx) hir::ExpressionId {
-	let expr_id = lower_expr(mem.parent, mut body, mut arena, scope, mut ctx)
-	body.mut.push(hir::Expression(kind: hir::Member(expr: expr_id, field: mem.member), span: mem.span))
+fn lower_member(member ast::Member, mut body hir::Body, mut arena hir::ScopeArena, scope hir::ScopeId, mut ctx ResolverCtx) hir::ExpressionId {
+	let expr_id = lower_expr(member.parent, mut body, mut arena, scope, mut ctx)
+	body.mut.push(hir::Expression(kind: hir::Member(expr: expr_id, field: member.member), span: member.span))
 }
 
 // ── Binary / unary operations ─────────────────────────────────────────────────
@@ -325,12 +322,9 @@ fn lower_assignment(assign ast::Assignment, mut body hir::Body, mut arena hir::S
 fn lower_if(if_ ast::If, mut body hir::Body, mut arena hir::ScopeArena, scope hir::ScopeId, mut ctx ResolverCtx) hir::ExpressionId {
 	let cond_id = lower_expr(if_.cond, mut body, mut arena, scope, mut ctx)
 	let then_id = lower_block(if_.body, mut body, mut arena, scope, mut ctx)
-	// TODO LLM: regarding the TODO below, it is quite okay to do this similar to the AST, i.e., binary operator style in the HIR, so the hir::If struct should have no else body but instead be a left-hand side of the else operator when part of an if-else
-	// TODO: lower if-else properly.  The parser represents `if c { a } else { b }` as
-	// BinaryOp(op: else_, left: If(...), right: Block(...)), so `else_body` is always
-	// none here.  Detect the else_ binary-op pattern in lower_binary_op and produce a
-	// proper hir::If with else_body populated.
-	body.mut.push(hir::Expression(kind: hir::If(cond: cond_id, then_body: then_id, else_body: none), span: if_.span))
+	// If-else is represented as BinaryOp(op: else_, left: If(...), right: Block(...)),
+	// mirroring the AST structure.  The If node only holds the condition and then-body.
+	body.mut.push(hir::Expression(kind: hir::If(cond: cond_id, then_body: then_id), span: if_.span))
 }
 
 fn lower_while(while_ ast::While, mut body hir::Body, mut arena hir::ScopeArena, scope hir::ScopeId, mut ctx ResolverCtx) hir::ExpressionId {
@@ -350,20 +344,20 @@ fn lower_for(for_ ast::For, mut body hir::Body, mut arena hir::ScopeArena, scope
 	body.mut.push(hir::Expression(kind: hir::For(iter: iter_id, binding: for_.elem, body: body_id), span: for_.span))
 }
 
-fn lower_switch(sw ast::Switch, mut body hir::Body, mut arena hir::ScopeArena, scope hir::ScopeId, mut ctx ResolverCtx) hir::ExpressionId {
-	let cond_id = lower_expr(sw.cond, mut body, mut arena, scope, mut ctx)
+fn lower_switch(switch_ ast::Switch, mut body hir::Body, mut arena hir::ScopeArena, scope hir::ScopeId, mut ctx ResolverCtx) hir::ExpressionId {
+	let cond_id = lower_expr(switch_.cond, mut body, mut arena, scope, mut ctx)
 
 	var hir_cases = []
-	for sw.cases |case| {
-		let label = lower_switch_label(case.label, mut ctx)
+	for switch_.cases |case| {
+		let label = lower_switch_label(case.label, mut body, mut ctx)
 		let case_body = lower_block(case.body, mut body, mut arena, scope, mut ctx)
 		hir_cases ++= hir::SwitchCase(label:, body: case_body, span: case.span)
 	}
 
-	body.mut.push(hir::Expression(kind: hir::Switch(cond: cond_id, cases: hir_cases), span: sw.span))
+	body.mut.push(hir::Expression(kind: hir::Switch(cond: cond_id, cases: hir_cases), span: switch_.span))
 }
 
-fn lower_switch_label(label ast::SwitchLabel, mut ctx ResolverCtx) hir::SwitchLabel {
+fn lower_switch_label(label ast::SwitchLabel, mut body hir::Body, mut ctx ResolverCtx) hir::SwitchLabel {
 	switch label {
 		ast::Type {
 			let type_id = ctx.mut.resolve_type_id(it)
@@ -378,13 +372,10 @@ fn lower_switch_label(label ast::SwitchLabel, mut ctx ResolverCtx) hir::SwitchLa
 			hir::IdentCase(name: it)
 		}
 		ast::Literal {
-			// TODO LLM: don't use a hack here, pass a body here so that this can be solved
-			// We can't push into the body here without a body reference, so we
-			// encode literal switch labels as IdentCase carrying the source text.
-			// The type checker will recognise them as literals.
-			todo("Literal switch label lowering requires body access — encode as IdentCase for now")
+			let expr_id = lower_literal(it, mut body)
+			hir::LiteralCase(value: expr_id)
 		}
-		default { defaultCase }
+		default { default }
 	}
 }
 
@@ -410,19 +401,19 @@ fn lower_return(ret ast::Return, mut body hir::Body, mut arena hir::ScopeArena, 
 
 // ── Special operators ─────────────────────────────────────────────────────────
 
-fn lower_assert(a ast::Assert, mut body hir::Body, mut arena hir::ScopeArena, scope hir::ScopeId, mut ctx ResolverCtx) hir::ExpressionId {
-	let cond_id = lower_expr(a.cond, mut body, mut arena, scope, mut ctx)
-	body.mut.push(hir::Expression(kind: hir::Assert(cond: cond_id), span: a.span))
+fn lower_assert(assertion ast::Assert, mut body hir::Body, mut arena hir::ScopeArena, scope hir::ScopeId, mut ctx ResolverCtx) hir::ExpressionId {
+	let cond_id = lower_expr(assertion.cond, mut body, mut arena, scope, mut ctx)
+	body.mut.push(hir::Expression(kind: hir::Assert(cond: cond_id), span: assertion.span))
 }
 
-fn lower_mut(m ast::Mut, mut body hir::Body, mut arena hir::ScopeArena, scope hir::ScopeId, mut ctx ResolverCtx) hir::ExpressionId {
-	let expr_id = lower_expr(m.expr, mut body, mut arena, scope, mut ctx)
-	body.mut.push(hir::Expression(kind: hir::Mut(expr: expr_id), span: m.span))
+fn lower_mut(mut_ ast::Mut, mut body hir::Body, mut arena hir::ScopeArena, scope hir::ScopeId, mut ctx ResolverCtx) hir::ExpressionId {
+	let expr_id = lower_expr(mut_.expr, mut body, mut arena, scope, mut ctx)
+	body.mut.push(hir::Expression(kind: hir::Mut(expr: expr_id), span: mut_.span))
 }
 
-fn lower_try(t ast::Try, mut body hir::Body, mut arena hir::ScopeArena, scope hir::ScopeId, mut ctx ResolverCtx) hir::ExpressionId {
-	let expr_id = lower_expr(t.expr, mut body, mut arena, scope, mut ctx)
-	body.mut.push(hir::Expression(kind: hir::Try(expr: expr_id), span: t.span))
+fn lower_try(try_ ast::Try, mut body hir::Body, mut arena hir::ScopeArena, scope hir::ScopeId, mut ctx ResolverCtx) hir::ExpressionId {
+	let expr_id = lower_expr(try_.expr, mut body, mut arena, scope, mut ctx)
+	body.mut.push(hir::Expression(kind: hir::Try(expr: expr_id), span: try_.span))
 }
 
 fn lower_list(list ast::List_, mut body hir::Body, mut arena hir::ScopeArena, scope hir::ScopeId, mut ctx ResolverCtx) hir::ExpressionId {
@@ -433,13 +424,13 @@ fn lower_list(list ast::List_, mut body hir::Body, mut arena hir::ScopeArena, sc
 	body.mut.push(hir::Expression(kind: hir::ListLit(elems: elem_ids), span: list.span))
 }
 
-fn lower_index(idx ast::Index, mut body hir::Body, mut arena hir::ScopeArena, scope hir::ScopeId, mut ctx ResolverCtx) hir::ExpressionId {
-	let target_id = lower_expr(idx.target, mut body, mut arena, scope, mut ctx)
-	let index_id  = lower_expr(idx.index, mut body, mut arena, scope, mut ctx)
-	body.mut.push(hir::Expression(kind: hir::Index(target: target_id, index: index_id), span: idx.span))
+fn lower_index(index ast::Index, mut body hir::Body, mut arena hir::ScopeArena, scope hir::ScopeId, mut ctx ResolverCtx) hir::ExpressionId {
+	let target_id = lower_expr(index.target, mut body, mut arena, scope, mut ctx)
+	let index_id  = lower_expr(index.index, mut body, mut arena, scope, mut ctx)
+	body.mut.push(hir::Expression(kind: hir::Index(target: target_id, index: index_id), span: index.span))
 }
 
-fn lower_group(g ast::Group, mut body hir::Body, mut arena hir::ScopeArena, scope hir::ScopeId, mut ctx ResolverCtx) hir::ExpressionId {
-	let expr_id = lower_expr(g.expr, mut body, mut arena, scope, mut ctx)
-	body.mut.push(hir::Expression(kind: hir::Group(expr: expr_id), span: g.span))
+fn lower_group(group ast::Group, mut body hir::Body, mut arena hir::ScopeArena, scope hir::ScopeId, mut ctx ResolverCtx) hir::ExpressionId {
+	let expr_id = lower_expr(group.expr, mut body, mut arena, scope, mut ctx)
+	body.mut.push(hir::Expression(kind: hir::Group(expr: expr_id), span: group.span))
 }

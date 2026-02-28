@@ -149,7 +149,6 @@ struct Index {
 struct If {
 	cond      ExpressionId
 	then_body ExpressionId
-	else_body Option(ExpressionId)
 }
 
 struct While {
@@ -178,8 +177,7 @@ union SwitchLabel {
 	TypeCase
 	IdentCase
 	LiteralCase
-	// TODO LLM: it should work to call this default, unfortunately the bootstrap compiler codegen chokes on it (maybe because the name exists elsewhere), please fix the underlying issue
-	defaultCase
+	default
 }
 
 struct TypeCase {

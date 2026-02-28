@@ -4498,25 +4498,50 @@ impl CCodegen {
                     "DEBUG generate_expression Ident: checking '{}' against tagged_union_labels: {:?}",
                     ident.name, self.tagged_union_labels
                 );
-                for (union_name, labels) in &self.tagged_union_labels {
-                    if labels.contains(&ident.name) {
-                        // Escape C reserved keywords in the tag name
-                        let tag_label = if ident.name == "default" {
-                            "default".to_string() // Will be used as SwitchLabel_tag_default
-                        } else {
-                            ident.name.clone()
-                        };
-                        debug_println!(self, 
-                            "DEBUG: Found label-only variant '{}' in union '{}', generating constructor",
-                            ident.name, union_name
-                        );
-                        // Generate: memcpy(malloc(sizeof(UnionName)), &((UnionName){.tag = UnionName_tag_label}), sizeof(UnionName))
-                        return format!(
-                            "memcpy(malloc(sizeof({union})), &(({union}){{.tag = {union}_tag_{label}}}), sizeof({union}))",
-                            union = union_name,
-                            label = tag_label
-                        );
-                    }
+                // Collect all tagged unions that contain this label-only variant
+                let matching_unions: Vec<&String> = self
+                    .tagged_union_labels
+                    .iter()
+                    .filter(|(_, labels)| labels.contains(&ident.name))
+                    .map(|(union_name, _)| union_name)
+                    .collect();
+
+                if !matching_unions.is_empty() {
+                    // Disambiguate when multiple unions share the same label-only variant
+                    let union_name = if matching_unions.len() == 1 {
+                        matching_unions[0].clone()
+                    } else {
+                        // Use current_return_type to prefer the matching union
+                        let mut chosen = matching_unions[0].clone();
+                        if let Some(ref ret_ty) = self.current_return_type {
+                            let ret_c_name =
+                                self.map_type(ret_ty).trim_end_matches('*').to_string();
+                            // Also handle Option_ wrapper: Option_ast_SwitchLabel -> ast_SwitchLabel
+                            let ret_inner = if ret_c_name.starts_with("Option_") {
+                                &ret_c_name[7..]
+                            } else {
+                                &ret_c_name
+                            };
+                            for u in &matching_unions {
+                                if **u == ret_c_name || **u == ret_inner {
+                                    chosen = (*u).clone();
+                                    break;
+                                }
+                            }
+                        }
+                        chosen
+                    };
+                    let tag_label = ident.name.clone();
+                    debug_println!(self, 
+                        "DEBUG: Found label-only variant '{}' in union '{}', generating constructor",
+                        ident.name, union_name
+                    );
+                    // Generate: memcpy(malloc(sizeof(UnionName)), &((UnionName){.tag = UnionName_tag_label}), sizeof(UnionName))
+                    return format!(
+                        "memcpy(malloc(sizeof({union})), &(({union}){{.tag = {union}_tag_{label}}}), sizeof({union}))",
+                        union = union_name,
+                        label = tag_label
+                    );
                 }
 
                 // Check if this is an enum variant that needs qualification
@@ -5542,13 +5567,39 @@ impl CCodegen {
                                 if qualified == ident.name {
                                     // Check if this is a label-only tagged union variant
                                     // e.g., `builtin` in TypeDefKind union
-                                    let mut found_tagged_union: Option<String> = None;
-                                    for (union_name, labels) in &self.tagged_union_labels {
-                                        if labels.contains(&ident.name) {
-                                            found_tagged_union = Some(union_name.clone());
-                                            break;
+                                    // Collect all matching unions for disambiguation
+                                    let matching_unions: Vec<String> = self
+                                        .tagged_union_labels
+                                        .iter()
+                                        .filter(|(_, labels)| labels.contains(&ident.name))
+                                        .map(|(union_name, _)| union_name.clone())
+                                        .collect();
+
+                                    let found_tagged_union = if matching_unions.len() == 1 {
+                                        Some(matching_unions[0].clone())
+                                    } else if matching_unions.len() > 1 {
+                                        // Disambiguate using the expected field type
+                                        let mut chosen = Some(matching_unions[0].clone());
+                                        if let Some(ref expected_ty) = expected_field_type {
+                                            let expected_base = expected_ty.trim_end_matches('*');
+                                            // Also handle Option_ wrapper
+                                            let expected_inner =
+                                                if expected_base.starts_with("Option_") {
+                                                    &expected_base[7..]
+                                                } else {
+                                                    expected_base
+                                                };
+                                            for u in &matching_unions {
+                                                if u == expected_base || u == expected_inner {
+                                                    chosen = Some(u.clone());
+                                                    break;
+                                                }
+                                            }
                                         }
-                                    }
+                                        chosen
+                                    } else {
+                                        None
+                                    };
                                     if let Some(union_name) = found_tagged_union {
                                         // Generate tagged union constructor for label-only variant
                                         // e.g., builtin -> memcpy(malloc(sizeof(TypeDefKind)), &((TypeDefKind){.tag = TypeDefKind_tag_builtin}), sizeof(TypeDefKind))
@@ -6922,6 +6973,7 @@ impl CCodegen {
             if expr_code.starts_with("panic(")
                 || expr_code.starts_with("todo(")
                 || expr_code.starts_with("err(")
+                || expr_code.starts_with("err_")
             {
                 // Wrap in statement expression: ({ panic("msg"); (T){0}; })
                 // Since panic/todo/err are noreturn or void, the dummy value is never reached
@@ -8519,27 +8571,48 @@ impl CCodegen {
                                     let (expr_code, mut expr_type) =
                                         if let parser::Expression::Ident(ident) = expr {
                                             // First check if this is a label-only tagged union variant
-                                            let mut found_label_variant: Option<(String, String)> =
-                                                None;
-                                            for (union_name, labels) in &self.tagged_union_labels {
-                                                if labels.contains(&ident.name) {
-                                                    debug_println!(self, 
-                                                    "DEBUG generate_c_switch_as_statement: found label-only variant '{}' in union '{}'",
-                                                    ident.name, union_name
-                                                );
-                                                    // Generate constructor for label-only variant
+                                            // Collect all matching unions for disambiguation
+                                            let matching_unions: Vec<(String, String)> = self.tagged_union_labels.iter()
+                                                .filter(|(_, labels)| labels.contains(&ident.name))
+                                                .map(|(union_name, _)| {
                                                     let constructor = format!(
-                                                    "memcpy(malloc(sizeof({union})), &(({union}){{.tag = {union}_tag_{label}}}), sizeof({union}))",
-                                                    union = union_name,
-                                                    label = ident.name
-                                                );
-                                                    // The type is a pointer to the union
+                                                        "memcpy(malloc(sizeof({union})), &(({union}){{.tag = {union}_tag_{label}}}), sizeof({union}))",
+                                                        union = union_name,
+                                                        label = ident.name
+                                                    );
                                                     let ptr_type = format!("{}*", union_name);
-                                                    found_label_variant =
-                                                        Some((constructor, ptr_type));
-                                                    break;
+                                                    (constructor, ptr_type)
+                                                })
+                                                .collect();
+
+                                            let found_label_variant = if matching_unions.len() == 1
+                                            {
+                                                Some(matching_unions.into_iter().next().unwrap())
+                                            } else if matching_unions.len() > 1 {
+                                                // Disambiguate using var_type as hint
+                                                let var_type_base = var_type.trim_end_matches('*');
+                                                // Also handle Option_ wrapper
+                                                let var_type_inner =
+                                                    if var_type_base.starts_with("Option_") {
+                                                        &var_type_base[7..]
+                                                    } else {
+                                                        var_type_base
+                                                    };
+                                                let mut chosen = matching_unions[0].clone();
+                                                for (constructor, ptr_type) in &matching_unions {
+                                                    let union_base = ptr_type.trim_end_matches('*');
+                                                    if union_base == var_type_base
+                                                        || union_base == var_type_inner
+                                                    {
+                                                        chosen =
+                                                            (constructor.clone(), ptr_type.clone());
+                                                        break;
+                                                    }
                                                 }
-                                            }
+                                                Some(chosen)
+                                            } else {
+                                                None
+                                            };
 
                                             if let Some((constructor, label_type)) =
                                                 found_label_variant
