@@ -104,6 +104,7 @@ union TypeKind {
 struct Nominal {
     def_id TypeId
     args   List(TypeRef)
+    // TODO: keep name here for diagnostics?
 }
 
 struct Module {

@@ -23,12 +23,6 @@ struct Scope {
 	parent   Option(ScopeId)
 }
 
-struct Binding {
-	name       ast::Ident
-	binding_id Int
-	is_mut     Bool
-}
-
 // Create an empty arena ready for a new function body.
 fn new_scope_arena() ScopeArena {
 	ScopeArena(scopes: [], next_binding_id: 0)
@@ -54,10 +48,21 @@ fn define(mut arena ScopeArena, scope_id ScopeId, name ast::Ident, is_mut Bool) 
 	binding_id
 }
 
-// Helper: append a binding to a scope.  Receives the scope by pointer (via
-// list indexing) so the mutation is visible through the arena.
 fn add_binding(mut scope Scope, b Binding) {
 	scope.bindings ++= b
+}
+
+// Collect all bindings from every scope in the arena into a flat list.
+// Each binding has a unique `binding_id` (assigned by `define`), so there
+// are no duplicates even though scopes can overlap in the parent chain.
+fn collect_bindings(arena ScopeArena) List(Binding) {
+	var bindings = []
+	for arena.scopes |scope| {
+		for scope.bindings |b| {
+			bindings ++= b
+		}
+	}
+	bindings
 }
 
 // Look up `name` starting from `scope_id` and walking up the parent chain.

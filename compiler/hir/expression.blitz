@@ -1,9 +1,32 @@
 struct Body {
+	bindings    List(Binding)
 	expressions List(Expression) // arena indexed by ExpressionId
+}
+
+struct Binding {
+	name       ast::Ident
+	binding_id Int
+	is_mut     Bool
 }
 
 struct ExpressionId {
 	id Int
+}
+
+// Intermediate arena used during expression lowering.  Holds only the
+// expression list; the final Body is constructed once lowering is done by
+// combining the arena with the bindings gathered from the ScopeArena.
+struct ExpressionArena {
+	expressions List(Expression)
+}
+
+fn new_expression_arena() ExpressionArena {
+	ExpressionArena(expressions: [])
+}
+
+fn push(mut arena ExpressionArena, expr Expression) ExpressionId {
+	arena.expressions ++= expr
+	ExpressionId(id: arena.expressions.len() - 1)
 }
 
 fn get(body Body, id ExpressionId) Expression {

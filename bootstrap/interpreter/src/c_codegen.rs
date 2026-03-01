@@ -5039,6 +5039,17 @@ impl CCodegen {
                                     return arg_code;
                                 }
 
+                                // Handle empty list `[]` argument: infer the List type from the parameter
+                                if let parser::Expression::List(list) = &*arg.init {
+                                    if list.elems.is_empty() && param_type.starts_with("List_") {
+                                        arg_code = format!(
+                                            "({}){{.data = NULL, .len = 0, .cap = 0}}",
+                                            param_type
+                                        );
+                                        return arg_code;
+                                    }
+                                }
+
                                 // Check if param is Ptr type and arg is Option
                                 // param_type is a Blitz type signature (e.g., "Ident", not "Ident*")
                                 // A struct type in Blitz becomes a pointer in C
