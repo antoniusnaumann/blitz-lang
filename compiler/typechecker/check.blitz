@@ -1,0 +1,12 @@
+struct TypeChecker {
+    errors List(ast::Error)
+}
+
+// for now, this reuses the Hir structure and just adds typing. In the future, the Hir might be generic and be either Hir(Untyped) or Hir(Typed)
+fn check(mut checker TypeChecker, hir hir::Hir) hir::Hir {
+    var typed_hir = hir // copy that will be enriched with types
+}
+
+fn unify(mut checker TypeChecker, expr hir::Expression, constraints List(Constraint)) {
+    
+}
