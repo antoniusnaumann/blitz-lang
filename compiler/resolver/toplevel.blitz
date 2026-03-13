@@ -26,13 +26,14 @@ fn lower(asts List(ast::Ast)) hir::Hir {
         index += 1
     }
 
+    var resolver = new_resolver()
     index = hir.mods.len() - stubs.len()
 
     for stubs |stub| {
         let mod_id = hir::ModId(id: index)
         for stub.asts |ast| {
             for ast.items |item| {
-                item.lower_into(mut hir, mod_id)
+                item.lower_into(mut hir, mod_id, mut resolver)
             }
         }
         
@@ -117,14 +118,14 @@ fn sig(def ast::Test, mut types List(hir::TypeKind)) hir::FuncDef {
     todo("HIR: test")
 }
 
-fn lower_into(item ast::Definition, mut hir hir::Hir, mod_id hir::ModId) {
+fn lower_into(item ast::Definition, mut hir hir::Hir, mod_id hir::ModId, mut resolver Resolver) {
     switch item {
         ast::Pub { todo("HIR: pub") }
         ast::Struct { it.lower_into(mut hir, mod_id) }
         ast::Union { it.lower_into(mut hir, mod_id) }
         ast::Alias { todo("HIR: alias") }
         ast::Actor { todo("HIR: actor") }
-        ast::Fn { it.lower_into(mut hir, mod_id) }
+        ast::Fn { it.lower_into(mut hir, mod_id, mut resolver) }
         ast::Test { todo("HIR: test") }
     }
 }
@@ -184,7 +185,7 @@ fn lower_into(def ast::Union, mut hir hir::Hir, mod_id hir::ModId) {
     hir.mods[mod_id.id].mut.set_type(id, hir::TypeDef(name:, generic: [], kind:, vis: module))
 }
 
-fn lower_into(def ast::Fn, mut hir hir::Hir, mod_id hir::ModId) {
+fn lower_into(def ast::Fn, mut hir hir::Hir, mod_id hir::ModId, mut resolver Resolver) {
     let name = def.name
     var params = []
     for def.args |arg| {
@@ -198,7 +199,7 @@ fn lower_into(def ast::Fn, mut hir hir::Hir, mod_id hir::ModId) {
         hir::void_type()
     }
 
-    let body = lower_body(def.body, def.args, hir, mod_id)
+    let body = lower_body(def.body, def.args, hir, mod_id, mut resolver)
 
     // Find the existing function stub and update it
     let id = hir.mods[mod_id.id].find_func(name.name).unwrap().id

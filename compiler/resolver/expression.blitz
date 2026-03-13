@@ -17,20 +17,18 @@
 // • `else` operator (binary): lowered as a BinaryOp so the type checker can
 //   later understand it as "unwrap or short-circuit".
 
-// ── Resolver context ────────────────────────────────────────────────────────
+// ── Resolver ─────────────────────────────────────────────────────────────────
 
-struct ResolverCtx {
-	hir    hir::Hir
-	mod_id hir::ModId
+struct Resolver {
 	errors List(ast::Error)
 }
 
-fn new_ctx(hir hir::Hir, mod_id hir::ModId) ResolverCtx {
-	ResolverCtx(hir:, mod_id:, errors: [])
+fn new_resolver() Resolver {
+	Resolver(errors: [])
 }
 
-fn err(mut ctx ResolverCtx, msg String, span ast::Span) {
-	ctx.errors ++= ast::Error(span:, msg:)
+fn err(mut resolver Resolver, msg String, span ast::Span) {
+	resolver.errors ++= ast::Error(span:, msg:)
 }
 
 // ── Candidate resolution ─────────────────────────────────────────────────────
@@ -40,34 +38,34 @@ fn err(mut ctx ResolverCtx, msg String, span ast::Span) {
 // → core module → all other modules (for UFCS whose receiver type determines
 // the module).
 // TODO: the 'all other modules' rule will be removed in the future and std will be imported implicitly
-fn find_candidates(ctx ResolverCtx, name String, module Option(ast::Ident)) List(hir::FuncId) {
+fn find_candidates(hir hir::Hir, mod_id hir::ModId, name String, module Option(ast::Ident)) List(hir::FuncId) {
 	var candidates = []
 
 	if module != none {
 		// Qualified call: module::func(...)
 		let mod_name = module.unwrap().name
-		let target = ctx.hir.find(mod_name)
+		let target = hir.find(mod_name)
 		if target != none {
-			collect_func_candidates(ctx.hir, target.unwrap(), name, mut candidates)
+			collect_func_candidates(hir, target.unwrap(), name, mut candidates)
 		}
 		return candidates
 	}
 
 	// Current module
-	collect_func_candidates(ctx.hir, ctx.mod_id, name, mut candidates)
+	collect_func_candidates(hir, mod_id, name, mut candidates)
 
 	// Core module, unless current module is core
-	if ctx.mod_id.id != hir::core_mod_id().id {
-		collect_func_candidates(ctx.hir, hir::core_mod_id(), name, mut candidates)
+	if mod_id.id != hir::core_mod_id().id {
+		collect_func_candidates(hir, hir::core_mod_id(), name, mut candidates)
 	}
 
 	// All other modules (to handle UFCS where receiver's module is unknown
 	// until the type checker resolves the receiver type)
 	// TODO: this will be more fine-grained in the future and only point to std
 	var i = 1
-	while i < ctx.hir.mods.len() {
-		if i != ctx.mod_id.id {
-			collect_func_candidates(ctx.hir, hir::ModId(id: i), name, mut candidates)
+	while i < hir.mods.len() {
+		if i != mod_id.id {
+			collect_func_candidates(hir, hir::ModId(id: i), name, mut candidates)
 		}
 		i += 1
 	}
@@ -89,29 +87,29 @@ fn collect_func_candidates(hir hir::Hir, mod_id hir::ModId, name String, mut out
 
 // Resolve a type name to a TypeId.  Returns `none` and emits a diagnostic if
 // the type cannot be found.
-fn resolve_type_id(mut ctx ResolverCtx, ty ast::Type) Option(hir::TypeId) {
+fn resolve_type_id(hir hir::Hir, mod_id hir::ModId, mut resolver Resolver, ty ast::Type) Option(hir::TypeId) {
 	if ty.module != none {
 		let mod_name = ty.module.unwrap().name
-		let target = ctx.hir.find(mod_name)
+		let target = hir.find(mod_name)
 		if target == none {
-			ctx.mut.err("Unknown module '" ++ mod_name ++ "'", ty.span)
+			resolver.mut.err("Unknown module '" ++ mod_name ++ "'", ty.span)
 			return none
 		}
-		let found = ctx.hir.find_type(target.unwrap(), ty.name)
+		let found = hir.find_type(target.unwrap(), ty.name)
 		if found == none {
-			ctx.mut.err("Unknown type '" ++ ty.name ++ "' in module '" ++ mod_name ++ "'", ty.span)
+			resolver.mut.err("Unknown type '" ++ ty.name ++ "' in module '" ++ mod_name ++ "'", ty.span)
 			return none
 		}
 		return found.unwrap()
 	}
 
 	// Try current module first, then core
-	let in_mod = ctx.hir.find_type(ctx.mod_id, ty.name)
+	let in_mod = hir.find_type(mod_id, ty.name)
 	if in_mod != none { return in_mod.unwrap() }
 
-	let in_core = ctx.hir.find_type(hir::core_mod_id(), ty.name)
+	let in_core = hir.find_type(hir::core_mod_id(), ty.name)
 	if in_core == none {
-		ctx.mut.err("Unknown type '" ++ ty.name ++ "'", ty.span)
+		resolver.mut.err("Unknown type '" ++ ty.name ++ "'", ty.span)
 	}
 	in_core
 }
@@ -120,22 +118,21 @@ fn resolve_type_id(mut ctx ResolverCtx, ty ast::Type) Option(hir::TypeId) {
 
 // Lower an ast::Block into a hir::Body. Populates a fresh ScopeArena for
 // the function body.
-fn lower_body(block ast::Block, hir hir::Hir, mod_id hir::ModId) hir::Body {
-	lower_body(block, [], hir, mod_id)
+fn lower_body(block ast::Block, hir hir::Hir, mod_id hir::ModId, mut resolver Resolver) hir::Body {
+	lower_body(block, [], hir, mod_id, mut resolver)
 }
 
 // Lower an ast::Block that also takes parameters as pre-declared bindings.
-fn lower_body(block ast::Block, params List(ast::Arg), hir hir::Hir, mod_id hir::ModId) hir::Body {
+fn lower_body(block ast::Block, params List(ast::Arg), hir hir::Hir, mod_id hir::ModId, mut resolver Resolver) hir::Body {
 	var expr_arena = hir::new_expression_arena()
 	var scope_arena = hir::new_scope_arena()
 	let root_scope = scope_arena.mut.push_root()
-	var ctx = new_ctx(hir, mod_id)
 
 	for params |param| {
 		scope_arena.mut.define(root_scope, param.name, param.is_mut)
 	}
 
-	lower_block(block, mut expr_arena, mut scope_arena, root_scope, mut ctx)
+	lower_block(block, mut expr_arena, mut scope_arena, root_scope, hir, mod_id, mut resolver)
 
 	let bindings = scope_arena.collect_bindings()
 	Body(expressions: expr_arena.expressions, bindings: scope_arena.collect_bindings())
@@ -145,12 +142,12 @@ fn lower_body(block ast::Block, params List(ast::Arg), hir hir::Hir, mod_id hir:
 
 // Lower the statements of `block` into the arena, in a fresh child scope.
 // Returns the ExpressionId of a Block node that lists the statement IDs.
-fn lower_block(block ast::Block, mut expr_arena hir::ExpressionArena, mut scope_arena hir::ScopeArena, parent_scope hir::ScopeId, mut ctx ResolverCtx) hir::ExpressionId {
+fn lower_block(block ast::Block, mut expr_arena hir::ExpressionArena, mut scope_arena hir::ScopeArena, parent_scope hir::ScopeId, hir hir::Hir, mod_id hir::ModId, mut resolver Resolver) hir::ExpressionId {
 	let scope = scope_arena.mut.push_child(parent_scope)
 	var stmt_ids = []
 
 	for block.statements |stmt| {
-		stmt_ids ++= lower_stmt(stmt, mut expr_arena, mut scope_arena, scope, mut ctx)
+		stmt_ids ++= lower_stmt(stmt, mut expr_arena, mut scope_arena, scope, hir, mod_id, mut resolver)
 	}
 
 	expr_arena.mut.push(hir::Expression(kind: hir::Block(stmts: stmt_ids), span: block.span))
@@ -158,30 +155,30 @@ fn lower_block(block ast::Block, mut expr_arena hir::ExpressionArena, mut scope_
 
 // ── Statement lowering ────────────────────────────────────────────────────────
 
-fn lower_stmt(stmt ast::Statement, mut expr_arena hir::ExpressionArena, mut scope_arena hir::ScopeArena, scope hir::ScopeId, mut ctx ResolverCtx) hir::ExpressionId {
+fn lower_stmt(stmt ast::Statement, mut expr_arena hir::ExpressionArena, mut scope_arena hir::ScopeArena, scope hir::ScopeId, hir hir::Hir, mod_id hir::ModId, mut resolver Resolver) hir::ExpressionId {
 	switch stmt {
-		ast::Declaration { lower_decl(it, mut expr_arena, mut scope_arena, scope, mut ctx) }
-		ast::Expression  { lower_expr(it, mut expr_arena, mut scope_arena, scope, mut ctx) }
+		ast::Declaration { lower_decl(it, mut expr_arena, mut scope_arena, scope, hir, mod_id, mut resolver) }
+		ast::Expression  { lower_expr(it, mut expr_arena, mut scope_arena, scope, hir, mod_id, mut resolver) }
 	}
 }
 
 // Resolve the optional explicit type annotation in a declaration.
 // Returns none if no annotation is present or if the type cannot be resolved.
-fn resolve_decl_type(decl ast::Declaration, mut ctx ResolverCtx) Option(hir::TypeRef) {
+fn resolve_decl_type(decl ast::Declaration, hir hir::Hir, mod_id hir::ModId, mut resolver Resolver) Option(hir::TypeRef) {
 	if decl.type == none {
 		return none
 	}
 	let ty = decl.type.unwrap()
-	let type_id = ctx.mut.resolve_type_id(ty)
+	let type_id = resolve_type_id(hir, mod_id, mut resolver, ty)
 	if type_id == none {
 		return none
 	}
 	hir::TypeRef(id: type_id.unwrap().id)
 }
 
-fn lower_decl(decl ast::Declaration, mut expr_arena hir::ExpressionArena, mut scope_arena hir::ScopeArena, scope hir::ScopeId, mut ctx ResolverCtx) hir::ExpressionId {
-	let init_id = lower_expr(decl.init, mut expr_arena, mut scope_arena, scope, mut ctx)
-	let type_ref_opt = resolve_decl_type(decl, mut ctx)
+fn lower_decl(decl ast::Declaration, mut expr_arena hir::ExpressionArena, mut scope_arena hir::ScopeArena, scope hir::ScopeId, hir hir::Hir, mod_id hir::ModId, mut resolver Resolver) hir::ExpressionId {
+	let init_id = lower_expr(decl.init, mut expr_arena, mut scope_arena, scope, hir, mod_id, mut resolver)
+	let type_ref_opt = resolve_decl_type(decl, hir, mod_id, mut resolver)
 	let binding_id = scope_arena.mut.define(scope, decl.name, decl.is_mut)
 
 	expr_arena.mut.push(hir::Expression(
@@ -192,30 +189,30 @@ fn lower_decl(decl ast::Declaration, mut expr_arena hir::ExpressionArena, mut sc
 
 // ── Expression lowering ───────────────────────────────────────────────────────
 
-fn lower_expr(expr ast::Expression, mut expr_arena hir::ExpressionArena, mut scope_arena hir::ScopeArena, scope hir::ScopeId, mut ctx ResolverCtx) hir::ExpressionId {
+fn lower_expr(expr ast::Expression, mut expr_arena hir::ExpressionArena, mut scope_arena hir::ScopeArena, scope hir::ScopeId, hir hir::Hir, mod_id hir::ModId, mut resolver Resolver) hir::ExpressionId {
 	switch expr {
 		ast::Literal    { lower_literal(it, mut expr_arena) }
-		ast::Ident      { lower_ident(it, mut expr_arena, scope_arena, scope, mut ctx) }
-		ast::Call       { lower_call(it, mut expr_arena, mut scope_arena, scope, mut ctx) }
-		ast::Constructor { lower_constructor(it, mut expr_arena, mut scope_arena, scope, mut ctx) }
-		ast::Member     { lower_member(it, mut expr_arena, mut scope_arena, scope, mut ctx) }
-		ast::BinaryOp   { lower_binary_op(it, mut expr_arena, mut scope_arena, scope, mut ctx) }
-		ast::UnaryOp    { lower_unary_op(it, mut expr_arena, mut scope_arena, scope, mut ctx) }
-		ast::Assignment { lower_assignment(it, mut expr_arena, mut scope_arena, scope, mut ctx) }
-		ast::If         { lower_if(it, mut expr_arena, mut scope_arena, scope, mut ctx) }
-		ast::While      { lower_while(it, mut expr_arena, mut scope_arena, scope, mut ctx) }
-		ast::For        { lower_for(it, mut expr_arena, mut scope_arena, scope, mut ctx) }
-		ast::Switch     { lower_switch(it, mut expr_arena, mut scope_arena, scope, mut ctx) }
-		ast::Block      { lower_block(it, mut expr_arena, mut scope_arena, scope, mut ctx) }
-		ast::Return     { lower_return(it, mut expr_arena, mut scope_arena, scope, mut ctx) }
+		ast::Ident      { lower_ident(it, mut expr_arena, scope_arena, scope, hir, mod_id) }
+		ast::Call       { lower_call(it, mut expr_arena, mut scope_arena, scope, hir, mod_id, mut resolver) }
+		ast::Constructor { lower_constructor(it, mut expr_arena, mut scope_arena, scope, hir, mod_id, mut resolver) }
+		ast::Member     { lower_member(it, mut expr_arena, mut scope_arena, scope, hir, mod_id, mut resolver) }
+		ast::BinaryOp   { lower_binary_op(it, mut expr_arena, mut scope_arena, scope, hir, mod_id, mut resolver) }
+		ast::UnaryOp    { lower_unary_op(it, mut expr_arena, mut scope_arena, scope, hir, mod_id, mut resolver) }
+		ast::Assignment { lower_assignment(it, mut expr_arena, mut scope_arena, scope, hir, mod_id, mut resolver) }
+		ast::If         { lower_if(it, mut expr_arena, mut scope_arena, scope, hir, mod_id, mut resolver) }
+		ast::While      { lower_while(it, mut expr_arena, mut scope_arena, scope, hir, mod_id, mut resolver) }
+		ast::For        { lower_for(it, mut expr_arena, mut scope_arena, scope, hir, mod_id, mut resolver) }
+		ast::Switch     { lower_switch(it, mut expr_arena, mut scope_arena, scope, hir, mod_id, mut resolver) }
+		ast::Block      { lower_block(it, mut expr_arena, mut scope_arena, scope, hir, mod_id, mut resolver) }
+		ast::Return     { lower_return(it, mut expr_arena, mut scope_arena, scope, hir, mod_id, mut resolver) }
 		ast::Break      { expr_arena.mut.push(hir::Expression(kind: hir::Break(), span: it.span)) }
 		ast::Continue   { expr_arena.mut.push(hir::Expression(kind: hir::Continue(), span: it.span)) }
-		ast::Assert     { lower_assert(it, mut expr_arena, mut scope_arena, scope, mut ctx) }
-		ast::Mut        { lower_mut(it, mut expr_arena, mut scope_arena, scope, mut ctx) }
-		ast::Try        { lower_try(it, mut expr_arena, mut scope_arena, scope, mut ctx) }
-		ast::List_      { lower_list(it, mut expr_arena, mut scope_arena, scope, mut ctx) }
-		ast::Index      { lower_index(it, mut expr_arena, mut scope_arena, scope, mut ctx) }
-		ast::Group      { lower_group(it, mut expr_arena, mut scope_arena, scope, mut ctx) }
+		ast::Assert     { lower_assert(it, mut expr_arena, mut scope_arena, scope, hir, mod_id, mut resolver) }
+		ast::Mut        { lower_mut(it, mut expr_arena, mut scope_arena, scope, hir, mod_id, mut resolver) }
+		ast::Try        { lower_try(it, mut expr_arena, mut scope_arena, scope, hir, mod_id, mut resolver) }
+		ast::List_      { lower_list(it, mut expr_arena, mut scope_arena, scope, hir, mod_id, mut resolver) }
+		ast::Index      { lower_index(it, mut expr_arena, mut scope_arena, scope, hir, mod_id, mut resolver) }
+		ast::Group      { lower_group(it, mut expr_arena, mut scope_arena, scope, hir, mod_id, mut resolver) }
 	}
 }
 
@@ -236,7 +233,7 @@ fn lower_literal(lit ast::Literal, mut expr_arena hir::ExpressionArena) hir::Exp
 // In the HIR we emit `LocalRef` for known bindings and a zero-argument `Call`
 // with candidates for everything else (the type checker will resolve it).
 
-fn lower_ident(ident ast::Ident, mut expr_arena hir::ExpressionArena, scope_arena hir::ScopeArena, scope hir::ScopeId, mut ctx ResolverCtx) hir::ExpressionId {
+fn lower_ident(ident ast::Ident, mut expr_arena hir::ExpressionArena, scope_arena hir::ScopeArena, scope hir::ScopeId, hir hir::Hir, mod_id hir::ModId) hir::ExpressionId {
 	let binding = scope_arena.lookup(scope, ident.name)
 	if binding != none {
 		return expr_arena.mut.push(hir::Expression(kind: hir::LocalRef(name: ident, binding_id: binding.unwrap().binding_id), span: ident.span))
@@ -244,17 +241,17 @@ fn lower_ident(ident ast::Ident, mut expr_arena hir::ExpressionArena, scope_aren
 
 	// Not a local — treat as a zero-argument call so candidate resolution
 	// can find the right enum case or nullary function.
-	let candidates = ctx.find_candidates(ident.name, none)
+	let candidates = find_candidates(hir, mod_id, ident.name, none)
 	expr_arena.mut.push(hir::Expression(kind: hir::Call(name: ident, module: none, candidates:, args: []), span: ident.span))
 }
 
 // ── Calls ─────────────────────────────────────────────────────────────────────
 
-fn lower_call(call ast::Call, mut expr_arena hir::ExpressionArena, mut scope_arena hir::ScopeArena, scope hir::ScopeId, mut ctx ResolverCtx) hir::ExpressionId {
-	let candidates = ctx.find_candidates(call.name.name, call.module)
+fn lower_call(call ast::Call, mut expr_arena hir::ExpressionArena, mut scope_arena hir::ScopeArena, scope hir::ScopeId, hir hir::Hir, mod_id hir::ModId, mut resolver Resolver) hir::ExpressionId {
+	let candidates = find_candidates(hir, mod_id, call.name.name, call.module)
 	var args = []
 	for call.args |arg| {
-		let value = lower_expr(arg.init, mut expr_arena, mut scope_arena, scope, mut ctx)
+		let value = lower_expr(arg.init, mut expr_arena, mut scope_arena, scope, hir, mod_id, mut resolver)
 		args ++= hir::Argument(label: arg.label, value:)
 	}
 	expr_arena.mut.push(hir::Expression(kind: hir::Call(name: call.name, module: call.module, candidates:, args:), span: call.span))
@@ -262,18 +259,18 @@ fn lower_call(call ast::Call, mut expr_arena hir::ExpressionArena, mut scope_are
 
 // ── Constructors ──────────────────────────────────────────────────────────────
 
-fn lower_constructor(constructor ast::Constructor, mut expr_arena hir::ExpressionArena, mut scope_arena hir::ScopeArena, scope hir::ScopeId, mut ctx ResolverCtx) hir::ExpressionId {
+fn lower_constructor(constructor ast::Constructor, mut expr_arena hir::ExpressionArena, mut scope_arena hir::ScopeArena, scope hir::ScopeId, hir hir::Hir, mod_id hir::ModId, mut resolver Resolver) hir::ExpressionId {
 	// Resolve the type name to a TypeId (best-effort; unknown types get id 0)
-	let type_id = ctx.mut.resolve_type_id(constructor.type)
+	let type_id = resolve_type_id(hir, mod_id, mut resolver, constructor.type)
 	let resolved_id = if type_id != none {
 		type_id.unwrap()
 	} else {
-		hir::TypeId(module: ctx.mod_id, id: 0)
+		hir::TypeId(module: mod_id, id: 0)
 	}
 
 	var args = []
 	for constructor.args |arg| {
-		let value = lower_expr(arg.init, mut expr_arena, mut scope_arena, scope, mut ctx)
+		let value = lower_expr(arg.init, mut expr_arena, mut scope_arena, scope, hir, mod_id, mut resolver)
 		args ++= hir::FieldInit(label: arg.label, value:)
 	}
 
@@ -285,29 +282,29 @@ fn lower_constructor(constructor ast::Constructor, mut expr_arena hir::Expressio
 
 // ── Member access ─────────────────────────────────────────────────────────────
 
-fn lower_member(member ast::Member, mut expr_arena hir::ExpressionArena, mut scope_arena hir::ScopeArena, scope hir::ScopeId, mut ctx ResolverCtx) hir::ExpressionId {
-	let expr_id = lower_expr(member.parent, mut expr_arena, mut scope_arena, scope, mut ctx)
+fn lower_member(member ast::Member, mut expr_arena hir::ExpressionArena, mut scope_arena hir::ScopeArena, scope hir::ScopeId, hir hir::Hir, mod_id hir::ModId, mut resolver Resolver) hir::ExpressionId {
+	let expr_id = lower_expr(member.parent, mut expr_arena, mut scope_arena, scope, hir, mod_id, mut resolver)
 	expr_arena.mut.push(hir::Expression(kind: hir::Member(expr: expr_id, field: member.member), span: member.span))
 }
 
 // ── Binary / unary operations ─────────────────────────────────────────────────
 
-fn lower_binary_op(op ast::BinaryOp, mut expr_arena hir::ExpressionArena, mut scope_arena hir::ScopeArena, scope hir::ScopeId, mut ctx ResolverCtx) hir::ExpressionId {
-	let left_id  = lower_expr(op.left, mut expr_arena, mut scope_arena, scope, mut ctx)
-	let right_id = lower_expr(op.right, mut expr_arena, mut scope_arena, scope, mut ctx)
+fn lower_binary_op(op ast::BinaryOp, mut expr_arena hir::ExpressionArena, mut scope_arena hir::ScopeArena, scope hir::ScopeId, hir hir::Hir, mod_id hir::ModId, mut resolver Resolver) hir::ExpressionId {
+	let left_id  = lower_expr(op.left, mut expr_arena, mut scope_arena, scope, hir, mod_id, mut resolver)
+	let right_id = lower_expr(op.right, mut expr_arena, mut scope_arena, scope, hir, mod_id, mut resolver)
 	expr_arena.mut.push(hir::Expression(kind: hir::BinaryOp(op: op.op, left: left_id, right: right_id), span: op.span))
 }
 
-fn lower_unary_op(op ast::UnaryOp, mut expr_arena hir::ExpressionArena, mut scope_arena hir::ScopeArena, scope hir::ScopeId, mut ctx ResolverCtx) hir::ExpressionId {
-	let expr_id = lower_expr(op.expr, mut expr_arena, mut scope_arena, scope, mut ctx)
+fn lower_unary_op(op ast::UnaryOp, mut expr_arena hir::ExpressionArena, mut scope_arena hir::ScopeArena, scope hir::ScopeId, hir hir::Hir, mod_id hir::ModId, mut resolver Resolver) hir::ExpressionId {
+	let expr_id = lower_expr(op.expr, mut expr_arena, mut scope_arena, scope, hir, mod_id, mut resolver)
 	expr_arena.mut.push(hir::Expression(kind: hir::UnaryOp(op: op.op, expr: expr_id), span: op.span))
 }
 
 // ── Assignment ────────────────────────────────────────────────────────────────
 
-fn lower_assignment(assign ast::Assignment, mut expr_arena hir::ExpressionArena, mut scope_arena hir::ScopeArena, scope hir::ScopeId, mut ctx ResolverCtx) hir::ExpressionId {
-	let target_id = lower_expr(assign.left, mut expr_arena, mut scope_arena, scope, mut ctx)
-	let value_id  = lower_expr(assign.right, mut expr_arena, mut scope_arena, scope, mut ctx)
+fn lower_assignment(assign ast::Assignment, mut expr_arena hir::ExpressionArena, mut scope_arena hir::ScopeArena, scope hir::ScopeId, hir hir::Hir, mod_id hir::ModId, mut resolver Resolver) hir::ExpressionId {
+	let target_id = lower_expr(assign.left, mut expr_arena, mut scope_arena, scope, hir, mod_id, mut resolver)
+	let value_id  = lower_expr(assign.right, mut expr_arena, mut scope_arena, scope, hir, mod_id, mut resolver)
 	// TODO: ast::Assignment has no span field (unlike other expression structs).
 	// Add `span Span` to Assignment and populate it in the parser.
 	expr_arena.mut.push(hir::Expression(kind: hir::Assign(target: target_id, value: value_id), span: ast::empty_span()))
@@ -315,52 +312,52 @@ fn lower_assignment(assign ast::Assignment, mut expr_arena hir::ExpressionArena,
 
 // ── Control flow ──────────────────────────────────────────────────────────────
 
-fn lower_if(if_ ast::If, mut expr_arena hir::ExpressionArena, mut scope_arena hir::ScopeArena, scope hir::ScopeId, mut ctx ResolverCtx) hir::ExpressionId {
-	let cond_id = lower_expr(if_.cond, mut expr_arena, mut scope_arena, scope, mut ctx)
-	let then_id = lower_block(if_.body, mut expr_arena, mut scope_arena, scope, mut ctx)
+fn lower_if(if_ ast::If, mut expr_arena hir::ExpressionArena, mut scope_arena hir::ScopeArena, scope hir::ScopeId, hir hir::Hir, mod_id hir::ModId, mut resolver Resolver) hir::ExpressionId {
+	let cond_id = lower_expr(if_.cond, mut expr_arena, mut scope_arena, scope, hir, mod_id, mut resolver)
+	let then_id = lower_block(if_.body, mut expr_arena, mut scope_arena, scope, hir, mod_id, mut resolver)
 	// If-else is represented as BinaryOp(op: else_, left: If(...), right: Block(...)),
 	// mirroring the AST structure.  The If node only holds the condition and then-body.
 	expr_arena.mut.push(hir::Expression(kind: hir::If(cond: cond_id, then_body: then_id), span: if_.span))
 }
 
-fn lower_while(while_ ast::While, mut expr_arena hir::ExpressionArena, mut scope_arena hir::ScopeArena, scope hir::ScopeId, mut ctx ResolverCtx) hir::ExpressionId {
-	let cond_id = lower_expr(while_.cond, mut expr_arena, mut scope_arena, scope, mut ctx)
-	let body_id = lower_block(while_.body, mut expr_arena, mut scope_arena, scope, mut ctx)
+fn lower_while(while_ ast::While, mut expr_arena hir::ExpressionArena, mut scope_arena hir::ScopeArena, scope hir::ScopeId, hir hir::Hir, mod_id hir::ModId, mut resolver Resolver) hir::ExpressionId {
+	let cond_id = lower_expr(while_.cond, mut expr_arena, mut scope_arena, scope, hir, mod_id, mut resolver)
+	let body_id = lower_block(while_.body, mut expr_arena, mut scope_arena, scope, hir, mod_id, mut resolver)
 	expr_arena.mut.push(hir::Expression(kind: hir::While(cond: cond_id, body: body_id), span: while_.span))
 }
 
-fn lower_for(for_ ast::For, mut expr_arena hir::ExpressionArena, mut scope_arena hir::ScopeArena, scope hir::ScopeId, mut ctx ResolverCtx) hir::ExpressionId {
-	let iter_id = lower_expr(for_.iter, mut expr_arena, mut scope_arena, scope, mut ctx)
+fn lower_for(for_ ast::For, mut expr_arena hir::ExpressionArena, mut scope_arena hir::ScopeArena, scope hir::ScopeId, hir hir::Hir, mod_id hir::ModId, mut resolver Resolver) hir::ExpressionId {
+	let iter_id = lower_expr(for_.iter, mut expr_arena, mut scope_arena, scope, hir, mod_id, mut resolver)
 
 	// The loop binding is visible inside the body only.
 	let inner_scope = scope_arena.mut.push_child(scope)
 	scope_arena.mut.define(inner_scope, for_.elem, false)
 
-	let body_id = lower_block(for_.body, mut expr_arena, mut scope_arena, inner_scope, mut ctx)
+	let body_id = lower_block(for_.body, mut expr_arena, mut scope_arena, inner_scope, hir, mod_id, mut resolver)
 	expr_arena.mut.push(hir::Expression(kind: hir::For(iter: iter_id, binding: for_.elem, body: body_id), span: for_.span))
 }
 
-fn lower_switch(switch_ ast::Switch, mut expr_arena hir::ExpressionArena, mut scope_arena hir::ScopeArena, scope hir::ScopeId, mut ctx ResolverCtx) hir::ExpressionId {
-	let cond_id = lower_expr(switch_.cond, mut expr_arena, mut scope_arena, scope, mut ctx)
+fn lower_switch(switch_ ast::Switch, mut expr_arena hir::ExpressionArena, mut scope_arena hir::ScopeArena, scope hir::ScopeId, hir hir::Hir, mod_id hir::ModId, mut resolver Resolver) hir::ExpressionId {
+	let cond_id = lower_expr(switch_.cond, mut expr_arena, mut scope_arena, scope, hir, mod_id, mut resolver)
 
 	var hir_cases = []
 	for switch_.cases |case| {
-		let label = lower_switch_label(case.label, mut expr_arena, mut ctx)
-		let case_body = lower_block(case.body, mut expr_arena, mut scope_arena, scope, mut ctx)
+		let label = lower_switch_label(case.label, mut expr_arena, hir, mod_id, mut resolver)
+		let case_body = lower_block(case.body, mut expr_arena, mut scope_arena, scope, hir, mod_id, mut resolver)
 		hir_cases ++= hir::SwitchCase(label:, body: case_body, span: case.span)
 	}
 
 	expr_arena.mut.push(hir::Expression(kind: hir::Switch(cond: cond_id, cases: hir_cases), span: switch_.span))
 }
 
-fn lower_switch_label(label ast::SwitchLabel, mut expr_arena hir::ExpressionArena, mut ctx ResolverCtx) hir::SwitchLabel {
+fn lower_switch_label(label ast::SwitchLabel, mut expr_arena hir::ExpressionArena, hir hir::Hir, mod_id hir::ModId, mut resolver Resolver) hir::SwitchLabel {
 	switch label {
 		ast::Type {
-			let type_id = ctx.mut.resolve_type_id(it)
+			let type_id = resolve_type_id(hir, mod_id, mut resolver, it)
 			let resolved = if type_id != none {
 				type_id.unwrap()
 			} else {
-				hir::TypeId(module: ctx.mod_id, id: 0)
+				hir::TypeId(module: mod_id, id: 0)
 			}
 			hir::TypeCase(type_id: resolved, type_name: ast::Ident(name: it.name, span: it.span))
 		}
@@ -377,7 +374,7 @@ fn lower_switch_label(label ast::SwitchLabel, mut expr_arena hir::ExpressionAren
 
 // ── Return ────────────────────────────────────────────────────────────────────
 
-fn lower_return(ret ast::Return, mut expr_arena hir::ExpressionArena, mut scope_arena hir::ScopeArena, scope hir::ScopeId, mut ctx ResolverCtx) hir::ExpressionId {
+fn lower_return(ret ast::Return, mut expr_arena hir::ExpressionArena, mut scope_arena hir::ScopeArena, scope hir::ScopeId, hir hir::Hir, mod_id hir::ModId, mut resolver Resolver) hir::ExpressionId {
 	switch ret.expr {
 		ast::Block {
 			// The parser encodes "empty return" as `Return(expr: Block(statements: [], ...))`.
@@ -385,11 +382,11 @@ fn lower_return(ret ast::Return, mut expr_arena hir::ExpressionArena, mut scope_
 			if it.statements.len() == 0 {
 				return expr_arena.mut.push(hir::Expression(kind: hir::Return(expr: none), span: ret.span))
 			}
-			let expr_id = lower_block(it, mut expr_arena, mut scope_arena, scope, mut ctx)
+			let expr_id = lower_block(it, mut expr_arena, mut scope_arena, scope, hir, mod_id, mut resolver)
 			expr_arena.mut.push(hir::Expression(kind: hir::Return(expr: expr_id), span: ret.span))
 		}
 		else {
-			let expr_id = lower_expr(ret.expr, mut expr_arena, mut scope_arena, scope, mut ctx)
+			let expr_id = lower_expr(ret.expr, mut expr_arena, mut scope_arena, scope, hir, mod_id, mut resolver)
 			expr_arena.mut.push(hir::Expression(kind: hir::Return(expr: expr_id), span: ret.span))
 		}
 	}
@@ -397,36 +394,36 @@ fn lower_return(ret ast::Return, mut expr_arena hir::ExpressionArena, mut scope_
 
 // ── Special operators ─────────────────────────────────────────────────────────
 
-fn lower_assert(assertion ast::Assert, mut expr_arena hir::ExpressionArena, mut scope_arena hir::ScopeArena, scope hir::ScopeId, mut ctx ResolverCtx) hir::ExpressionId {
-	let cond_id = lower_expr(assertion.cond, mut expr_arena, mut scope_arena, scope, mut ctx)
+fn lower_assert(assertion ast::Assert, mut expr_arena hir::ExpressionArena, mut scope_arena hir::ScopeArena, scope hir::ScopeId, hir hir::Hir, mod_id hir::ModId, mut resolver Resolver) hir::ExpressionId {
+	let cond_id = lower_expr(assertion.cond, mut expr_arena, mut scope_arena, scope, hir, mod_id, mut resolver)
 	expr_arena.mut.push(hir::Expression(kind: hir::Assert(cond: cond_id), span: assertion.span))
 }
 
-fn lower_mut(mut_ ast::Mut, mut expr_arena hir::ExpressionArena, mut scope_arena hir::ScopeArena, scope hir::ScopeId, mut ctx ResolverCtx) hir::ExpressionId {
-	let expr_id = lower_expr(mut_.expr, mut expr_arena, mut scope_arena, scope, mut ctx)
+fn lower_mut(mut_ ast::Mut, mut expr_arena hir::ExpressionArena, mut scope_arena hir::ScopeArena, scope hir::ScopeId, hir hir::Hir, mod_id hir::ModId, mut resolver Resolver) hir::ExpressionId {
+	let expr_id = lower_expr(mut_.expr, mut expr_arena, mut scope_arena, scope, hir, mod_id, mut resolver)
 	expr_arena.mut.push(hir::Expression(kind: hir::Mut(expr: expr_id), span: mut_.span))
 }
 
-fn lower_try(try_ ast::Try, mut expr_arena hir::ExpressionArena, mut scope_arena hir::ScopeArena, scope hir::ScopeId, mut ctx ResolverCtx) hir::ExpressionId {
-	let expr_id = lower_expr(try_.expr, mut expr_arena, mut scope_arena, scope, mut ctx)
+fn lower_try(try_ ast::Try, mut expr_arena hir::ExpressionArena, mut scope_arena hir::ScopeArena, scope hir::ScopeId, hir hir::Hir, mod_id hir::ModId, mut resolver Resolver) hir::ExpressionId {
+	let expr_id = lower_expr(try_.expr, mut expr_arena, mut scope_arena, scope, hir, mod_id, mut resolver)
 	expr_arena.mut.push(hir::Expression(kind: hir::Try(expr: expr_id), span: try_.span))
 }
 
-fn lower_list(list ast::List_, mut expr_arena hir::ExpressionArena, mut scope_arena hir::ScopeArena, scope hir::ScopeId, mut ctx ResolverCtx) hir::ExpressionId {
+fn lower_list(list ast::List_, mut expr_arena hir::ExpressionArena, mut scope_arena hir::ScopeArena, scope hir::ScopeId, hir hir::Hir, mod_id hir::ModId, mut resolver Resolver) hir::ExpressionId {
 	var elem_ids = []
 	for list.elems |elem| {
-		elem_ids ++= lower_expr(elem, mut expr_arena, mut scope_arena, scope, mut ctx)
+		elem_ids ++= lower_expr(elem, mut expr_arena, mut scope_arena, scope, hir, mod_id, mut resolver)
 	}
 	expr_arena.mut.push(hir::Expression(kind: hir::ListLit(elems: elem_ids), span: list.span))
 }
 
-fn lower_index(index ast::Index, mut expr_arena hir::ExpressionArena, mut scope_arena hir::ScopeArena, scope hir::ScopeId, mut ctx ResolverCtx) hir::ExpressionId {
-	let target_id = lower_expr(index.target, mut expr_arena, mut scope_arena, scope, mut ctx)
-	let index_id  = lower_expr(index.index, mut expr_arena, mut scope_arena, scope, mut ctx)
+fn lower_index(index ast::Index, mut expr_arena hir::ExpressionArena, mut scope_arena hir::ScopeArena, scope hir::ScopeId, hir hir::Hir, mod_id hir::ModId, mut resolver Resolver) hir::ExpressionId {
+	let target_id = lower_expr(index.target, mut expr_arena, mut scope_arena, scope, hir, mod_id, mut resolver)
+	let index_id  = lower_expr(index.index, mut expr_arena, mut scope_arena, scope, hir, mod_id, mut resolver)
 	expr_arena.mut.push(hir::Expression(kind: hir::Index(target: target_id, index: index_id), span: index.span))
 }
 
-fn lower_group(group ast::Group, mut expr_arena hir::ExpressionArena, mut scope_arena hir::ScopeArena, scope hir::ScopeId, mut ctx ResolverCtx) hir::ExpressionId {
-	let expr_id = lower_expr(group.expr, mut expr_arena, mut scope_arena, scope, mut ctx)
+fn lower_group(group ast::Group, mut expr_arena hir::ExpressionArena, mut scope_arena hir::ScopeArena, scope hir::ScopeId, hir hir::Hir, mod_id hir::ModId, mut resolver Resolver) hir::ExpressionId {
+	let expr_id = lower_expr(group.expr, mut expr_arena, mut scope_arena, scope, hir, mod_id, mut resolver)
 	expr_arena.mut.push(hir::Expression(kind: hir::Group(expr: expr_id), span: group.span))
 }
