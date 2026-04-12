@@ -41,10 +41,10 @@ fn push_child(mut arena ScopeArena, parent ScopeId) ScopeId {
 }
 
 // Declare a new binding in scope `id` and return the assigned binding ID.
-fn define(mut arena ScopeArena, scope_id ScopeId, name ast::Ident, is_mut Bool) Int {
+fn define(mut arena ScopeArena, scope_id ScopeId, name ast::Ident, is_mut Bool, type Option(TypeRef)) Int {
 	let binding_id = arena.next_binding_id
 	arena.next_binding_id += 1
-	add_binding(arena.scopes[scope_id.id], Binding(name:, binding_id:, is_mut:))
+	add_binding(arena.scopes[scope_id.id], Binding(name:, type:, binding_id:, is_mut:))
 	binding_id
 }
 

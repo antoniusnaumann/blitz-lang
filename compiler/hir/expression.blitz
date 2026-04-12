@@ -5,6 +5,7 @@ struct Body {
 
 struct Binding {
 	name       ast::Ident
+	type       Option(TypeRef)
 	binding_id Int
 	is_mut     Bool
 }

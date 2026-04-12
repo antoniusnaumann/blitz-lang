@@ -122,6 +122,15 @@ fn lower_body(block ast::Block, hir hir::Hir, mod_id hir::ModId, mut resolver Re
 	lower_body(block, [], hir, mod_id, mut resolver)
 }
 
+// Resolve the type annotation of a function parameter to an Option(TypeRef).
+fn resolve_param_type(param ast::Arg, hir hir::Hir, mod_id hir::ModId, mut resolver Resolver) Option(hir::TypeRef) {
+	let type_id = resolve_type_id(hir, mod_id, mut resolver, param.type)
+	if type_id == none {
+		return none
+	}
+	hir::TypeRef(id: type_id.unwrap().id)
+}
+
 // Lower an ast::Block that also takes parameters as pre-declared bindings.
 fn lower_body(block ast::Block, params List(ast::Arg), hir hir::Hir, mod_id hir::ModId, mut resolver Resolver) hir::Body {
 	var expr_arena = hir::new_expression_arena()
@@ -129,7 +138,8 @@ fn lower_body(block ast::Block, params List(ast::Arg), hir hir::Hir, mod_id hir:
 	let root_scope = scope_arena.mut.push_root()
 
 	for params |param| {
-		scope_arena.mut.define(root_scope, param.name, param.is_mut)
+		let type_ref = resolve_param_type(param, hir, mod_id, mut resolver)
+		scope_arena.mut.define(root_scope, param.name, param.is_mut, type_ref)
 	}
 
 	lower_block(block, mut expr_arena, mut scope_arena, root_scope, hir, mod_id, mut resolver)
@@ -179,7 +189,7 @@ fn resolve_decl_type(decl ast::Declaration, hir hir::Hir, mod_id hir::ModId, mut
 fn lower_decl(decl ast::Declaration, mut expr_arena hir::ExpressionArena, mut scope_arena hir::ScopeArena, scope hir::ScopeId, hir hir::Hir, mod_id hir::ModId, mut resolver Resolver) hir::ExpressionId {
 	let init_id = lower_expr(decl.init, mut expr_arena, mut scope_arena, scope, hir, mod_id, mut resolver)
 	let type_ref_opt = resolve_decl_type(decl, hir, mod_id, mut resolver)
-	let binding_id = scope_arena.mut.define(scope, decl.name, decl.is_mut)
+	let binding_id = scope_arena.mut.define(scope, decl.name, decl.is_mut, type_ref_opt)
 
 	expr_arena.mut.push(hir::Expression(
 		kind: hir::Let(name: decl.name, type_: type_ref_opt, init: init_id, is_mut: decl.is_mut, binding_id:),
@@ -331,7 +341,7 @@ fn lower_for(for_ ast::For, mut expr_arena hir::ExpressionArena, mut scope_arena
 
 	// The loop binding is visible inside the body only.
 	let inner_scope = scope_arena.mut.push_child(scope)
-	scope_arena.mut.define(inner_scope, for_.elem, false)
+	scope_arena.mut.define(inner_scope, for_.elem, false, none)
 
 	let body_id = lower_block(for_.body, mut expr_arena, mut scope_arena, inner_scope, hir, mod_id, mut resolver)
 	expr_arena.mut.push(hir::Expression(kind: hir::For(iter: iter_id, binding: for_.elem, body: body_id), span: for_.span))
