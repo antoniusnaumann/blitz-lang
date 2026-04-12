@@ -7,6 +7,52 @@ fn check(mut checker TypeChecker, hir hir::Hir) hir::Hir {
     var typed_hir = hir // copy that will be enriched with types
 }
 
+// checks the expression recursively returns the inferred type
+// TODO: TypeRef is probably not enough, we need to include mutability
+fn check(mut checker TypeChecker, hir hir::Hir, expr hir::Expression) hir::TypeRef {
+    // TODO LLM: create overloads of "check" for all the types in here and just call the overloads in case, move the content to the overloads
+    switch expr {
+    	LitInt { hir.find_core_type("Int") }
+    	LitFloat { hir.find_core_type("Float") }
+    	LitString { hir.find_core_type("String") }
+     	LitRune { hir.find_core_type("Rune") }
+    	LocalRef {
+            todo("resolve binding ref and get annotated type (which should be resolved before already)")
+    	}
+    	BinaryOp {
+    	    todo("Unify sides and return the unified type. Problem: unification changes expressions, so maybe we need to infer the types first and then convert them in a second pass to make sure they conform")
+    	}
+    	UnaryOp {}
+    	Call {
+    	    todo("Check parameters and then resolve return type")
+    	}
+    	Constructor {
+    	    todo("Check fields and then resolve constructed type")
+    	}
+    	Member {
+    	    todo("Resolve member type")
+    	}
+    	Index {
+    	    todo("Resolve inner type and then take element type")
+    	}
+    	If { todo("Return optional of body and check all expressions") }
+    	While { todo("Check all expressions") }
+    	For { todo("Return list of body and check all expressions") }
+    	Switch {}
+    	Block {}
+    	Return { todo("Check that inner type conforms to function return type (or do that in a later pass), then set to never") }
+    	Break { todo("Never") }
+    	Continue { todo("Never") }
+    	Let { todo("Check if annotation matches expression, then return void") }
+    	Assign { todo("Check that target binding matches rhs (or can be unified), then return void") }
+    	Assert { todo("Check for boolean type, return void") }
+    	Mut { todo("Check for var binding") }
+    	Try { todo("Check that receiver is try-able (Option or Result), then return success type") }
+    	ListLit { todo("Check that elements can be unified, then return list of unified types") }
+    	Group {}
+    }  
+} 
+
 fn unify(mut checker TypeChecker, expr hir::Expression, constraints List(Constraint)) {
     
 }

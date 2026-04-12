@@ -8,6 +8,8 @@ fn new_hir() Hir {
         define_builtin("Void"),
         define_builtin("Int"),
         define_builtin("Float"),
+        define_builtin("String"),
+        define_builtin("Rune"),
     ]
     let core_module = Module(id: core_mod_id(), name: "core", funcs: [], types: [], func_export: [], type_export: [])
     // TODO: insert builtin types as part of the "core" module
@@ -163,6 +165,10 @@ fn find_type(hir Hir, mod_id ModId, name String) Option(TypeId) {
         return TypeId(module: mod_id, id: type_id.id)
     }
     none
+}
+
+fn find_core_type(hir Hir, name String) TypeId {
+    hir.find_type(core_mod_id(), name).unwrap()
 }
 
 fn push(mut mod Module, def FuncDef) FuncId {
