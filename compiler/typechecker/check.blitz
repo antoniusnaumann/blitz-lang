@@ -11,7 +11,7 @@ fn check(mut checker TypeChecker, hir hir::Hir) hir::Hir {
 // TODO: TypeRef is probably not enough, we need to include mutability
 fn check(mut checker TypeChecker, hir hir::Hir, expr hir::Expression) hir::TypeRef {
     // TODO LLM: create overloads of "check" for all the types in here and just call the overloads in case, move the content to the overloads
-    switch expr {
+    switch expr.kind {
     	LitInt { hir.find_core_type("Int") }
     	LitFloat { hir.find_core_type("Float") }
     	LitString { hir.find_core_type("String") }
@@ -22,7 +22,9 @@ fn check(mut checker TypeChecker, hir hir::Hir, expr hir::Expression) hir::TypeR
     	BinaryOp {
     	    todo("Unify sides and return the unified type. Problem: unification changes expressions, so maybe we need to infer the types first and then convert them in a second pass to make sure they conform")
     	}
-    	UnaryOp {}
+    	UnaryOp {
+    	    todo("Check applicability and return resulting type")
+    	}
     	Call {
     	    todo("Check parameters and then resolve return type")
     	}
@@ -38,8 +40,8 @@ fn check(mut checker TypeChecker, hir hir::Hir, expr hir::Expression) hir::TypeR
     	If { todo("Return optional of body and check all expressions") }
     	While { todo("Check all expressions") }
     	For { todo("Return list of body and check all expressions") }
-    	Switch {}
-    	Block {}
+    	Switch { todo("Unify cases") }
+    	Block { todo("Check all statements and return type of last") }
     	Return { todo("Check that inner type conforms to function return type (or do that in a later pass), then set to never") }
     	Break { todo("Never") }
     	Continue { todo("Never") }
@@ -49,7 +51,7 @@ fn check(mut checker TypeChecker, hir hir::Hir, expr hir::Expression) hir::TypeR
     	Mut { todo("Check for var binding") }
     	Try { todo("Check that receiver is try-able (Option or Result), then return success type") }
     	ListLit { todo("Check that elements can be unified, then return list of unified types") }
-    	Group {}
+    	Group { todo("Just check inner type") }
     }  
 } 
 

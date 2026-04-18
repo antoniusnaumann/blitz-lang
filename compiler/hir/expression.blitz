@@ -17,6 +17,7 @@ struct ExpressionId {
 // Intermediate arena used during expression lowering.  Holds only the
 // expression list; the final Body is constructed once lowering is done by
 // combining the arena with the bindings gathered from the ScopeArena.
+// TODO LLM: this struct is meaningless, can be inlined into a List(Expression) wherever it is used
 struct ExpressionArena {
 	expressions List(Expression)
 }
@@ -41,6 +42,7 @@ fn push(mut body Body, expr Expression) ExpressionId {
 
 struct Expression {
 	kind ExpressionKind
+	type Option(TypeRef) // added by the type checker
 	span ast::Span
 }
 
