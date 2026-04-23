@@ -245,9 +245,10 @@ fn lower_literal(lit ast::Literal, mut expressions List(hir::Expression)) hir::E
 fn lower_ident(ident ast::Ident, mut expressions List(hir::Expression), scope_arena hir::ScopeArena, scope hir::ScopeId, hir hir::Hir, mod_id hir::ModId) hir::ExpressionId {
 	let binding = scope_arena.lookup(scope, ident.name)
 	if binding != none {
-		return expressions.mut.push(hir::Expression(kind: hir::LocalRef(name: ident, binding_id: binding.unwrap().binding_id), span: ident.span))
+		return expressions.mut.push(hir::Expression(kind: hir::LocalRef(binding_id: binding.unwrap().binding_id), span: ident.span))
 	}
 
+	// TODO LLM: this should be a hir::IdentCase, not a call. there needs to be a find_case function
 	// Not a local — treat as a zero-argument call so candidate resolution
 	// can find the right enum case or nullary function.
 	let candidates = find_candidates(hir, mod_id, ident.name, none)

@@ -43,6 +43,8 @@ union ExpressionKind {
 
 	// Variable reference (resolved to a local binding)
 	LocalRef
+	// Name that does not refer to a local variable
+	IdentCase 
 
 	// Operations
 	BinaryOp
@@ -102,7 +104,6 @@ struct LitRune {
 // --- Variable reference ---
 
 struct LocalRef {
-	name       ast::Ident
 	binding_id Int // unique ID assigned when the binding was declared
 }
 
@@ -201,6 +202,7 @@ struct TypeCase {
 
 struct IdentCase {
 	name ast::Ident
+	candidates List(FuncId)
 }
 
 struct LiteralCase {

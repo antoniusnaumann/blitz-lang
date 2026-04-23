@@ -6,6 +6,7 @@ struct Hir {
 fn new_hir() Hir {
     let core_types = [
         define_builtin("Void"),
+        define_builtin("Never"),
         define_builtin("Int"),
         define_builtin("Float"),
         define_builtin("String"),
