@@ -9,139 +9,143 @@ fn check(mut checker TypeChecker, hir hir::Hir) hir::Hir {
 
 // checks the expression recursively returns the inferred type
 // TODO: TypeRef is probably not enough, we need to include mutability
-// TODO LLM: add exprs List(hir::Expression) as parameter to all check functions
-fn check(mut checker TypeChecker, hir hir::Hir, expr hir::Expression) hir::TypeRef {
+fn check(mut checker TypeChecker, hir hir::Hir, exprs List(hir::Expression), expr hir::Expression) hir::TypeRef {
 	switch expr.kind {
-		LitInt { check(mut checker, hir, it) }
-		LitFloat { check(mut checker, hir, it) }
-		LitString { check(mut checker, hir, it) }
-		LitRune { check(mut checker, hir, it) }
-		LocalRef { check(mut checker, hir, it) }
-		BinaryOp { check(mut checker, hir, it) }
-		UnaryOp { check(mut checker, hir, it) }
-		Call { check(mut checker, hir, it) }
-		Constructor { check(mut checker, hir, it) }
-		Member { check(mut checker, hir, it) }
-		Index { check(mut checker, hir, it) }
-		If { check(mut checker, hir, it) }
-		While { check(mut checker, hir, it) }
-		For { check(mut checker, hir, it) }
-		Switch { check(mut checker, hir, it) }
-		Block { check(mut checker, hir, it) }
-		Return { check(mut checker, hir, it) }
-		Break { check(mut checker, hir, it) }
-		Continue { check(mut checker, hir, it) }
-		Let { check(mut checker, hir, it) }
-		Assign { check(mut checker, hir, it) }
-		Assert { check(mut checker, hir, it) }
-		Mut { check(mut checker, hir, it) }
-		Try { check(mut checker, hir, it) }
-		ListLit { check(mut checker, hir, it) }
-		Group { check(mut checker, hir, it) }
+		LitInt { check(mut checker, hir, exprs, it) }
+		LitFloat { check(mut checker, hir, exprs, it) }
+		LitString { check(mut checker, hir, exprs, it) }
+		LitRune { check(mut checker, hir, exprs, it) }
+		LocalRef { check(mut checker, hir, exprs, it) }
+		UnresolvedIdent { check(mut checker, hir, exprs, it) }
+		BinaryOp { check(mut checker, hir, exprs, it) }
+		UnaryOp { check(mut checker, hir, exprs, it) }
+		Call { check(mut checker, hir, exprs, it) }
+		Constructor { check(mut checker, hir, exprs, it) }
+		Member { check(mut checker, hir, exprs, it) }
+		Index { check(mut checker, hir, exprs, it) }
+		If { check(mut checker, hir, exprs, it) }
+		While { check(mut checker, hir, exprs, it) }
+		For { check(mut checker, hir, exprs, it) }
+		Switch { check(mut checker, hir, exprs, it) }
+		Block { check(mut checker, hir, exprs, it) }
+		Return { check(mut checker, hir, exprs, it) }
+		Break { check(mut checker, hir, exprs, it) }
+		Continue { check(mut checker, hir, exprs, it) }
+		Let { check(mut checker, hir, exprs, it) }
+		Assign { check(mut checker, hir, exprs, it) }
+		Assert { check(mut checker, hir, exprs, it) }
+		Mut { check(mut checker, hir, exprs, it) }
+		Try { check(mut checker, hir, exprs, it) }
+		ListLit { check(mut checker, hir, exprs, it) }
+		Group { check(mut checker, hir, exprs, it) }
 	}
 }
 
-fn check(mut checker TypeChecker, hir hir::Hir, expr hir::LitInt) hir::TypeRef {
+fn check(mut checker TypeChecker, hir hir::Hir, exprs List(hir::Expression), expr hir::LitInt) hir::TypeRef {
 	hir.find_core_type("Int")
 }
 
-fn check(mut checker TypeChecker, hir hir::Hir, expr hir::LitFloat) hir::TypeRef {
+fn check(mut checker TypeChecker, hir hir::Hir, exprs List(hir::Expression), expr hir::LitFloat) hir::TypeRef {
 	hir.find_core_type("Float")
 }
 
-fn check(mut checker TypeChecker, hir hir::Hir, expr hir::LitString) hir::TypeRef {
+fn check(mut checker TypeChecker, hir hir::Hir, exprs List(hir::Expression), expr hir::LitString) hir::TypeRef {
 	hir.find_core_type("String")
 }
 
-fn check(mut checker TypeChecker, hir hir::Hir, expr hir::LitRune) hir::TypeRef {
+fn check(mut checker TypeChecker, hir hir::Hir, exprs List(hir::Expression), expr hir::LitRune) hir::TypeRef {
 	hir.find_core_type("Rune")
 }
 
-fn check(mut checker TypeChecker, hir hir::Hir, expr hir::LocalRef) hir::TypeRef {
+fn check(mut checker TypeChecker, hir hir::Hir, exprs List(hir::Expression), expr hir::LocalRef) hir::TypeRef {
 	todo("resolve binding ref and get annotated type (which should be resolved before already)")
 }
 
-fn check(mut checker TypeChecker, hir hir::Hir, expr hir::BinaryOp) hir::TypeRef {
+fn check(mut checker TypeChecker, hir hir::Hir, exprs List(hir::Expression), expr hir::UnresolvedIdent) hir::TypeRef {
+	todo("Resolve this case after the expected type is known")
+}
+
+fn check(mut checker TypeChecker, hir hir::Hir, exprs List(hir::Expression), expr hir::BinaryOp) hir::TypeRef {
 	todo("Unify sides and return the unified type. Problem: unification changes expressions, so maybe we need to infer the types first and then convert them in a second pass to make sure they conform")
 }
 
-fn check(mut checker TypeChecker, hir hir::Hir, expr hir::UnaryOp) hir::TypeRef {
+fn check(mut checker TypeChecker, hir hir::Hir, exprs List(hir::Expression), expr hir::UnaryOp) hir::TypeRef {
 	todo("Check applicability and return resulting type")
 }
 
-fn check(mut checker TypeChecker, hir hir::Hir, expr hir::Call) hir::TypeRef {
+fn check(mut checker TypeChecker, hir hir::Hir, exprs List(hir::Expression), expr hir::Call) hir::TypeRef {
 	todo("Check parameters and then resolve return type")
 }
 
-fn check(mut checker TypeChecker, hir hir::Hir, expr hir::Constructor) hir::TypeRef {
+fn check(mut checker TypeChecker, hir hir::Hir, exprs List(hir::Expression), expr hir::Constructor) hir::TypeRef {
 	todo("Check fields and then resolve constructed type")
 }
 
-fn check(mut checker TypeChecker, hir hir::Hir, expr hir::Member) hir::TypeRef {
+fn check(mut checker TypeChecker, hir hir::Hir, exprs List(hir::Expression), expr hir::Member) hir::TypeRef {
 	todo("Resolve member type")
 }
 
-fn check(mut checker TypeChecker, hir hir::Hir, expr hir::Index) hir::TypeRef {
+fn check(mut checker TypeChecker, hir hir::Hir, exprs List(hir::Expression), expr hir::Index) hir::TypeRef {
 	todo("Resolve inner type and then take element type")
 }
 
-fn check(mut checker TypeChecker, hir hir::Hir, expr hir::If) hir::TypeRef {
+fn check(mut checker TypeChecker, hir hir::Hir, exprs List(hir::Expression), expr hir::If) hir::TypeRef {
 	todo("Return optional of body and check all expressions")
 }
 
-fn check(mut checker TypeChecker, hir hir::Hir, expr hir::While) hir::TypeRef {
+fn check(mut checker TypeChecker, hir hir::Hir, exprs List(hir::Expression), expr hir::While) hir::TypeRef {
 	todo("Check all expressions")
 }
 
-fn check(mut checker TypeChecker, hir hir::Hir, expr hir::For) hir::TypeRef {
+fn check(mut checker TypeChecker, hir hir::Hir, exprs List(hir::Expression), expr hir::For) hir::TypeRef {
 	todo("Return list of body and check all expressions")
 }
 
-fn check(mut checker TypeChecker, hir hir::Hir, expr hir::Switch) hir::TypeRef {
+fn check(mut checker TypeChecker, hir hir::Hir, exprs List(hir::Expression), expr hir::Switch) hir::TypeRef {
 	todo("Unify cases")
 }
 
-fn check(mut checker TypeChecker, hir hir::Hir, expr hir::Block) hir::TypeRef {
+fn check(mut checker TypeChecker, hir hir::Hir, exprs List(hir::Expression), expr hir::Block) hir::TypeRef {
 	todo("Check all statements and return type of last")
 }
 
-fn check(mut checker TypeChecker, hir hir::Hir, expr hir::Return) hir::TypeRef {
+fn check(mut checker TypeChecker, hir hir::Hir, exprs List(hir::Expression), expr hir::Return) hir::TypeRef {
 	todo("Check that inner type conforms to function return type (or do that in a later pass), then set to never")
 }
 
-fn check(mut checker TypeChecker, hir hir::Hir, expr hir::Break) hir::TypeRef {
+fn check(mut checker TypeChecker, hir hir::Hir, exprs List(hir::Expression), expr hir::Break) hir::TypeRef {
 	hir.find_core_type("Int")
 }
 
-fn check(mut checker TypeChecker, hir hir::Hir, expr hir::Continue) hir::TypeRef {
+fn check(mut checker TypeChecker, hir hir::Hir, exprs List(hir::Expression), expr hir::Continue) hir::TypeRef {
 	hir.find_core_type("Int")
 }
 
-fn check(mut checker TypeChecker, hir hir::Hir, expr hir::Let) hir::TypeRef {
+fn check(mut checker TypeChecker, hir hir::Hir, exprs List(hir::Expression), expr hir::Let) hir::TypeRef {
 	todo("Check if annotation matches expression, then return void")
 }
 
-fn check(mut checker TypeChecker, hir hir::Hir, expr hir::Assign) hir::TypeRef {
+fn check(mut checker TypeChecker, hir hir::Hir, exprs List(hir::Expression), expr hir::Assign) hir::TypeRef {
 	todo("Check that target binding matches rhs (or can be unified), then return void")
 }
 
-fn check(mut checker TypeChecker, hir hir::Hir, expr hir::Assert) hir::TypeRef {
+fn check(mut checker TypeChecker, hir hir::Hir, exprs List(hir::Expression), expr hir::Assert) hir::TypeRef {
 	todo("Check for boolean type, return void")
 }
 
-fn check(mut checker TypeChecker, hir hir::Hir, expr hir::Mut) hir::TypeRef {
+fn check(mut checker TypeChecker, hir hir::Hir, exprs List(hir::Expression), expr hir::Mut) hir::TypeRef {
 	todo("Check for var binding")
 }
 
-fn check(mut checker TypeChecker, hir hir::Hir, expr hir::Try) hir::TypeRef {
+fn check(mut checker TypeChecker, hir hir::Hir, exprs List(hir::Expression), expr hir::Try) hir::TypeRef {
 	todo("Check that receiver is try-able (Option or Result), then return success type")
 }
 
-fn check(mut checker TypeChecker, hir hir::Hir, expr hir::ListLit) hir::TypeRef {
+fn check(mut checker TypeChecker, hir hir::Hir, exprs List(hir::Expression), expr hir::ListLit) hir::TypeRef {
 	todo("Check that elements can be unified, then return list of unified types")
 }
 
-fn check(mut checker TypeChecker, hir hir::Hir, expr hir::Group) hir::TypeRef {
+fn check(mut checker TypeChecker, hir hir::Hir, exprs List(hir::Expression), expr hir::Group) hir::TypeRef {
 	todo("Just check inner type")
 }
 

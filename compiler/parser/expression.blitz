@@ -270,20 +270,7 @@ fn parse_switch(mut parser Parser) Option(ast::Switch) {
 
 fn parse_switch_label(mut parser Parser) Option(ast::SwitchLabel) {
     switch parser.peek().kind {
-        ident {
-            // Check if this is a qualified type: ident::Type
-            let name = try parser.mut.parse_ident()
-            switch parser.peek().kind {
-                path {
-                    // Qualified type in switch label: module::Type
-                    parser.mut.tok()
-                    var ty = try parser.mut.parse_type()
-                    ty.module = name
-                    ty
-                }
-                else { name }
-            }
-        }
+        ident { try parser.mut.parse_switch_label_ident() }
         type { try parser.mut.parse_qualified_type() }
         str { try parser.mut.parse_string_lit() }
         int { try parser.mut.parse_int_lit() }
@@ -295,6 +282,21 @@ fn parse_switch_label(mut parser Parser) Option(ast::SwitchLabel) {
         }
         else { parser.mut.err("Unexpected token for switch label!") }
     }
+}
+
+fn parse_switch_label_ident(mut parser Parser) Option(ast::SwitchLabel) {
+    let name = try parser.mut.parse_ident()
+    switch parser.peek().kind {
+        path { try parser.mut.parse_switch_label_qualified_type(name) }
+        else { name }
+    }
+}
+
+fn parse_switch_label_qualified_type(mut parser Parser, mod ast::Ident) Option(ast::SwitchLabel) {
+    parser.mut.tok()
+    var ty = try parser.mut.parse_type()
+    ty.module = mod
+    ty
 }
 
 fn parse_member_call(mut parser Parser, target ast::Expression, method ast::Ident) Option(ast::Call) {

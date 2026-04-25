@@ -248,11 +248,7 @@ fn lower_ident(ident ast::Ident, mut expressions List(hir::Expression), scope_ar
 		return expressions.mut.push(hir::Expression(kind: hir::LocalRef(binding_id: binding.unwrap().binding_id), span: ident.span))
 	}
 
-	// TODO LLM: this should be a hir::IdentCase, not a call. there needs to be a find_case function
-	// Not a local — treat as a zero-argument call so candidate resolution
-	// can find the right enum case or nullary function.
-	let candidates = find_candidates(hir, mod_id, ident.name, none)
-	expressions.mut.push(hir::Expression(kind: hir::Call(name: ident, module: none, candidates:, args: []), span: ident.span))
+	expressions.mut.push(hir::Expression(kind: hir::UnresolvedIdent(name: ident), span: ident.span))
 }
 
 // ── Calls ─────────────────────────────────────────────────────────────────────

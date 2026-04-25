@@ -207,17 +207,16 @@ test "Lower return with value" {
 }
 
 test "Lower ident resolves to call for unknown name" {
-    // 2 nodes: call/ident (0), Block (1)
-    let body = lower_fn("fn f() { foo }")
-    assert body.expressions.len() == 2
-    let expr = body.get(hir::ExpressionId(id: 0))
-    switch expr.kind {
-        hir::Call {
-            assert it.name.name == "foo"
-            assert it.args.len() == 0
-        }
-        else { panic("Expected Call for unresolved ident") }
-    }
+	// 2 nodes: ident-case (0), Block (1)
+	let body = lower_fn("fn f() { foo }")
+	assert body.expressions.len() == 2
+	let expr = body.get(hir::ExpressionId(id: 0))
+	switch expr.kind {
+		hir::UnresolvedIdent {
+			assert it.name.name == "foo"
+		}
+		else { panic("Expected UnresolvedIdent for unresolved ident") }
+	}
 }
 
 test "Lower let then ident resolves to local ref" {
@@ -231,8 +230,23 @@ test "Lower let then ident resolves to local ref" {
     }
 }
 
-test "Lower unknown ident to union case" {
-    // TODO LLM: implement 
+test "Lower switch ident label to ident case" {
+	let body = lower_fn("fn f() { switch 1 { foo {} } }")
+	assert body.expressions.len() == 4
+	let switch_expr = body.get(hir::ExpressionId(id: 2))
+	switch switch_expr.kind {
+		hir::Switch {
+			assert it.cases.len() == 1
+			let label = it.cases[0].label
+			switch label {
+				hir::IdentCase {
+					assert it.name.name == "foo"
+				}
+				else { panic("Expected IdentCase switch label") }
+			}
+		}
+		else { panic("Expected Switch") }
+	}
 }
 
 test "Empty function body lowers to single Block node" {
@@ -304,4 +318,3 @@ test "Lower nested scope shadows outer binding" {
         else { panic("Expected LocalRef for inner x") }
     }
 }
-
