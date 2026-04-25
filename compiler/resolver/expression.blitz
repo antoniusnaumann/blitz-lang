@@ -239,8 +239,9 @@ fn lower_literal(lit ast::Literal, mut expressions List(hir::Expression)) hir::E
 // ── Identifier ───────────────────────────────────────────────────────────────
 // An `ast::Ident` is either a local variable reference or a bare union-case
 // label (e.g. `none`, `true`, `false`, or a label-only case like `public`).
-// In the HIR we emit `LocalRef` for known bindings and a zero-argument `Call`
-// with candidates for everything else (the type checker will resolve it).
+// In the HIR we emit `LocalRef` for known bindings and a `UnionCase` carrying
+// the candidate unions for everything else (the type checker will pick one
+// based on the expected type).
 
 fn lower_ident(ident ast::Ident, mut expressions List(hir::Expression), scope_arena hir::ScopeArena, scope hir::ScopeId, hir hir::Hir, mod_id hir::ModId) hir::ExpressionId {
 	let binding = scope_arena.lookup(scope, ident.name)
@@ -248,7 +249,8 @@ fn lower_ident(ident ast::Ident, mut expressions List(hir::Expression), scope_ar
 		return expressions.mut.push(hir::Expression(kind: hir::LocalRef(binding_id: binding.unwrap().binding_id), span: ident.span))
 	}
 
-	expressions.mut.push(hir::Expression(kind: hir::UnresolvedIdent(name: ident), span: ident.span))
+	let candidates = hir.find_union_case_candidates(ident.name)
+	expressions.mut.push(hir::Expression(kind: hir::UnionCase(name: ident, candidates:), span: ident.span))
 }
 
 // ── Calls ─────────────────────────────────────────────────────────────────────

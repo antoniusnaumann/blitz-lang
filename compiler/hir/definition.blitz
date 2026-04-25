@@ -1,6 +1,8 @@
 struct Hir {
     mods  List(Module) // indexed by ModId
-    types List(TypeKind) // fully qualified, indexed by TypeRef 
+    types List(TypeKind) // fully qualified, indexed by TypeRef
+
+    idents List(IdentLookup) // lookup between ident names and unions where these appear as a typeless labeled case
 }
 
 fn new_hir() Hir {
@@ -12,10 +14,9 @@ fn new_hir() Hir {
         define_builtin("String"),
         define_builtin("Rune"),
     ]
-    let core_module = Module(id: core_mod_id(), name: "core", funcs: [], types: [], func_export: [], type_export: [])
-    // TODO: insert builtin types as part of the "core" module
+    let core_module = Module(id: core_mod_id(), name: "core", funcs: [], types: core_types, func_export: [], type_export: [])
 
-    Hir(mods: [core_module], types: [])
+    Hir(mods: [core_module], types: [], idents: [])
 }
 
 fn core_mod_id() ModId {
@@ -259,4 +260,43 @@ struct TypeRef {
 union Visibility {
     public
     module
+}
+
+struct IdentLookup {
+    ident   ast::Ident
+    parents List(TypeId) // all unions that include a labeled case with that id. Only cases with a label but without a type are considered
+}
+
+// Record `union_id` as a union that contains a typeless labeled case named `name`.
+// If an entry for `name` already exists, append `union_id` to its parents.
+// Each (label, union) pair must be registered at most once: a union declaring
+// the same typeless label twice (e.g. `union Foo { a, a }`) is a source-level
+// bug and we surface it here rather than silently merging.
+fn register_union_case_label(mut hir Hir, name ast::Ident, union_id TypeId) {
+    var index = 0
+    while index < hir.idents.len() {
+        let entry = hir.idents[index]
+        if entry.ident.name == name.name {
+            for entry.parents |existing| {
+                assert existing.module.id != union_id.module.id or existing.id != union_id.id
+            }
+            var updated = entry
+            updated.parents ++= union_id
+            hir.idents[index] = updated
+            return
+        }
+        index += 1
+    }
+    hir.idents ++= IdentLookup(ident: name, parents: [union_id])
+}
+
+// Look up the unions that contain a typeless labeled case with `name`.
+fn find_union_case_candidates(hir Hir, name String) List(TypeId) {
+    var result = []
+    var index = 0
+    while index < hir.idents.len() {
+        if hir.idents[index].ident.name == name { return hir.idents[index].parents }
+        index += 1
+    }
+    result
 }

@@ -16,7 +16,7 @@ fn check(mut checker TypeChecker, hir hir::Hir, exprs List(hir::Expression), exp
 		LitString { check(mut checker, hir, exprs, it) }
 		LitRune { check(mut checker, hir, exprs, it) }
 		LocalRef { check(mut checker, hir, exprs, it) }
-		UnresolvedIdent { check(mut checker, hir, exprs, it) }
+		UnionCase { check(mut checker, hir, exprs, it) }
 		BinaryOp { check(mut checker, hir, exprs, it) }
 		UnaryOp { check(mut checker, hir, exprs, it) }
 		Call { check(mut checker, hir, exprs, it) }
@@ -61,7 +61,7 @@ fn check(mut checker TypeChecker, hir hir::Hir, exprs List(hir::Expression), exp
 	todo("resolve binding ref and get annotated type (which should be resolved before already)")
 }
 
-fn check(mut checker TypeChecker, hir hir::Hir, exprs List(hir::Expression), expr hir::UnresolvedIdent) hir::TypeRef {
+fn check(mut checker TypeChecker, hir hir::Hir, exprs List(hir::Expression), expr hir::UnionCase) hir::TypeRef {
 	todo("Resolve this case after the expected type is known")
 }
 

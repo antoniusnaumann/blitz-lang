@@ -43,8 +43,13 @@ union ExpressionKind {
 
 	// Variable reference (resolved to a local binding)
 	LocalRef
-	// Name that does not refer to a local variable
-	UnresolvedIdent 
+	// Bare ident that does not refer to a local. Represents a typeless
+	// union-case label (e.g. `none`, `true`, `false`, `public`). The
+	// resolver populates `candidates` with every union that declares a
+	// labeled, typeless case with this name; the type checker selects
+	// the actual one from the expected type. An empty candidate list
+	// indicates an unresolved name (diagnostic emitted by the checker).
+	UnionCase
 
 	// Operations
 	BinaryOp
@@ -107,8 +112,9 @@ struct LocalRef {
 	binding_id Int // unique ID assigned when the binding was declared
 }
 
-struct UnresolvedIdent {
-	name ast::Ident
+struct UnionCase {
+	name       ast::Ident
+	candidates List(TypeId) // unions that declare a typeless labeled case with this name
 }
 
 // --- Operations ---

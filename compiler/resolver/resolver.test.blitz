@@ -212,10 +212,11 @@ test "Lower ident resolves to call for unknown name" {
 	assert body.expressions.len() == 2
 	let expr = body.get(hir::ExpressionId(id: 0))
 	switch expr.kind {
-		hir::UnresolvedIdent {
+		hir::UnionCase {
 			assert it.name.name == "foo"
+			assert it.candidates.len() == 0
 		}
-		else { panic("Expected UnresolvedIdent for unresolved ident") }
+		else { panic("Expected UnionCase for unresolved ident") }
 	}
 }
 
@@ -293,6 +294,32 @@ test "Lower while loop" {
 		}
         else { panic("Expected While") }
     }
+}
+
+test "Lower ident populates candidates from union case lookup" {
+	let union_defs = "union Color { red }".parse()
+	assert union_defs.len() == 1
+	let fn_defs = "fn f() { red }".parse()
+	var items = []
+	for union_defs |def| { items ++= def }
+	for fn_defs |def| { items ++= def }
+	let file = ast::Ast(origin: "src/test_mod/f.blitz", items:)
+	let asts = [file]
+	let hir = asts.lower()
+	let mod_id = hir.find("test_mod").unwrap()
+	let body = hir.get(mod_id).funcs[0].body
+	let expr = body.get(hir::ExpressionId(id: 0))
+	switch expr.kind {
+		hir::UnionCase {
+			assert it.name.name == "red"
+			assert it.candidates.len() == 1
+			let cand = it.candidates[0]
+			assert cand.module.id == mod_id.id
+			let union_def = hir.get(mod_id).types[cand.id]
+			assert union_def.name.name == "Color"
+		}
+		else { panic("Expected UnionCase for known union label") }
+	}
 }
 
 test "Lower nested scope shadows outer binding" {
