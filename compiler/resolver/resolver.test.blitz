@@ -322,6 +322,64 @@ test "Lower ident populates candidates from union case lookup" {
 	}
 }
 
+test "Lower union populates CaseDefs (typeless and typed)" {
+	// Two single-case unions: one typeless (Void), one with an Int payload.
+	let defs1 = "union Flag { on }".parse()
+	let defs2 = "union Box { value: Int }".parse()
+	var items = []
+	for defs1 |def| { items ++= def }
+	for defs2 |def| { items ++= def }
+	let file = ast::Ast(origin: "src/test_mod/u.blitz", items:)
+	let hir = [file].lower()
+	let mod_id = hir.find("test_mod").unwrap()
+
+	let flag = hir.get(mod_id).types[0]
+	let box = hir.get(mod_id).types[1]
+	assert flag.name.name == "Flag"
+	assert box.name.name == "Box"
+	switch flag.kind {
+		hir::UnionDef { assert it.cases.len() == 1 }
+		else { panic("Expected UnionDef for Flag") }
+	}
+	switch box.kind {
+		hir::UnionDef { assert it.cases.len() == 1 }
+		else { panic("Expected UnionDef for Box") }
+	}
+
+	// Only the Void-typed labeled case is registered in the ident lookup.
+	assert hir.find_union_case_candidates("on").len() == 1
+	assert hir.find_union_case_candidates("value").len() == 0
+}
+
+test "Typeless label is sugar for label: Void" {
+	// Two unions, one using sugar, one explicit. Both should register the label.
+	let defs1 = "union A { foo }".parse()
+	let defs2 = "union B { foo: Void }".parse()
+	var items = []
+	for defs1 |def| { items ++= def }
+	for defs2 |def| { items ++= def }
+	let file = ast::Ast(origin: "src/test_mod/v.blitz", items:)
+	let hir = [file].lower()
+	let mod_id = hir.find("test_mod").unwrap()
+
+	// Both unions should have one case each.
+	let a = hir.get(mod_id).types[0]
+	let b = hir.get(mod_id).types[1]
+	switch a.kind {
+		hir::UnionDef { assert it.cases.len() == 1 }
+		else { panic("Expected UnionDef for A") }
+	}
+	switch b.kind {
+		hir::UnionDef { assert it.cases.len() == 1 }
+		else { panic("Expected UnionDef for B") }
+	}
+
+	// Both unions should be candidates for the `foo` ident, proving the two
+	// forms produce a Void-typed labeled case (and are registered identically).
+	let candidates = hir.find_union_case_candidates("foo")
+	assert candidates.len() == 2
+}
+
 test "Lower nested scope shadows outer binding" {
     // fn f() { let x = 1; { let x = 2; x }; x }
     let body = lower_fn("fn f() { let x = 1; { let x = 2; x }; x }")

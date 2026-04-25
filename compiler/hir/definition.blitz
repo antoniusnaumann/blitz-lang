@@ -2,7 +2,7 @@ struct Hir {
     mods  List(Module) // indexed by ModId
     types List(TypeKind) // fully qualified, indexed by TypeRef
 
-    idents List(IdentLookup) // lookup between ident names and unions where these appear as a typeless labeled case
+    idents List(IdentLookup) // lookup between ident names and unions where these appear as a Void-typed labeled case (typeless labels are sugar for `label: Void`)
 }
 
 fn new_hir() Hir {
@@ -16,7 +16,11 @@ fn new_hir() Hir {
     ]
     let core_module = Module(id: core_mod_id(), name: "core", funcs: [], types: core_types, func_export: [], type_export: [])
 
-    Hir(mods: [core_module], types: [], idents: [])
+    // Pre-populate the type registry so `void_type()` (TypeRef(id: 0)) points
+    // to the Void Nominal. Any subsequent `resolve_type` call for Void returns
+    // the same TypeRef via `insert`'s find-or-push behaviour.
+    let void_nominal = Nominal(def_id: TypeId(module: core_mod_id(), id: 0), args: [])
+    Hir(mods: [core_module], types: [void_nominal], idents: [])
 }
 
 fn core_mod_id() ModId {
@@ -264,13 +268,13 @@ union Visibility {
 
 struct IdentLookup {
     ident   ast::Ident
-    parents List(TypeId) // all unions that include a labeled case with that id. Only cases with a label but without a type are considered
+    parents List(TypeId) // all unions that include a Void-typed labeled case with that id (typeless labels are sugar for `label: Void`)
 }
 
-// Record `union_id` as a union that contains a typeless labeled case named `name`.
+// Record `union_id` as a union that contains a Void-typed labeled case named `name`.
 // If an entry for `name` already exists, append `union_id` to its parents.
 // Each (label, union) pair must be registered at most once: a union declaring
-// the same typeless label twice (e.g. `union Foo { a, a }`) is a source-level
+// the same Void-typed label twice (e.g. `union Foo { a, a }`) is a source-level
 // bug and we surface it here rather than silently merging.
 fn register_union_case_label(mut hir Hir, name ast::Ident, union_id TypeId) {
     var index = 0
@@ -290,7 +294,7 @@ fn register_union_case_label(mut hir Hir, name ast::Ident, union_id TypeId) {
     hir.idents ++= IdentLookup(ident: name, parents: [union_id])
 }
 
-// Look up the unions that contain a typeless labeled case with `name`.
+// Look up the unions that contain a Void-typed labeled case with `name`.
 fn find_union_case_candidates(hir Hir, name String) List(TypeId) {
     var result = []
     var index = 0
