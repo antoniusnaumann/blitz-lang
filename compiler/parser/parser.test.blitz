@@ -72,6 +72,9 @@ test "resolver/toplevel.blitz" { parse_file("resolver/toplevel.blitz") }
 test "resolver/expression.blitz" { parse_file("resolver/expression.blitz") }
 test "resolver/resolver.test.blitz" { parse_file("resolver/resolver.test.blitz") }
 
+test "typechecker/check.blitz" { parse_file("typechecker/check.blitz") }
+test "typechecker/constraints.blitz" { parse_file("typechecker/constraints.blitz") }
+
 test "compile.blitz" { parse_file("compile.blitz") }
 
 // test "Should be slow" {

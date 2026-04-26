@@ -490,6 +490,7 @@ fn parse_body(mut parser Parser) Option(ast::Block) {
     try parser.mut.expect(lbrace)
     let first = parser.peek()
     var body = []
+    parser.mut.skip_newlines()
     while !parser.has(rbrace) {
         let statement = try parser.mut.parse_statement()
         body ++= statement
