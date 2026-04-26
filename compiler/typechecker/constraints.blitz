@@ -1,3 +1,6 @@
-struct Constraint {
-
+union Constraint {
+    from: hir::TypeRef
+    into: hir::TypeRef
+    bound: hir::TypeRef
+    exact: hir::TypeRef
 }
