@@ -298,11 +298,11 @@ test "Lower while loop" {
 
 test "Lower ident populates candidates from union case lookup" {
 	let union_defs = "union Color { red }".parse()
-	assert union_defs.len() == 1
 	let fn_defs = "fn f() { red }".parse()
-	var items = []
-	for union_defs |def| { items ++= def }
-	for fn_defs |def| { items ++= def }
+	assert union_defs.len() == 1
+	assert fn_defs.len() == 1
+	let items = union_defs ++ fn_defs
+	
 	let file = ast::Ast(origin: "src/test_mod/f.blitz", items:)
 	let asts = [file]
 	let hir = asts.lower()
@@ -326,9 +326,8 @@ test "Lower union populates CaseDefs (typeless and typed)" {
 	// Two single-case unions: one typeless (Void), one with an Int payload.
 	let defs1 = "union Flag { on }".parse()
 	let defs2 = "union Box { value: Int }".parse()
-	var items = []
-	for defs1 |def| { items ++= def }
-	for defs2 |def| { items ++= def }
+	let items = defs1 ++ defs2
+
 	let file = ast::Ast(origin: "src/test_mod/u.blitz", items:)
 	let hir = [file].lower()
 	let mod_id = hir.find("test_mod").unwrap()
@@ -355,9 +354,8 @@ test "Typeless label is sugar for label: Void" {
 	// Two unions, one using sugar, one explicit. Both should register the label.
 	let defs1 = "union A { foo }".parse()
 	let defs2 = "union B { foo: Void }".parse()
-	var items = []
-	for defs1 |def| { items ++= def }
-	for defs2 |def| { items ++= def }
+	let items = defs1 ++ defs2
+
 	let file = ast::Ast(origin: "src/test_mod/v.blitz", items:)
 	let hir = [file].lower()
 	let mod_id = hir.find("test_mod").unwrap()
