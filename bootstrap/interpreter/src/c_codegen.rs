@@ -71,6 +71,14 @@ fn transpile_to_c_impl(
 ) -> Result<(), String> {
     let mut codegen = CCodegen::new(output_dir, include_tests, source_dir);
 
+    // Index source text by path so spans can be resolved to (line, col) when
+    // emitting `#line` directives.
+    for ast in asts {
+        codegen
+            .source_by_path
+            .insert(ast.path.clone(), ast.source.clone());
+    }
+
     // First pass: collect all type definitions
     for ast in asts {
         codegen.current_module = module_from_path(&ast.path);
@@ -143,6 +151,7 @@ fn transpile_to_c_impl(
     // Finally generate functions and other non-type definitions
     for ast in asts {
         codegen.current_module = module_from_path(&ast.path);
+        codegen.current_path = ast.path.clone();
         for def in &ast.defs {
             match def {
                 Definition::Fn(_) => {
@@ -303,6 +312,13 @@ struct CCodegen {
     /// Map from C type name to the module it was defined in.
     /// Used to set current_module when generating types in topological sort order.
     c_name_to_module: HashMap<String, String>,
+    /// Map from AST path to its source text. Used to convert byte-offset spans
+    /// into (line, col) for emitting `#line` directives in generated C code.
+    source_by_path: HashMap<String, String>,
+    /// The last (file, line) pair emitted as a `#line` directive into `impl_code`.
+    /// Used to avoid emitting redundant directives when consecutive statements
+    /// share the same source location.
+    last_emitted_line: Option<(String, usize)>,
 }
 
 impl CCodegen {
@@ -372,6 +388,8 @@ impl CCodegen {
             current_path: String::new(),
             source_dir_prefix,
             c_name_to_module: HashMap::new(),
+            source_by_path: HashMap::new(),
+            last_emitted_line: None,
         }
     }
 
@@ -2016,12 +2034,20 @@ impl CCodegen {
             return_type, c_func_name, params_str
         ));
 
+        // Reset `#line` tracking at function boundaries and emit a directive
+        // pointing at the function definition so that diagnostics about the
+        // function header itself (or implicit-return code we synthesize) map
+        // back to the user's source.
+        self.reset_line_tracking();
+        self.emit_line_directive(&func.span);
+
         // Generate function body from statements
         // First, pre-analyze declarations with empty lists to infer their types from usage
         self.preanalyze_empty_lists(&func.body);
 
         let body_len = func.body.len();
         for (i, stmt) in func.body.iter().enumerate() {
+            self.emit_line_directive(&stmt.span());
             let is_last = i == body_len - 1;
             let stmt_code = if is_last && !is_main && func.r#type.is_some() {
                 // For the last statement in a non-void, non-main function,
@@ -2217,12 +2243,18 @@ impl CCodegen {
         self.impl_code
             .push_str(&format!("void {}(void) {{\n", c_func_name));
 
+        // Reset `#line` tracking at the test boundary and point at the test
+        // declaration so synthesized prologue code is attributed correctly.
+        self.reset_line_tracking();
+        self.emit_line_directive(&test.span);
+
         // Pre-analyze declarations with empty lists to infer their types from usage
         // (same as generate_function does for regular functions)
         self.preanalyze_empty_lists(&test.body);
 
         // Generate statements in the test body
         for stmt in &test.body {
+            self.emit_line_directive(&stmt.span());
             let stmt_code = self.generate_statement(stmt, false);
             for line in stmt_code.lines() {
                 if !line.is_empty() {
@@ -2265,6 +2297,64 @@ impl CCodegen {
             // For struct/tagged union types, return a zeroed value
             _ => format!("({}){{0}}", c_type),
         }
+    }
+
+    /// Reset `#line` tracking. Should be called at function/test boundaries so
+    /// that the next call to `emit_line_directive` always emits a fresh
+    /// directive (otherwise we might silently rely on the directive emitted at
+    /// the end of the previous function).
+    fn reset_line_tracking(&mut self) {
+        self.last_emitted_line = None;
+    }
+
+    /// Emit a `#line N "path"` directive into `impl_code` for the given span,
+    /// so that C compiler diagnostics point back to the original Blitz source.
+    ///
+    /// No-op when:
+    ///   - the span is the `{0, 0}` sentinel (used by AST nodes that don't
+    ///     yet carry source locations),
+    ///   - `current_path` is empty or the source isn't indexed,
+    ///   - the (file, line) pair matches the most recently emitted directive.
+    ///
+    /// The directive is emitted on its own line at column 0, as required by
+    /// the C preprocessor.
+    fn emit_line_directive(&mut self, span: &parser::Span) {
+        // Sentinel for "no span" — skip rather than point at line 1.
+        if span.start == 0 && span.end == 0 {
+            return;
+        }
+        if self.current_path.is_empty() {
+            return;
+        }
+        let source = match self.source_by_path.get(&self.current_path) {
+            Some(s) => s,
+            None => return,
+        };
+        let pos = span.start_pos(source);
+        let line = pos.line as usize;
+        let path = self.current_path.clone();
+
+        if let Some((ref last_path, last_line)) = self.last_emitted_line {
+            if last_path == &path && last_line == line {
+                return;
+            }
+        }
+
+        // Escape backslashes and double quotes for the C string literal.
+        let escaped: String = path
+            .chars()
+            .flat_map(|c| match c {
+                '\\' => vec!['\\', '\\'],
+                '"' => vec!['\\', '"'],
+                other => vec![other],
+            })
+            .collect();
+
+        // Newline before to ensure the directive starts at column 0 even if
+        // the previous line was indented and not newline-terminated.
+        self.impl_code
+            .push_str(&format!("\n#line {} \"{}\"\n", line, escaped));
+        self.last_emitted_line = Some((path, line));
     }
 
     fn generate_statement(&mut self, stmt: &parser::Statement, is_main: bool) -> String {
