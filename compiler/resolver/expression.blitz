@@ -292,7 +292,7 @@ fn lower_constructor(constructor ast::Constructor, mut expressions List(hir::Exp
 
 fn lower_member(member ast::Member, mut expressions List(hir::Expression), mut scope_arena hir::ScopeArena, scope hir::ScopeId, hir hir::Hir, mod_id hir::ModId, mut resolver Resolver) hir::ExpressionId {
 	let expr_id = lower_expr(member.parent, mut expressions, mut scope_arena, scope, hir, mod_id, mut resolver)
-	expressions.mut.push(hir::Expression(kind: hir::Member(expr: expr_id, field: member.member), span: member.span))
+	expressions.mut.push(hir::Expression(kind: hir::Member(parent: expr_id, field: member.member), span: member.span))
 }
 
 // ── Binary / unary operations ─────────────────────────────────────────────────

@@ -160,8 +160,8 @@ struct FieldInit {
 // --- Access ---
 
 struct Member {
-	expr  ExpressionId
-	field ast::Ident
+	parent ExpressionId
+	field  ast::Ident
 }
 
 struct Index {

@@ -2,6 +2,10 @@ struct TypeChecker {
 	errors List(ast::Error)
 }
 
+fn err(mut checker TypeChecker, span Span, msg String) {
+	checker.errors ++= ast::Error(span:, msg:)
+}
+
 // for now, this reuses the Hir structure and just adds typing. In the future, the Hir might be generic and be either Hir(Untyped) or Hir(Typed)
 fn check(mut checker TypeChecker, hir hir::Hir) hir::Hir {
 	var typed_hir = hir // copy that will be enriched with types
@@ -16,6 +20,7 @@ fn check(mut checker TypeChecker, hir hir::Hir, body hir::Body) {
 // checks the expression recursively returns the inferred type
 // TODO: TypeRef is probably not enough, we need to include mutability
 fn check(mut checker TypeChecker, hir hir::Hir, body hir::Body, expr hir::Expression) hir::TypeRef {
+	// TODO LLM: make all these UFCS syntax, so checker.mut.check(...)
 	switch expr.kind {
 		LitInt { check(mut checker, hir, body, it) }
 		LitFloat { check(mut checker, hir, body, it) }
@@ -64,7 +69,9 @@ fn check(mut checker TypeChecker, hir hir::Hir, body hir::Body, expr hir::LitRun
 }
 
 fn check(mut checker TypeChecker, hir hir::Hir, body hir::Body, expr hir::LocalRef) hir::TypeRef {
-	todo("resolve binding ref and get annotated type (which should be resolved before already)")
+	let binding = body.bindings[expr.binding_id]
+	// SAFETY: at this point, the type checker will have filled in the binding type already
+	binding.type.unwrap()
 }
 
 fn check(mut checker TypeChecker, hir hir::Hir, body hir::Body, expr hir::UnionCase) hir::TypeRef {
@@ -88,7 +95,18 @@ fn check(mut checker TypeChecker, hir hir::Hir, body hir::Body, expr hir::Constr
 }
 
 fn check(mut checker TypeChecker, hir hir::Hir, body hir::Body, expr hir::Member) hir::TypeRef {
-	todo("Resolve member type")
+	let parent = body.get(member.parent)
+	let p_type = checker.mut.check(hir, body, parent)
+
+	for p_type.fields |f| {
+		if f.ident.name == expr.field.name {
+			return f.type
+		}
+	}
+
+	// TODO: Improve error message once string formatting is implemented + introduce a union for error types instead of hardcoding strings
+	checker.mut.err(expr.field.span, "No matching field on parent")
+	hir.find_core_type("Never")
 }
 
 fn check(mut checker TypeChecker, hir hir::Hir, body hir::Body, expr hir::Index) hir::TypeRef {
