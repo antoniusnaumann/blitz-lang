@@ -1,0 +1,36 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Test Suite
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bootstrap
+
+      - name: Cargo build
+        working-directory: bootstrap
+        run: cargo build --release
+
+      - name: Cargo test (Rust unit tests)
+        working-directory: bootstrap
+        run: cargo test --release
+
+      - name: Blitz test suite (C backend)
+        working-directory: bootstrap/interpreter
+        run: cargo run --release -- test -c ../../compiler/

@@ -1,0 +1,66 @@
+name: Performance Regression
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  perf:
+    name: Test-suite runtime t-test
+    runs-on: ubuntu-latest
+    # Skip if there is no previous commit to compare against
+    if: github.event.before != '0000000000000000000000000000000000000000' || github.event_name == 'pull_request'
+
+    env:
+      RUNS: 30
+      ALPHA: '0.05'
+
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # For PRs, check out the merge target's history too
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Resolve baseline and candidate commits
+        id: commits
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+            HEAD="${{ github.event.pull_request.head.sha }}"
+          else
+            BASE="${{ github.event.before }}"
+            HEAD="${{ github.sha }}"
+          fi
+          # Make sure both commits are available locally.
+          git fetch --no-tags origin "$BASE" "$HEAD" || true
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
+          echo "head=$HEAD" >> "$GITHUB_OUTPUT"
+          echo "Baseline:  $BASE"
+          echo "Candidate: $HEAD"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo (shared across both commits)
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bootstrap
+          # Don't key on Cargo.lock so the cache is reused across the two checkouts
+          shared-key: perf-shared
+
+      - name: Run benchmarks and t-test
+        env:
+          BASE_SHA: ${{ steps.commits.outputs.base }}
+          HEAD_SHA: ${{ steps.commits.outputs.head }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/perf_regression.py \
+            --base "$BASE_SHA" \
+            --head "$HEAD_SHA" \
+            --runs "$RUNS" \
+            --alpha "$ALPHA"
