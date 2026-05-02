@@ -1,0 +1,22 @@
+# BEP 001 - Traits
+## Background
+While Blitz does not have methods in the classical sense, top-level functions .
+This document describes the different building blocks for traits
+
+## Features
+### Arbitrary parameter position
+As traits refer to top-level functions, the conforming :
+
+```blitz
+trait Bar {
+	fn foo(a _)
+	fn fib(a Int, b _)
+	fn fup(a Option(_))
+}
+```
+### Implicit conformance
+
+### Generic bound conformance
+#### A: Implicit call-site resolution
+#### B: Explicit call-site resolution
+
