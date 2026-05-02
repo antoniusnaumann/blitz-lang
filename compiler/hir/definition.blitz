@@ -118,6 +118,23 @@ fn insert(mut types List(TypeKind), ty TypeKind) TypeRef {
     types.find(ty) else { types.mut.push(ty) }
 }
 
+fn insert(mut hir Hir, ty TypeKind) TypeRef {
+    hir.types.mut.insert(ty)
+}
+
+// Lift a TypeId into a TypeRef by registering a Nominal with the given generic args.
+fn insert(mut hir Hir, id TypeId, args List(TypeRef)) TypeRef {
+    hir.mut.insert(Nominal(def_id: id, args:))
+}
+
+// Lift a TypeId into a TypeRef by registering a Nominal with no generic args.
+// Asserts that the underlying TypeDef has no generic parameters.
+fn insert(mut hir Hir, id TypeId) TypeRef {
+    let def = hir.get(id)
+    assert def.generic.len() == 0
+    hir.mut.insert(id, [])
+}
+
 union TypeKind {
     Nominal
     GenericId
