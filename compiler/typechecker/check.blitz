@@ -94,18 +94,27 @@ fn check(mut checker TypeChecker, hir hir::Hir, body hir::Body, expr hir::Constr
 	todo("Check fields and then resolve constructed type")
 }
 
-fn check(mut checker TypeChecker, hir hir::Hir, body hir::Body, expr hir::Member) hir::TypeRef {
+fn check(mut checker TypeChecker, hir hir::Hir, body hir::Body, member hir::Member) hir::TypeRef {
 	let parent = body.get(member.parent)
-	let p_type = checker.mut.check(hir, body, parent)
+	let p_ref  = checker.mut.check(hir, body, parent)
+	let p_kind = hir.get(p_ref)
+	let p_tyid = switch p_kind {
+		Nominal { it.def_id }
+		GenericId {
+			checker.mut.err(member.field.span, "Cannot access field on generic type")
+			return hir.find_core_type("Never")
+		}
+	}
+	let p_type = hir.get(p_tyid)
 
 	for p_type.fields |f| {
-		if f.ident.name == expr.field.name {
+		if f.ident.name == member.field.name.name {
 			return f.type
 		}
 	}
 
 	// TODO: Improve error message once string formatting is implemented + introduce a union for error types instead of hardcoding strings
-	checker.mut.err(expr.field.span, "No matching field on parent")
+	checker.mut.err(member.field.span, "No matching field on parent")
 	hir.find_core_type("Never")
 }
 

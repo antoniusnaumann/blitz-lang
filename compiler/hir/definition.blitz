@@ -82,6 +82,20 @@ fn get(types List(TypeKind), ty TypeRef) TypeKind {
     types[ty.id]
 }
 
+fn get(hir Hir, id TypeId) TypeDef {
+    let mod = hir.get(id.module)
+    mod.get(id)
+}
+
+fn get(mod Module, id TypeId) TypeDef {
+    assert mod.id == id.module
+    mod.types.get(id)
+}
+
+fn get(types List(TypeDef), id TypeId) TypeDef {
+    types[id.id]
+}
+
 fn push(mut reg Hir, mod Module) ModId {
     reg.mods.mut.push(mod)
 }
