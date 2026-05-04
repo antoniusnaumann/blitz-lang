@@ -9834,6 +9834,13 @@ void todo(char* msg) __attribute__((noreturn));
         // Write implementation file
         let impl_path = self.output_dir.join("blitz.c");
         let mut full_impl = String::new();
+        // Feature-test macros must be defined before any system header is
+        // pulled in (transitively, via blitz.h). On glibc, `struct sigaction`
+        // is only declared when _POSIX_C_SOURCE is set; macOS exposes it
+        // unconditionally, so this is a no-op there.
+        full_impl.push_str("#ifndef _POSIX_C_SOURCE\n");
+        full_impl.push_str("#define _POSIX_C_SOURCE 200809L\n");
+        full_impl.push_str("#endif\n");
         full_impl.push_str("#include \"blitz.h\"\n\n");
 
         if self.include_tests && !self.test_definitions.is_empty() {
