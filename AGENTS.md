@@ -149,3 +149,5 @@ In the Blitz codebase, never use hacks or shortcuts. Try to implement the featur
 - The `compiler/` directory is both the source for the self-hosted compiler AND the input to the bootstrap interpreter/transpiler
 - The C codegen (`c_codegen.rs`) is the most complex file — test changes with `cargo run -- test -c ../../compiler/` to verify all 32 Blitz tests pass
 - The interpreter and C backend should produce equivalent results
+- If you are working on .blitz files, let me review the changes, do not commit anything there
+- If you are working on the bootstrap compiler, do commit and push changes and use the gh tool to verify that the CI pipeline succeeds. If not, fix.
