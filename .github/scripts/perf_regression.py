@@ -22,8 +22,11 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-INTERPRETER_DIR = REPO_ROOT / "bootstrap" / "interpreter"
+BOOTSTRAP_DIR = REPO_ROOT / "bootstrap"
+INTERPRETER_DIR = BOOTSTRAP_DIR / "interpreter"
 COMPILER_DIR = REPO_ROOT / "compiler"
+# Cargo workspace target directory; the bin crate is named `interpreter`.
+RELEASE_BINARY = BOOTSTRAP_DIR / "target" / "release" / "interpreter"
 
 # Strip ANSI color codes the runner emits.
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
@@ -67,17 +70,14 @@ def parse_runtime(output: str) -> float:
 
 
 def measure_once() -> float:
-    # Use the already-built release binary directly to avoid cargo overhead in
-    # the timing path. cargo build was a no-op-ish step earlier.
-    binary = INTERPRETER_DIR / "target" / "release" / "blitz"
-    if not binary.exists():
-        # Fallback: locate it via cargo metadata-style guess
-        candidates = list((INTERPRETER_DIR / "target" / "release").glob("*"))
+    if not RELEASE_BINARY.exists():
+        candidates = sorted(p.name for p in RELEASE_BINARY.parent.glob("*") if p.is_file())
         raise FileNotFoundError(
-            f"Release binary not found at {binary}. Candidates: {candidates}"
+            f"Release binary not found at {RELEASE_BINARY}. Candidates: {candidates}"
         )
     proc = subprocess.run(
-        [str(binary), "test", "-c", str(COMPILER_DIR)],
+        [str(RELEASE_BINARY), "test", "-c", str(COMPILER_DIR)],
+        cwd=INTERPRETER_DIR,
         check=False,
         text=True,
         stdout=subprocess.PIPE,
